@@ -1,10 +1,19 @@
 /**
  * Persistence layer: the only code that touches SQL.
  *
- * `createRepositories(db)` binds one repository per aggregate to a database (or an
- * open transaction). Repositories speak domain types (`CanonicalSnapshot`,
- * `CardFacts`, ...) and the record types exported here; JSON columns are decoded and
- * validated on read, and every multi-statement write is atomic.
+ * `createRepositories(db, { workspaceId })` binds one repository per aggregate to a
+ * database (or an open transaction). Repositories speak domain types
+ * (`CanonicalSnapshot`, `CardFacts`, ...) and the record types exported here; JSON
+ * columns are decoded and validated on read, and every multi-statement write is atomic.
+ *
+ * Two kinds of repositories share the binding:
+ * - **Deck data** (decks, branches, commits, observations, tags, notes, card index, card
+ *   catalog) is scoped to the bound workspace: a deck, commit or observation id of
+ *   another workspace behaves like an unknown id, and card facts one workspace captures
+ *   never reach another. Snapshots and raw payloads are content-addressed (keyed by the
+ *   hash of what they hold) and shared by all workspaces.
+ * - **Accounts** (workspaces, users, credentials, sessions, login links, invites) and
+ *   settings are installation-wide; the bound workspace does not affect them.
  *
  * Use {@link Repositories.transaction} to make several repository calls atomic, e.g.
  * "verify HEAD, insert commit, move the branch head" when committing.
@@ -18,13 +27,19 @@ import { createCardIndexRepository, type CardIndexRepository } from './card-inde
 import { createCatalogRepository, type CatalogRepository } from './catalog';
 import { createCommitRepository, type CommitRepository } from './commits';
 import { withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import { createCredentialRepository, type CredentialRepository } from './credentials';
 import { createDeckRepository, type DeckRepository } from './decks';
+import { createInviteRepository, type InviteRepository } from './invites';
+import { createLoginLinkRepository, type LoginLinkRepository } from './login-links';
 import { createCommitNoteRepository, type CommitNoteRepository } from './notes';
 import { createObservationRepository, type ObservationRepository } from './observations';
 import { createRawBlobRepository, type RawBlobRepository } from './raw-blobs';
+import { createSessionRepository, type SessionRepository } from './sessions';
 import { createSettingsRepository, type SettingsRepository } from './settings';
 import { createSnapshotRepository, type SnapshotRepository } from './snapshots';
 import { createVersionTagRepository, type VersionTagRepository } from './tags';
+import { createUserRepository, type UserRepository } from './users';
+import { createWorkspaceRepository, type WorkspaceRepository } from './workspaces';
 
 export interface Repositories {
   readonly decks: DeckRepository;
@@ -38,6 +53,12 @@ export interface Repositories {
   readonly notes: CommitNoteRepository;
   readonly catalog: CatalogRepository;
   readonly settings: SettingsRepository;
+  readonly workspaces: WorkspaceRepository;
+  readonly users: UserRepository;
+  readonly credentials: CredentialRepository;
+  readonly sessions: SessionRepository;
+  readonly loginLinks: LoginLinkRepository;
+  readonly invites: InviteRepository;
   /**
    * Runs `fn` atomically with repositories bound to one transaction: if `fn` throws,
    * every write it made is rolled back. Nested calls use savepoints. `fn` must be
@@ -51,7 +72,12 @@ export interface RepositoryOptions {
   now?: () => Date;
   /** Id generator for decks, branches, observations and notes. Default: `crypto.randomUUID`. */
   newId?: () => string;
-  /** Workspace that decks are created in and listed from. Default: `local`. */
+  /**
+   * Workspace that deck data is scoped to: decks are created in it, and decks, versions,
+   * observations, tags, notes and card facts of other workspaces are invisible. Default: `local`, the
+   * workspace of pre-account installations (tests and operator scripts); request-handling
+   * code always passes the signed-in user's workspace (see `src/server/access`).
+   */
   workspaceId?: string;
 }
 
@@ -79,6 +105,12 @@ function bind(ctx: RepositoryContext): Repositories {
     notes: createCommitNoteRepository(ctx),
     catalog: createCatalogRepository(ctx),
     settings: createSettingsRepository(ctx),
+    workspaces: createWorkspaceRepository(ctx),
+    users: createUserRepository(ctx),
+    credentials: createCredentialRepository(ctx),
+    sessions: createSessionRepository(ctx),
+    loginLinks: createLoginLinkRepository(ctx),
+    invites: createInviteRepository(ctx),
     transaction: (fn) => withTransaction(ctx, (tx) => fn(bind(tx))),
   };
 }
@@ -115,3 +147,20 @@ export {
 export type { CommitNoteRecord, CommitNoteRepository } from './notes';
 export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';
+export type { DeckLocation, WorkspaceRecord, WorkspaceRepository } from './workspaces';
+export type { NewUser, UserListItem, UserRecord, UserRepository, UserRole } from './users';
+export type {
+  CredentialKind,
+  CredentialRecord,
+  CredentialRepository,
+  NewBookmarkletKey,
+} from './credentials';
+export type { NewSession, PendingHandoff, SessionOrigin, SessionRecord, SessionRepository } from './sessions';
+export type {
+  LoginLinkPurpose,
+  LoginLinkRecord,
+  LoginLinkRepository,
+  NewLoginLink,
+  UnusedLinkFilter,
+} from './login-links';
+export type { InviteRecord, InviteRepository, NewInvite } from './invites';

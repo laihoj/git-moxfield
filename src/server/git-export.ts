@@ -27,7 +27,7 @@ import { join, resolve } from 'node:path';
 import { snapshotToFileTree, type FileTree } from '@/core/file-tree';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
-import type { CommitRecord, DeckRecord, Repositories } from '@/server/repositories';
+import type { CommitRecord, DeckLocation, DeckRecord, Repositories } from '@/server/repositories';
 
 /** Author and committer of every exported commit. */
 export const EXPORT_AUTHOR = { name: 'git-moxfield', email: 'git-moxfield@localhost' } as const;
@@ -276,6 +276,30 @@ export function findDeckForExport(
     if (deck) return deck;
   }
   return null;
+}
+
+/**
+ * Like {@link findDeckForExport}, but across every workspace (for the command line, which
+ * acts for the operator, not for a user): the decks a reference names, with their
+ * workspace and owner. A git-moxfield deck id names one deck; a Moxfield deck id or URL
+ * names every user's copy of that Moxfield deck.
+ */
+export function locateDecksForExport(
+  repos: Repositories,
+  reference: string,
+  options: { siteOrigins?: readonly string[] } = {},
+): DeckLocation[] {
+  const input = reference.trim();
+  if (input === '') return [];
+  const byId = repos.workspaces.locateDeck(input);
+  if (byId) return [byId];
+  for (const origin of options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]) {
+    const parsed = parseMoxfieldDeckInput(input, origin);
+    if (!parsed.ok) continue;
+    const decks = repos.workspaces.locateDecksBySource(parsed.ref.source, parsed.ref.externalId);
+    if (decks.length > 0) return decks;
+  }
+  return [];
 }
 
 interface PlannedVersion {

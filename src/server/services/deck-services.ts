@@ -15,8 +15,6 @@
  */
 import 'server-only';
 
-import { randomBytes } from 'node:crypto';
-
 import { allCards, cardZoneIndex, commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
 import { diffSnapshots, renamedKeys, suggestCommitMessage } from '@/core/diff';
@@ -35,8 +33,6 @@ import {
   type RawSourcePayload,
   type ServerFetchStatus,
 } from '@/integrations/deck-source';
-import { buildBookmarklet } from '@/integrations/moxfield/capture';
-import { CAPTURE_TOKEN_PATTERN } from '@/integrations/moxfield/capture-protocol';
 import { MOXFIELD_SOURCE_ID } from '@/integrations/moxfield/constants';
 import type { AppConfig } from '@/server/config';
 import type { Logger } from '@/server/logger';
@@ -53,14 +49,7 @@ import {
 } from '@/server/repositories';
 import type { DeckSourceRegistry } from '@/server/sources';
 
-import type {
-  BookmarkletsDTO,
-  DeckServices,
-  SetupInfoDTO,
-  TagOutcome,
-  TrackDeckOutcome,
-  VersionRef,
-} from './contract';
+import type { DeckServices, SetupInfoDTO, TagOutcome, TrackDeckOutcome, VersionRef } from './contract';
 import {
   deckStatus,
   diffCardKeys,
@@ -75,6 +64,8 @@ import {
 import { ServiceError } from './errors';
 import type { KeyedMutex } from './mutex';
 import { parseVersionRef } from './refs';
+import { settle } from './settle';
+import { setupInfo } from './setup-info';
 import type {
   CaptureOutcome,
   CardHistoryDTO,
@@ -107,12 +98,6 @@ export const RECENT_VERSION_COUNT = 8;
 
 /** Upper bound for {@link DeckServices.searchCards} results. */
 export const MAX_CARD_SEARCH_LIMIT = 100;
-
-/** Settings key of the installation's capture token ({@link DeckServices.getCaptureToken}). */
-export const CAPTURE_TOKEN_SETTING = 'capture-token';
-
-/** Random bytes in a capture token (hex-encoded, see `CAPTURE_TOKEN_PATTERN`). */
-const CAPTURE_TOKEN_BYTES = 32;
 
 /** Suggested message for a deck's first version. */
 const INITIAL_VERSION_MESSAGE = 'Initial version';
@@ -809,38 +794,7 @@ class DefaultDeckServices implements DeckServices {
   }
 
   getSetupInfo(): SetupInfoDTO {
-    return {
-      serverFetch: this.sources.require(MOXFIELD_SOURCE_ID).serverFetchStatus(),
-      userAgentConfigured: this.config.MOXFIELD_USER_AGENT !== undefined,
-      captureAllowedOrigins: [...this.config.captureAllowedOrigins],
-      moxfieldSiteOrigin: this.config.moxfieldSiteOrigin,
-      moxfieldApiBaseUrl: this.config.MOXFIELD_API_BASE_URL.replace(/\/+$/, ''),
-    };
-  }
-
-  getBookmarklets(appUrl: string): BookmarkletsDTO {
-    const target = {
-      appUrl,
-      apiBaseUrl: this.config.MOXFIELD_API_BASE_URL,
-      siteOrigin: this.config.moxfieldSiteOrigin,
-    };
-    return {
-      popup: buildBookmarklet({ ...target, mode: 'popup' }),
-      sameTab: buildBookmarklet({ ...target, mode: 'same-tab', captureToken: this.getCaptureToken() }),
-    };
-  }
-
-  getCaptureToken(): string {
-    const token = this.repos.settings.getOrCreate(CAPTURE_TOKEN_SETTING, () =>
-      randomBytes(CAPTURE_TOKEN_BYTES).toString('hex'),
-    );
-    if (!CAPTURE_TOKEN_PATTERN.test(token)) {
-      // Only a manual database edit gets here; never echo the value.
-      throw new Error(
-        `The stored capture token is malformed. Delete the "${CAPTURE_TOKEN_SETTING}" row of the app_settings table to create a new one (then reinstall the same-tab bookmarklet).`,
-      );
-    }
-    return token;
+    return setupInfo(this.config, this.sources);
   }
 
   // -------------------------------------------------------------------------
@@ -1165,16 +1119,6 @@ class DefaultDeckServices implements DeckServices {
     if (checks.length === 0) return true;
     return now.getTime() - Math.max(...checks) >= this.config.AUTO_REFRESH_AFTER_SECONDS * 1000;
   }
-}
-
-/**
- * Runs synchronous work as a promise: thrown errors become rejections, so callers of
- * the async service API never see synchronous throws.
- */
-function settle<T>(work: () => T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    resolve(work());
-  });
 }
 
 /** The `blocked` error returned without any request when server fetching is unavailable. */

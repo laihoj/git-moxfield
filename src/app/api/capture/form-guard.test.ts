@@ -1,13 +1,9 @@
-import * as crypto from 'node:crypto';
+import { describe, expect, it } from 'vitest';
 
-import { describe, expect, it, vi } from 'vitest';
-
-import { isAcceptableCaptureOrigin, isValidCaptureToken } from './form-guard';
-
-vi.mock('node:crypto', { spy: true });
+import { describeRejectedKey, isAcceptableCaptureOrigin } from './form-guard';
 
 const MOXFIELD = 'https://moxfield.com';
-const TOKEN = 'c0ffee'.repeat(10) + 'beef';
+const KEY = `gmk_${'A'.repeat(43)}`;
 
 describe('isAcceptableCaptureOrigin', () => {
   it('accepts the configured capture origins', () => {
@@ -38,43 +34,17 @@ describe('isAcceptableCaptureOrigin', () => {
   });
 });
 
-describe('isValidCaptureToken', () => {
-  it('accepts exactly the installation token', () => {
-    expect(TOKEN).toMatch(/^[0-9a-f]{64}$/);
-    expect(isValidCaptureToken(TOKEN, TOKEN)).toBe(true);
-  });
-
+describe('describeRejectedKey', () => {
   it.each([
-    ['missing', null],
-    ['undefined', undefined],
-    ['a file upload', new File([TOKEN], 'token.txt')],
-    ['empty', ''],
-    ['another token', 'f'.repeat(64)],
-    ['one character off', `${TOKEN.slice(0, 63)}0`],
-    ['a prefix', TOKEN.slice(0, 32)],
-    ['longer', `${TOKEN}0`],
-    ['padded', ` ${TOKEN}`],
-    ['uppercase', TOKEN.toUpperCase()],
-  ])('rejects a token that is %s', (_case, candidate) => {
-    expect(isValidCaptureToken(candidate, TOKEN)).toBe(false);
-  });
-
-  it('fails closed when the expected token is malformed', () => {
-    expect(isValidCaptureToken('', '')).toBe(false);
-    expect(isValidCaptureToken('short', 'short')).toBe(false);
-    expect(isValidCaptureToken(TOKEN.toUpperCase(), TOKEN.toUpperCase())).toBe(false);
-  });
-
-  it('compares in constant time, whatever the candidate length', () => {
-    const compare = vi.mocked(crypto.timingSafeEqual);
-    compare.mockClear();
-    for (const candidate of [TOKEN, 'f'.repeat(64), 'x', 'y'.repeat(10_000)])
-      isValidCaptureToken(candidate, TOKEN);
-    expect(compare).toHaveBeenCalledTimes(4);
-    // Fixed-length digests: the comparison never depends on the candidate's length.
-    for (const [a, b] of compare.mock.calls) {
-      expect(a.byteLength).toBe(32);
-      expect(b.byteLength).toBe(32);
-    }
+    ['missing', null, 'missing'],
+    ['undefined', undefined, 'missing'],
+    ['a file upload', new File([KEY], 'key.txt'), 'malformed'],
+    ['empty', '', 'malformed'],
+    ['an old installation capture token', 'c0ffee'.repeat(10) + 'beef', 'malformed'],
+    ['a session token', `gms_${'A'.repeat(43)}`, 'malformed'],
+    ['a key with a character too many', `${KEY}A`, 'malformed'],
+    ['a well-formed key', KEY, 'unknown'],
+  ])('classifies %s', (_case, value, expected) => {
+    expect(describeRejectedKey(value)).toBe(expected);
   });
 });

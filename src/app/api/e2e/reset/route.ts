@@ -8,21 +8,19 @@
  * The pause lasts `MOXFIELD_BLOCK_BACKOFF_SECONDS` (an hour by default) for the whole
  * process, so without this hook the journey that provokes a block would leave server
  * fetching paused for every test after it. Tests call it before each test, together
- * with resetting the mock (`tests/e2e/support/fixtures.ts`).
+ * with resetting the mock (`tests/e2e/support/fixtures.ts`). Accounts are not reset:
+ * every test signs in a user of its own (`POST /api/e2e/session`).
  */
-import { getConfig } from '@/server/config';
 import { getDeckSourceRegistry } from '@/server/sources';
+
+import { e2eDisabledResponse } from '../guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export function POST(): Response {
-  if (getConfig().GIT_MOXFIELD_E2E !== true) {
-    return new Response('Not found.\n', {
-      status: 404,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-    });
-  }
+  const disabled = e2eDisabledResponse();
+  if (disabled !== null) return disabled;
   for (const source of getDeckSourceRegistry().all()) source.resumeServerFetch?.();
   return new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } });
 }

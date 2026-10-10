@@ -7,10 +7,11 @@ import { and, desc, eq, notInArray, sql } from 'drizzle-orm';
 
 import type { IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
-import { observations } from '@/server/db/schema';
+import { decks, observations } from '@/server/db/schema';
 
 import { decodeIngestMethod, decodeSourceMetadata, decodeWarnings, encodeJson } from './codec';
-import { referencing, withTransaction, type RepositoryContext } from './context';
+import { inWorkspace, referencing, withTransaction, type RepositoryContext } from './context';
+import { RepositoryError } from './errors';
 import { deleteUnreferencedRawBlobs } from './raw-blobs';
 import { deleteUnreferencedSnapshots } from './snapshots';
 
@@ -50,8 +51,17 @@ export interface ObservationRepository {
 }
 
 export function createObservationRepository(ctx: RepositoryContext): ObservationRepository {
+  /** Observations of decks in the context's workspace. */
+  const owned = () => inWorkspace(ctx, observations.deckId);
+
   return {
     insert(input) {
+      const deck = ctx.db
+        .select({ id: decks.id })
+        .from(decks)
+        .where(and(eq(decks.id, input.deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .get();
+      if (!deck) throw new RepositoryError('not-found', `Deck ${input.deckId} does not exist`);
       const record: ObservationRecord = { id: ctx.newId(), ...input };
       const values = {
         id: record.id,
@@ -70,7 +80,11 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
     },
 
     getById(id) {
-      const row = ctx.db.select().from(observations).where(eq(observations.id, id)).get();
+      const row = ctx.db
+        .select()
+        .from(observations)
+        .where(and(eq(observations.id, id), owned()))
+        .get();
       return row ? toObservationRecord(row) : null;
     },
 
@@ -78,7 +92,7 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
       const row = ctx.db
         .select()
         .from(observations)
-        .where(eq(observations.deckId, deckId))
+        .where(and(eq(observations.deckId, deckId), owned()))
         .orderBy(...latestObservationFirst)
         .limit(1)
         .get();
@@ -86,9 +100,11 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
     },
 
     pruneForDeck(deckId, keepIds) {
-      return withTransaction(ctx, ({ db }) => {
+      return withTransaction(ctx, (tx) => {
+        const { db } = tx;
         const superseded = and(
           eq(observations.deckId, deckId),
+          inWorkspace(tx, observations.deckId),
           keepIds.length === 0 ? undefined : notInArray(observations.id, [...keepIds]),
         );
         const references = db

@@ -8,15 +8,16 @@ import 'server-only';
 
 import { routes } from '@/lib/routes';
 
-export type CaptureRejection = 'token' | 'origin';
+/** `key`: the bookmarklet's key is missing, malformed, unknown or revoked. `origin`: a third-party site posted. */
+export type CaptureRejection = 'key' | 'origin';
 
 /** Constant, trusted HTML. */
 const COPY: Record<CaptureRejection, { title: string; paragraphs: string[] }> = {
-  token: {
+  key: {
     title: 'Reinstall the bookmarklet',
     paragraphs: [
-      'git-moxfield did not accept this deck: your <span class="nowrap">same-tab</span> bookmarklet is out of date or belongs to another git-moxfield.',
-      'Replace it with the one on the Connect Moxfield page, then run it again on the deck.',
+      'git-moxfield did not accept this deck: your <span class="nowrap">same-tab</span> bookmarklet was revoked, is out of date, or belongs to another git-moxfield.',
+      'Create a new one on the Connect Moxfield page, then run it again on the deck.',
     ],
   },
   origin: {

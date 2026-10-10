@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CardFacts } from '@/core/model';
+import { createRepositories } from '@/server/repositories';
 import { countRows, createTestRepositories } from '@tests/support/db';
 
 function facts(overrides: Partial<CardFacts> & Pick<CardFacts, 'key' | 'name'>): CardFacts {
@@ -59,6 +60,33 @@ describe('card catalog repository', () => {
     expect(countRows(db, 'card_catalog')).toBe(2);
     const row = db.$client.prepare("SELECT updated_at FROM card_catalog WHERE key = 'sol ring'").get();
     expect(row).toEqual({ updated_at: '2026-01-01T00:00:01.000Z' });
+  });
+
+  it('keeps each workspace’s facts apart: one workspace’s write never changes another’s read', () => {
+    const { db, repos } = createTestRepositories();
+    const bob = repos.users.create({ displayName: 'Bob', role: 'member' });
+    const eve = repos.users.create({ displayName: 'Eve', role: 'member' });
+    const bobs = createRepositories(db, { workspaceId: bob.workspaceId });
+    const eves = createRepositories(db, { workspaceId: eve.workspaceId });
+    const genuine = facts({ key: 'sol ring', name: 'Sol Ring', scryfallId: 'genuine' });
+    const crafted = facts({
+      key: 'sol ring',
+      name: 'Sol Ring',
+      typeLine: 'Basic Land — Swamp',
+      primaryType: 'Land',
+      manaCost: '{B}{B}{B}{B}{B}{B}{B}',
+      cmc: 7,
+      colorIdentity: ['B'],
+      scryfallId: 'crafted',
+    });
+
+    bobs.catalog.upsertMany([genuine]);
+    eves.catalog.upsertMany([crafted, facts({ key: 'mana crypt', name: 'Mana Crypt' })]);
+
+    expect(bobs.catalog.getMany(['sol ring', 'mana crypt'])).toEqual(new Map([['sol ring', genuine]]));
+    expect(eves.catalog.getMany(['sol ring']).get('sol ring')).toEqual(crafted);
+    expect(repos.catalog.getMany(['sol ring']).size).toBe(0);
+    expect(countRows(db, 'card_catalog')).toBe(3);
   });
 
   it('handles empty input and large batches', () => {

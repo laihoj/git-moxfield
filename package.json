@@ -28,6 +28,7 @@
     "export:git": "tsx --conditions=react-server scripts/export-git.ts",
     "mock-moxfield": "tsx --conditions=react-server tests/mock-moxfield/server.ts",
     "seed:demo": "tsx --conditions=react-server scripts/seed-demo.ts",
+    "users": "tsx --conditions=react-server scripts/users.ts",
     "test:e2e:install": "playwright install chromium",
     "dev:mock": "MOXFIELD_API_BASE_URL=http://localhost:4010 MOXFIELD_SITE_ORIGIN=http://localhost:4010 CAPTURE_ALLOWED_ORIGINS=http://localhost:4010 DATABASE_PATH=data/mock.db next dev --hostname 127.0.0.1"
   },
@@ -38,6 +39,7 @@
     "drizzle-orm": "0.45.4",
     "lucide-react": "1.54.0",
     "next": "16.4.0",
+    "qrcode": "1.5.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
@@ -54,6 +56,7 @@
     "@testing-library/user-event": "14.6.7",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.10.1",
+    "@types/qrcode": "1.5.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",

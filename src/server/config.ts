@@ -59,15 +59,15 @@ const schema = z.object({
       }
     }),
 
-  /** Optional HTTP Basic auth for exposing the app beyond localhost. Both must be set. */
-  BASIC_AUTH_USER: z.string().min(1).optional(),
-  BASIC_AUTH_PASSWORD: z.string().min(1).optional(),
-
   /**
-   * Enables test-only conveniences: the end-to-end suite's reset hook
-   * (`POST /api/e2e/reset`, see `src/app/api/e2e/reset/route.ts`). Never set in production.
+   * Enables the end-to-end suite's test-only endpoints (`/api/e2e/*`: reset, signing in
+   * a new user, reading the setup code; see `src/app/api/e2e/`). Refused (the server does
+   * not start) when `NODE_ENV=production`; production builds never serve the endpoints
+   * anyway (`src/app/api/e2e/guard.ts`).
    */
   GIT_MOXFIELD_E2E: boolish.optional(),
+  /** Read only to refuse `GIT_MOXFIELD_E2E` in production (Next.js sets it). */
+  NODE_ENV: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof schema> & {
@@ -86,9 +86,10 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     throw new Error(`Invalid git-moxfield configuration: ${issues}`);
   }
   const config = result.data;
-  if (Boolean(config.BASIC_AUTH_USER) !== Boolean(config.BASIC_AUTH_PASSWORD)) {
+  if (config.GIT_MOXFIELD_E2E === true && config.NODE_ENV === 'production') {
+    // The test-only endpoints mint admin sessions for anyone who asks.
     throw new Error(
-      'Invalid git-moxfield configuration: set both BASIC_AUTH_USER and BASIC_AUTH_PASSWORD, or neither',
+      'Invalid git-moxfield configuration: GIT_MOXFIELD_E2E must not be set when NODE_ENV=production',
     );
   }
   const moxfieldSiteOrigin = new URL(config.MOXFIELD_SITE_ORIGIN).origin;

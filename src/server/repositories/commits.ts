@@ -10,7 +10,7 @@ import type { IngestMethod } from '@/integrations/deck-source';
 import { branches, commits, decks } from '@/server/db/schema';
 
 import { corruptData, decodeIngestMethod, decodeSourceMetadata, encodeJson } from './codec';
-import { referencing, withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import { inWorkspace, referencing, withTransaction, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export interface CommitRecord {
@@ -76,6 +76,9 @@ export interface CommitRepository {
 }
 
 export function createCommitRepository(ctx: RepositoryContext): CommitRepository {
+  /** Commits of decks in the context's workspace. */
+  const owned = () => inWorkspace(ctx, commits.deckId);
+
   return {
     insert(commit) {
       if (!Number.isInteger(commit.sequence) || commit.sequence < 1) {
@@ -88,11 +91,12 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         const deck = db
           .select({ source: decks.source, externalId: decks.externalId })
           .from(decks)
-          .where(eq(decks.id, commit.deckId))
+          .where(and(eq(decks.id, commit.deckId), eq(decks.workspaceId, ctx.workspaceId)))
           .get();
         if (!deck) throw new RepositoryError('not-found', `Deck ${commit.deckId} does not exist`);
         assertContentAddressed(commit, `${deck.source}:${deck.externalId}`);
 
+        // Installation-wide on purpose: commit ids are the table's primary key.
         if (db.select({ id: commits.id }).from(commits).where(eq(commits.id, commit.id)).get()) {
           throw new RepositoryError('conflict', `Commit ${commit.id} already exists`);
         }
@@ -161,7 +165,11 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
     },
 
     getById(id) {
-      const row = ctx.db.select().from(commits).where(eq(commits.id, id)).get();
+      const row = ctx.db
+        .select()
+        .from(commits)
+        .where(and(eq(commits.id, id), owned()))
+        .get();
       return row ? toCommitRecord(row) : null;
     },
 
@@ -169,7 +177,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = ctx.db
         .select()
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), eq(commits.sequence, sequence)))
+        .where(and(eq(commits.deckId, deckId), eq(commits.sequence, sequence), owned()))
         .get();
       return row ? toCommitRecord(row) : null;
     },
@@ -182,7 +190,14 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const [match, another] = ctx.db
         .select()
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), gte(commits.id, normalized), lt(commits.id, `${normalized}g`)))
+        .where(
+          and(
+            eq(commits.deckId, deckId),
+            gte(commits.id, normalized),
+            lt(commits.id, `${normalized}g`),
+            owned(),
+          ),
+        )
         .limit(2)
         .all();
       return match && !another ? toCommitRecord(match) : null;
@@ -194,16 +209,20 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         .from(decks)
         .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
         .innerJoin(commits, eq(commits.id, branches.headCommitId))
-        .where(eq(decks.id, deckId))
+        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
         .get();
       return row ? toCommitRecord(row) : null;
     },
 
     lineage(deckId, fromCommitId) {
-      const rows = ctx.db.select().from(commits).where(eq(commits.deckId, deckId)).all();
+      const rows = ctx.db
+        .select()
+        .from(commits)
+        .where(and(eq(commits.deckId, deckId), owned()))
+        .all();
       const byId = new Map(rows.map((row) => [row.id, row]));
       const chain: (typeof commits.$inferSelect)[] = [];
-      let cursor = fromCommitId ?? headCommitId(ctx.db, deckId);
+      let cursor = fromCommitId ?? headCommitId(ctx, deckId);
       if (cursor !== null && !byId.has(cursor)) return [];
       while (cursor !== null) {
         const row = byId.get(cursor);
@@ -220,14 +239,18 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return ctx.db
         .select()
         .from(commits)
-        .where(eq(commits.deckId, deckId))
+        .where(and(eq(commits.deckId, deckId), owned()))
         .orderBy(desc(commits.sequence))
         .all()
         .map(toCommitRecord);
     },
 
     count(deckId) {
-      const row = ctx.db.select({ n: count() }).from(commits).where(eq(commits.deckId, deckId)).get();
+      const row = ctx.db
+        .select({ n: count() })
+        .from(commits)
+        .where(and(eq(commits.deckId, deckId), owned()))
+        .get();
       return row?.n ?? 0;
     },
 
@@ -235,7 +258,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = ctx.db
         .select({ value: max(commits.sequence) })
         .from(commits)
-        .where(eq(commits.deckId, deckId))
+        .where(and(eq(commits.deckId, deckId), owned()))
         .get();
       return row?.value ?? null;
     },
@@ -264,12 +287,12 @@ function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   }
 }
 
-function headCommitId(db: DbExecutor, deckId: string): string | null {
-  const row = db
+function headCommitId(ctx: RepositoryContext, deckId: string): string | null {
+  const row = ctx.db
     .select({ headCommitId: branches.headCommitId })
     .from(decks)
     .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
-    .where(eq(decks.id, deckId))
+    .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
     .get();
   return row?.headCommitId ?? null;
 }

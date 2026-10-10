@@ -1,42 +1,28 @@
 /**
  * Runs before every request except Next.js's static build assets and the PWA
- * manifest/icons, so it covers all pages, the capture endpoints and server actions:
+ * manifest/icons, so it covers all pages, the capture endpoints and server actions.
  *
- * 1. **Host guard** (always): requests addressed to a host name git-moxfield does not
- *    answer to get 421, which defeats DNS rebinding (see `src/server/host-guard.ts`).
- *    IP literals and `localhost` are always allowed; other names must be the host of
- *    `PUBLIC_APP_URL` or be listed in `ALLOWED_HOSTS`.
- * 2. **Basic auth** (optional), for exposing git-moxfield beyond localhost. Enabled only
- *    when both `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` are set.
+ * **Host guard**: requests addressed to a host name git-moxfield does not answer to get
+ * 421, which defeats DNS rebinding (see `src/server/host-guard.ts`). IP literals and
+ * `localhost` are always allowed; other names must be the host of `PUBLIC_APP_URL` or be
+ * listed in `ALLOWED_HOSTS`.
+ *
+ * **Session cookie refresh**: page views re-set the session cookie with its full
+ * lifetime at most once a day, so a browser in use keeps its sliding 400-day session
+ * (see `src/server/auth/session-refresh.ts`). Pages cannot set cookies themselves.
+ *
+ * Authentication is not done here: accounts (ADR 0006) are resolved from the session
+ * cookie where data is accessed (`src/server/auth`, `src/server/access`), on every
+ * request and server action.
  *
  * Settings are read straight from the environment: the proxy runs before, and
  * independently of, the app's typed configuration.
  */
-import { createHash, timingSafeEqual } from 'node:crypto';
-
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isSecureCookieContext, serializeCookie } from './server/auth/cookie-spec';
+import { sessionRefreshCookies } from './server/auth/session-refresh';
 import { configuredHostnames, isAllowedRequestHost } from './server/host-guard';
-
-const REALM = 'git-moxfield';
-
-/** Constant-time comparison of two strings (hashed first, so lengths do not leak). */
-function safeEqual(a: string, b: string): boolean {
-  const digestA = createHash('sha256').update(a, 'utf8').digest();
-  const digestB = createHash('sha256').update(b, 'utf8').digest();
-  return timingSafeEqual(digestA, digestB);
-}
-
-/** Decodes `Authorization: Basic base64(user:password)`; `null` when absent or malformed. */
-function basicCredentials(header: string | null): { user: string; password: string } | null {
-  const match = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(header ?? '');
-  const encoded = match?.[1];
-  if (encoded === undefined) return null;
-  const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-  const separator = decoded.indexOf(':');
-  if (separator === -1) return null;
-  return { user: decoded.slice(0, separator), password: decoded.slice(separator + 1) };
-}
 
 /** 421 Misdirected Request: the request names a host this app does not answer to. */
 function unknownHostResponse(): NextResponse {
@@ -55,25 +41,14 @@ export function proxy(request: NextRequest): NextResponse {
     ALLOWED_HOSTS: process.env.ALLOWED_HOSTS,
   });
   if (!isAllowedRequestHost(request.headers, allowedHosts)) return unknownHostResponse();
-
-  const expectedUser = process.env.BASIC_AUTH_USER ?? '';
-  const expectedPassword = process.env.BASIC_AUTH_PASSWORD ?? '';
-  if (expectedUser === '' || expectedPassword === '') return NextResponse.next();
-
-  const credentials = basicCredentials(request.headers.get('authorization'));
-  // Evaluate both comparisons unconditionally so timing does not reveal which one failed.
-  const userOk = safeEqual(credentials?.user ?? '', expectedUser);
-  const passwordOk = safeEqual(credentials?.password ?? '', expectedPassword);
-  if (credentials !== null && userOk && passwordOk) return NextResponse.next();
-
-  return new NextResponse('Authentication required.\n', {
-    status: 401,
-    headers: {
-      'WWW-Authenticate': `Basic realm="${REALM}", charset="UTF-8"`,
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
-  });
+  const response = NextResponse.next();
+  const secure = isSecureCookieContext(request.headers, process.env.PUBLIC_APP_URL);
+  const refresh = sessionRefreshCookies(
+    { method: request.method, pathname: request.nextUrl.pathname, headers: request.headers },
+    secure,
+  );
+  for (const cookie of refresh) response.headers.append('set-cookie', serializeCookie(cookie));
+  return response;
 }
 
 export const config = {

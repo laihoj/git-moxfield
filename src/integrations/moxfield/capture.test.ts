@@ -6,11 +6,11 @@ import { DeckSourceError } from '../deck-source';
 
 import { buildBookmarklet, parseMoxfieldCapture, type BookmarkletOptions } from './capture';
 import {
+  BOOKMARKLET_KEY_PATTERN,
   CAPTURE_ENVELOPE_KIND,
   CAPTURE_FORM_FIELD,
   CAPTURE_FORM_TOKEN_FIELD,
   CAPTURE_PROTOCOL_VERSION,
-  CAPTURE_TOKEN_PATTERN,
   DONE,
   ERROR,
   isCaptureEnvelope,
@@ -64,7 +64,9 @@ describe('parseMoxfieldCapture', () => {
   });
 
   it('rejects envelopes of another protocol version or source', () => {
-    expectSchemaError(() => parseMoxfieldCapture(envelope({ version: 2 })), 'unsupported protocol version');
+    expectSchemaError(() => parseMoxfieldCapture(envelope({ version: 3 })), 'unsupported protocol version');
+    // Bookmarklets made before accounts: their envelopes are version 1.
+    expectSchemaError(() => parseMoxfieldCapture(envelope({ version: 1 })), 'the bookmarklet is out of date');
     expectSchemaError(
       () => parseMoxfieldCapture(envelope({ source: 'archidekt' })),
       'does not come from Moxfield',
@@ -134,7 +136,7 @@ describe('parseMoxfieldCapture', () => {
 const APP_URL = 'http://localhost:3000';
 const DECK_PAGE = 'https://moxfield.com/decks/FixtureDeckId_00000001/primer?tab=x#top';
 const NONCE = 'ab'.repeat(16);
-const CAPTURE_TOKEN = '0123456789abcdef'.repeat(4);
+const KEY = 'gmk_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG';
 
 function bookmarkletBody(url: string): string {
   expect(url.startsWith('javascript:')).toBe(true);
@@ -320,12 +322,8 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
-const popupBookmarklet = buildBookmarklet({ appUrl: `${APP_URL}/`, mode: 'popup' });
-const sameTabBookmarklet = buildBookmarklet({
-  appUrl: APP_URL,
-  mode: 'same-tab',
-  captureToken: CAPTURE_TOKEN,
-});
+const popupBookmarklet = buildBookmarklet({ appUrl: `${APP_URL}/`, mode: 'popup', key: KEY });
+const sameTabBookmarklet = buildBookmarklet({ appUrl: APP_URL, mode: 'same-tab', key: KEY });
 
 describe('buildBookmarklet', () => {
   it.each([
@@ -349,6 +347,7 @@ describe('buildBookmarklet', () => {
         mode: 'popup',
         apiBaseUrl: 'http://localhost:4010/api/',
         siteOrigin: 'http://localhost:4010/ignored/path',
+        key: KEY,
       }),
     );
     expect(body).toContain('"app":"https://tools.example/git-moxfield"');
@@ -358,39 +357,39 @@ describe('buildBookmarklet', () => {
   });
 
   it('rejects unusable URLs', () => {
-    expect(() => buildBookmarklet({ appUrl: 'localhost:3000', mode: 'popup' })).toThrow(TypeError);
-    expect(() => buildBookmarklet({ appUrl: 'javascript:alert(1)', mode: 'popup' })).toThrow(TypeError);
-    expect(() => buildBookmarklet({ appUrl: APP_URL, mode: 'popup', siteOrigin: 'nope' })).toThrow(TypeError);
+    expect(() => buildBookmarklet({ appUrl: 'localhost:3000', mode: 'popup', key: KEY })).toThrow(TypeError);
+    expect(() => buildBookmarklet({ appUrl: 'javascript:alert(1)', mode: 'popup', key: KEY })).toThrow(
+      TypeError,
+    );
+    expect(() => buildBookmarklet({ appUrl: APP_URL, mode: 'popup', siteOrigin: 'nope', key: KEY })).toThrow(
+      TypeError,
+    );
   });
 
-  it('embeds the capture token in the same-tab bookmarklet only', () => {
-    expect(CAPTURE_TOKEN_PATTERN.test(CAPTURE_TOKEN)).toBe(true);
+  it('embeds the bookmarklet key in both modes, each with only its own configuration', () => {
+    expect(BOOKMARKLET_KEY_PATTERN.test(KEY)).toBe(true);
     const sameTab = bookmarkletBody(sameTabBookmarklet);
-    expect(sameTab).toContain(`"token":"${CAPTURE_TOKEN}"`);
+    expect(sameTab).toContain(`"key":"${KEY}"`);
     expect(sameTab).toContain(`"tokenField":"${CAPTURE_FORM_TOKEN_FIELD}"`);
-    // Each mode carries only its own configuration.
     expect(sameTab).not.toContain('"capturePath"');
     const popup = bookmarkletBody(popupBookmarklet);
-    expect(popup).not.toContain('"token"');
+    expect(popup).toContain(`"key":"${KEY}"`);
     expect(popup).not.toContain('"formPath"');
-    // Even when a caller hands one over by mistake.
-    const careless = {
-      appUrl: APP_URL,
-      mode: 'popup',
-      captureToken: CAPTURE_TOKEN,
-    } as unknown as BookmarkletOptions;
-    expect(bookmarkletBody(buildBookmarklet(careless))).not.toContain(CAPTURE_TOKEN);
+    expect(popup).not.toContain('"tokenField"');
   });
 
   it.each([
     ['missing', undefined],
     ['empty', ''],
-    ['too short', 'abc123'],
-    ['uppercase', CAPTURE_TOKEN.toUpperCase()],
-    ['with a quote', `${CAPTURE_TOKEN.slice(0, 63)}"`],
-  ])('refuses a same-tab bookmarklet whose capture token is %s', (_case, captureToken) => {
-    const options = { appUrl: APP_URL, mode: 'same-tab', captureToken } as unknown as BookmarkletOptions;
-    expect(() => buildBookmarklet(options)).toThrow(TypeError);
+    ['too short', 'gmk_abc123'],
+    ['a session token', `gms_${KEY.slice(4)}`],
+    ['an installation capture token from before accounts', '0123456789abcdef'.repeat(4)],
+    ['with a quote', `${KEY.slice(0, -1)}"`],
+  ])('refuses a key that is %s, in both modes', (_case, key) => {
+    for (const mode of ['popup', 'same-tab']) {
+      const options = { appUrl: APP_URL, mode, key } as unknown as BookmarkletOptions;
+      expect(() => buildBookmarklet(options)).toThrow(TypeError);
+    }
   });
 });
 
@@ -420,6 +419,8 @@ describe('bookmarklet — popup mode', () => {
     expect(message?.targetOrigin).toBe(APP_URL);
     expect(message?.data.t).toBe(PAYLOAD);
     expect(message?.data.n).toBe(NONCE);
+    // The key travels with the deck, only to the exact app origin (targetOrigin above).
+    expect(message?.data.key).toBe(KEY);
     const parsed: unknown = JSON.parse(String(message?.data.json));
     expect(isCaptureEnvelope(parsed)).toBe(true);
     expect(parsed).toEqual({
@@ -498,7 +499,7 @@ describe('bookmarklet — popup mode', () => {
       data: { t: ERROR, n: NONCE, message: 'Deck not tracked' },
     });
     expect(env.listeners.size).toBe(0);
-    expect(env.status()).toBe('git-moxfield: git-moxfield could not import the deck: Deck not tracked');
+    expect(env.status()).toBe('git-moxfield: Could not import the deck: Deck not tracked');
   });
 
   it('gives up after the timeout', () => {
@@ -550,7 +551,7 @@ describe('bookmarklet — popup mode', () => {
 });
 
 describe('bookmarklet — same-tab mode', () => {
-  it('posts the capture token and the envelope to the capture form endpoint', async () => {
+  it('posts the bookmarklet key and the envelope to the capture form endpoint', async () => {
     const env = browser();
     env.run(sameTabBookmarklet);
     expect(env.opened).toEqual([]);
@@ -567,7 +568,7 @@ describe('bookmarklet — same-tab mode', () => {
       ['textarea', CAPTURE_FORM_FIELD],
     ]);
     const [token, payload] = form?.children ?? [];
-    expect(token).toMatchObject({ type: 'hidden', name: 'token', value: CAPTURE_TOKEN });
+    expect(token).toMatchObject({ type: 'hidden', name: 'token', value: KEY });
     expect(payload?.name).toBe('payload');
     expect(parseMoxfieldCapture(payload?.value)).toEqual({ deck: v3Deck(), primer: v1Primer() });
     expect(env.body.children).toContain(form);

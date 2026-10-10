@@ -3,9 +3,10 @@
  * id generator, transactions and batching helpers. Internal to `src/server/repositories`.
  */
 import type { RunResult } from 'better-sqlite3';
-import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
+import { eq, inArray, type SQL } from 'drizzle-orm';
+import type { BaseSQLiteDatabase, SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
-import type * as schema from '@/server/db/schema';
+import * as schema from '@/server/db/schema';
 
 import { RepositoryError } from './errors';
 
@@ -18,7 +19,11 @@ export type DbExecutor = BaseSQLiteDatabase<'sync', RunResult, typeof schema>;
 
 export interface RepositoryContext {
   readonly db: DbExecutor;
-  /** Workspace that deck queries are scoped to (`local` today). */
+  /**
+   * Workspace that every deck-reachable query is scoped to (see {@link inWorkspace}).
+   * Account tables (users, credentials, sessions, links, invites) are installation-wide
+   * and ignore it.
+   */
   readonly workspaceId: string;
   /** Current time as an ISO-8601 UTC timestamp with milliseconds. */
   readonly now: () => string;
@@ -34,6 +39,29 @@ export interface RepositoryContext {
  */
 export function withTransaction<T>(ctx: RepositoryContext, fn: (tx: RepositoryContext) => T): T {
   return ctx.db.transaction((tx) => fn({ ...ctx, db: tx }), { behavior: 'immediate' });
+}
+
+/**
+ * Restricts a query on a deck-owned table to the context's workspace:
+ * `deckIdColumn IN (SELECT id FROM decks WHERE workspace_id = ?)`.
+ *
+ * Every repository query that reaches deck data through a caller-supplied id (deck,
+ * branch, commit, observation) includes this condition, so an id that belongs to another
+ * workspace behaves exactly like an id that does not exist: reads return nothing, writes
+ * fail with `not-found`. Content-addressed stores (snapshots, raw blobs) are shared by
+ * all workspaces and are only reachable through hashes that these scoped queries return;
+ * their content is derived from its own hash, so no workspace can change what another
+ * reads. The card catalog is keyed by card name, not content, so it is scoped to the
+ * workspace like deck data.
+ */
+export function inWorkspace(ctx: RepositoryContext, deckIdColumn: SQLiteColumn): SQL {
+  return inArray(
+    deckIdColumn,
+    ctx.db
+      .select({ id: schema.decks.id })
+      .from(schema.decks)
+      .where(eq(schema.decks.workspaceId, ctx.workspaceId)),
+  );
 }
 
 /**

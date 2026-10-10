@@ -1,8 +1,11 @@
 /**
- * Card catalog: display facts per card key (type line, mana cost, ...). Reference data
- * that is not versioned; the latest write wins.
+ * Card catalog: display facts per card key (type line, mana cost, ...), scoped to the
+ * context's workspace like the decks they describe. The facts come from captured or
+ * pasted Moxfield JSON, which is untrusted, so a capture only ever writes, and a page
+ * only ever reads, the facts of its own workspace. Reference data that is not versioned;
+ * within a workspace the latest write wins.
  */
-import { inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import type { CardFacts, CardKey } from '@/core/model';
@@ -13,11 +16,11 @@ import { batches, distinct, withTransaction, type RepositoryContext } from './co
 
 export interface CatalogRepository {
   /**
-   * Inserts or replaces facts in one transaction. When the input contains the same key
-   * more than once, the last entry wins.
+   * Inserts or replaces the workspace's facts in one transaction. When the input contains
+   * the same key more than once, the last entry wins.
    */
   upsertMany(facts: readonly CardFacts[]): void;
-  /** Facts for the given keys; unknown keys are absent from the result. */
+  /** The workspace's facts for the given keys; unknown keys are absent from the result. */
   getMany(keys: Iterable<CardKey>): Map<CardKey, CardFacts>;
 }
 
@@ -29,6 +32,7 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
       for (const fact of facts) latest.set(fact.key, fact);
       const updatedAt = ctx.now();
       const rows = [...latest.values()].map((fact) => ({
+        workspaceId: ctx.workspaceId,
         key: fact.key,
         name: fact.name,
         typeLine: fact.typeLine,
@@ -45,7 +49,7 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
           db.insert(cardCatalog)
             .values(batch)
             .onConflictDoUpdate({
-              target: cardCatalog.key,
+              target: [cardCatalog.workspaceId, cardCatalog.key],
               set: {
                 name: excluded(cardCatalog.name),
                 typeLine: excluded(cardCatalog.typeLine),
@@ -66,7 +70,11 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
     getMany(keys) {
       const result = new Map<CardKey, CardFacts>();
       for (const batch of batches(distinct(keys))) {
-        const rows = ctx.db.select().from(cardCatalog).where(inArray(cardCatalog.key, batch)).all();
+        const rows = ctx.db
+          .select()
+          .from(cardCatalog)
+          .where(and(eq(cardCatalog.workspaceId, ctx.workspaceId), inArray(cardCatalog.key, batch)))
+          .all();
         for (const row of rows) {
           const facts: CardFacts = {
             key: row.key,

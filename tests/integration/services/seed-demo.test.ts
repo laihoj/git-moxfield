@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { createServices } from '@/server/services';
 import { createServiceHarness, defined } from '@tests/support/services';
 
-import { DEMO_PUBLIC_ID, DemoClock, seedDemoDeck } from '../../../scripts/seed-demo';
+import {
+  DEMO_PUBLIC_ID,
+  DEMO_USER_NAME,
+  DemoClock,
+  ensureDemoUser,
+  seedDemoDeck,
+} from '../../../scripts/seed-demo';
 
 describe('demo seed', () => {
   it('creates eight versions over ten weeks with tags, notes and uncommitted changes', async () => {
@@ -13,7 +20,14 @@ describe('demo seed', () => {
     const { db, sources, config, logger, api } = createServiceHarness({
       env: { MOXFIELD_SERVER_FETCH: 'off' },
     });
-    const services = createServices({ db, sources, config, now: clock.now, logger });
+    const services = createServices({
+      db,
+      sources,
+      config,
+      workspaceId: LOCAL_WORKSPACE_ID,
+      now: clock.now,
+      logger,
+    });
 
     const deckId = await seedDemoDeck(services, clock, end);
     expect(api.requests).toEqual([]);
@@ -56,5 +70,20 @@ describe('demo seed', () => {
 
     const dressDown = defined(await services.cardHistory(deckId, 'Dress Down'));
     expect(dressDown.history.summary).toMatchObject({ timesCut: 1, timesRestored: 1 });
+  });
+});
+
+describe('demo user', () => {
+  it('creates an admin with a workspace of its own once, and reuses it afterwards', () => {
+    const { repos } = createServiceHarness();
+    const demo = ensureDemoUser(repos);
+    expect(demo).toMatchObject({ displayName: DEMO_USER_NAME, role: 'admin', disabledAt: null });
+    // Never the `local` workspace: seeding a real database must not take over its history.
+    expect(demo.workspaceId).not.toBe(LOCAL_WORKSPACE_ID);
+
+    repos.users.setDisabled(demo.id, true);
+    expect(ensureDemoUser(repos)).toMatchObject({ id: demo.id });
+    expect(repos.users.getById(demo.id)?.disabledAt).toBeNull();
+    expect(repos.users.count()).toBe(1);
   });
 });

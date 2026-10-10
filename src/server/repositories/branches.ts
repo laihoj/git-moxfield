@@ -6,7 +6,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 
 import { branches, commits, decks } from '@/server/db/schema';
 
-import { withTransaction, type RepositoryContext } from './context';
+import { inWorkspace, withTransaction, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export type BranchKind = (typeof branches.$inferSelect)['kind'];
@@ -49,12 +49,15 @@ export interface BranchRepository {
 }
 
 export function createBranchRepository(ctx: RepositoryContext): BranchRepository {
+  /** Branches of decks in the context's workspace. */
+  const owned = () => inWorkspace(ctx, branches.deckId);
+
   return {
     getMain(deckId) {
       const row = ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.deckId, deckId), eq(branches.kind, 'main')))
+        .where(and(eq(branches.deckId, deckId), eq(branches.kind, 'main'), owned()))
         .get();
       return row ?? null;
     },
@@ -63,27 +66,38 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       const row = ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.deckId, deckId), eq(branches.name, name)))
+        .where(and(eq(branches.deckId, deckId), eq(branches.name, name), owned()))
         .get();
       return row ?? null;
     },
 
     getById(id) {
-      return ctx.db.select().from(branches).where(eq(branches.id, id)).get() ?? null;
+      return (
+        ctx.db
+          .select()
+          .from(branches)
+          .where(and(eq(branches.id, id), owned()))
+          .get() ?? null
+      );
     },
 
     list(deckId) {
       return ctx.db
         .select()
         .from(branches)
-        .where(eq(branches.deckId, deckId))
+        .where(and(eq(branches.deckId, deckId), owned()))
         .orderBy(sql`${branches.kind} <> 'main'`, asc(branches.name))
         .all();
     },
 
     setHead(branchId, commitId, options = {}) {
-      withTransaction(ctx, ({ db }) => {
-        const branch = db.select().from(branches).where(eq(branches.id, branchId)).get();
+      withTransaction(ctx, (tx) => {
+        const { db } = tx;
+        const branch = db
+          .select()
+          .from(branches)
+          .where(and(eq(branches.id, branchId), inWorkspace(tx, branches.deckId)))
+          .get();
         if (!branch) throw new RepositoryError('not-found', `Branch ${branchId} does not exist`);
         const commit = db
           .select({ id: commits.id })

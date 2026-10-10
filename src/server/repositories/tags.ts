@@ -8,7 +8,7 @@ import { compareStrings } from '@/core/canonical';
 import { commits, versionTags } from '@/server/db/schema';
 
 import { toCommitRecord, type CommitRecord } from './commits';
-import { batches, distinct, referencing, type RepositoryContext } from './context';
+import { batches, distinct, inWorkspace, referencing, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 /** Maximum tag length in Unicode code points (after normalization). */
@@ -70,11 +70,24 @@ export interface VersionTagRepository {
 }
 
 export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRepository {
+  /** `commitColumn IN (commits of decks in the context's workspace)`. */
+  const ownedCommit = (commitColumn: typeof versionTags.commitId) =>
+    inArray(
+      commitColumn,
+      ctx.db.select({ id: commits.id }).from(commits).where(inWorkspace(ctx, commits.deckId)),
+    );
+
   return {
     add(commitId, tag) {
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) throw new RepositoryError('invalid-input', validation.reason);
       const { name } = validation;
+      const owned = ctx.db
+        .select({ id: commits.id })
+        .from(commits)
+        .where(and(eq(commits.id, commitId), inWorkspace(ctx, commits.deckId)))
+        .get();
+      if (!owned) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
       referencing(`Tag ${name}`, () =>
         ctx.db
           .insert(versionTags)
@@ -90,7 +103,13 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       if (!validation.ok) return false;
       const result = ctx.db
         .delete(versionTags)
-        .where(and(eq(versionTags.commitId, commitId), eq(versionTags.name, validation.name)))
+        .where(
+          and(
+            eq(versionTags.commitId, commitId),
+            eq(versionTags.name, validation.name),
+            ownedCommit(versionTags.commitId),
+          ),
+        )
         .run();
       return result.changes > 0;
     },
@@ -99,7 +118,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       return ctx.db
         .select({ name: versionTags.name })
         .from(versionTags)
-        .where(eq(versionTags.commitId, commitId))
+        .where(and(eq(versionTags.commitId, commitId), ownedCommit(versionTags.commitId)))
         .all()
         .map((row) => row.name)
         .sort(compareStrings);
@@ -112,7 +131,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
         const rows = ctx.db
           .select({ commitId: versionTags.commitId, name: versionTags.name })
           .from(versionTags)
-          .where(inArray(versionTags.commitId, batch))
+          .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
           .all();
         for (const row of rows) result.get(row.commitId)?.push(row.name);
       }
@@ -125,7 +144,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
         .select({ name: versionTags.name, count: count() })
         .from(versionTags)
         .innerJoin(commits, eq(commits.id, versionTags.commitId))
-        .where(eq(commits.deckId, deckId))
+        .where(and(eq(commits.deckId, deckId), inWorkspace(ctx, commits.deckId)))
         .groupBy(versionTags.name)
         .all()
         .sort((a, b) => compareStrings(a.name, b.name));
@@ -138,7 +157,13 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
         .select(getTableColumns(commits))
         .from(commits)
         .innerJoin(versionTags, eq(versionTags.commitId, commits.id))
-        .where(and(eq(commits.deckId, deckId), eq(versionTags.name, validation.name)))
+        .where(
+          and(
+            eq(commits.deckId, deckId),
+            eq(versionTags.name, validation.name),
+            inWorkspace(ctx, commits.deckId),
+          ),
+        )
         .orderBy(desc(commits.sequence))
         .all()
         .map(toCommitRecord);

@@ -4,6 +4,7 @@ import { buildSnapshot } from '@tests/support/builders';
 
 import { DeckSourceError, type DeckRef, type DeckSource, type RawSourcePayload } from '../deck-source';
 
+import { CAPTURE_ENVELOPE_KIND, CAPTURE_PROTOCOL_VERSION } from './capture-protocol';
 import { MOXFIELD_PAYLOAD_MEDIA_TYPE } from './constants';
 import { MoxfieldDeckSource, type MoxfieldDeckSourceOptions } from './moxfield-deck-source';
 import { moxfieldPrimerToMarkdown } from './primer-markup';
@@ -102,8 +103,8 @@ describe('MoxfieldDeckSource', () => {
     const { source } = setup();
     const fromServer = source.normalizeDeck(await source.getDeck(REF));
     const captured = source.parseCapturedPayload({
-      kind: 'git-moxfield/capture',
-      version: 1,
+      kind: CAPTURE_ENVELOPE_KIND,
+      version: CAPTURE_PROTOCOL_VERSION,
       source: 'moxfield',
       pageUrl: 'https://moxfield.com/decks/FixtureDeckId_00000001',
       capturedAt: '2026-10-09T12:00:00.000Z',

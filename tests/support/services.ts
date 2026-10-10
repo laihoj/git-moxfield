@@ -3,11 +3,17 @@
  * source wired to a {@link FakeMoxfieldApi}, a manual clock shared by the services and
  * the Moxfield client (cooldowns, block backoff), and a silent logger that records
  * entries for assertions.
+ *
+ * `services` work on the `local` workspace, like a pre-account installation. For
+ * multi-user tests, {@link ServiceHarness.createUser} adds a user with a workspace of
+ * their own and services bound to it, and {@link ServiceHarness.auth} is the auth service
+ * on the same database and clock.
  */
-import type { Db } from '@/server/db/client';
+import { createAuthService, type AuthService } from '@/server/auth/service';
+import { LOCAL_WORKSPACE_ID, type Db } from '@/server/db/client';
 import { parseConfig, type AppConfig } from '@/server/config';
 import type { Logger } from '@/server/logger';
-import { createRepositories, type Repositories } from '@/server/repositories';
+import { createRepositories, type Repositories, type UserRecord, type UserRole } from '@/server/repositories';
 import {
   createServices,
   KeyedMutex,
@@ -58,7 +64,14 @@ export function recordingLogger(): Logger & { entries: LogEntry[] } {
   return { entries, debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
 }
 
+export interface HarnessUser {
+  user: UserRecord;
+  /** Services bound to the user's workspace (what `servicesFor(user)` returns in the app). */
+  services: DeckServices;
+}
+
 export interface ServiceHarness {
+  /** Services bound to the `local` workspace. */
   services: DeckServices;
   api: FakeMoxfieldApi;
   clock: ManualClock;
@@ -70,6 +83,12 @@ export interface ServiceHarness {
   logger: ReturnType<typeof recordingLogger>;
   /** Creates another service instance on the same database, sources and locks. */
   sibling(): DeckServices;
+  /** Services bound to `workspaceId`, on the same database, sources, clock and locks. */
+  servicesForWorkspace(workspaceId: string): DeckServices;
+  /** Creates a user with a workspace of their own (directly, bypassing invites). */
+  createUser(displayName: string, role?: UserRole): HarnessUser;
+  /** The auth service on the same database, config, clock and logger. */
+  auth: AuthService;
 }
 
 export interface ServiceHarnessOptions {
@@ -104,17 +123,26 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}): Servi
   const sources = options.sources ? options.sources(defaults) : defaults;
   const db = openTestDatabase();
   const locks = new KeyedMutex();
-  const build = (): DeckServices => createServices({ db, sources, config, now: clock.now, logger, locks });
+  const servicesForWorkspace = (workspaceId: string): DeckServices =>
+    createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks });
+  const build = (): DeckServices => servicesForWorkspace(LOCAL_WORKSPACE_ID);
+  const repos = createRepositories(db, { now: clock.now });
   return {
     services: build(),
     api,
     clock,
     db,
-    repos: createRepositories(db, { now: clock.now }),
+    repos,
     config,
     sources,
     logger,
     sibling: build,
+    servicesForWorkspace,
+    createUser: (displayName, role = 'member') => {
+      const user = repos.users.create({ displayName, role });
+      return { user, services: servicesForWorkspace(user.workspaceId) };
+    },
+    auth: createAuthService({ db, config, now: clock.now, logger }),
   };
 }
 

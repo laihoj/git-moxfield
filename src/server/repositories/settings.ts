@@ -1,7 +1,7 @@
 /**
- * Installation settings: a small key/value store for per-installation values and
- * secrets (e.g. the capture token baked into the same-tab bookmarklet). Keys are
- * defined next to the code that reads them.
+ * Installation settings: a small key/value store for per-installation values (e.g. the
+ * setup code of an unclaimed installation). Keys are defined next to the code that
+ * reads them.
  */
 import { eq } from 'drizzle-orm';
 
@@ -10,7 +10,7 @@ import { appSettings } from '@/server/db/schema';
 import { withTransaction, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
-/** Setting keys: lowercase identifiers such as `capture-token`. */
+/** Setting keys: lowercase identifiers such as `setup-code`. */
 const SETTING_KEY = /^[a-z][a-z0-9._-]{0,63}$/;
 
 export interface SettingsRepository {
@@ -28,6 +28,8 @@ export interface SettingsRepository {
    * @throws {RepositoryError} `invalid-input` for an invalid key.
    */
   getOrCreate(key: string, create: () => string): string;
+  /** Removes `key`. Returns whether it was set. */
+  delete(key: string): boolean;
 }
 
 export function createSettingsRepository(ctx: RepositoryContext): SettingsRepository {
@@ -68,6 +70,10 @@ export function createSettingsRepository(ctx: RepositoryContext): SettingsReposi
         if (stored === null) throw new Error(`Setting ${key} was not stored`);
         return stored;
       });
+    },
+
+    delete(key) {
+      return ctx.db.delete(appSettings).where(eq(appSettings.key, key)).run().changes > 0;
     },
   };
 }

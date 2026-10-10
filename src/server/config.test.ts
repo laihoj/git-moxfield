@@ -19,3 +19,19 @@ describe('parseConfig — ALLOWED_HOSTS', () => {
     );
   });
 });
+
+describe('parseConfig — GIT_MOXFIELD_E2E', () => {
+  it.each(['development', 'test', undefined])('allows the test-only endpoints with NODE_ENV=%s', (env) => {
+    expect(parseConfig({ GIT_MOXFIELD_E2E: 'true', NODE_ENV: env }).GIT_MOXFIELD_E2E).toBe(true);
+  });
+
+  it('refuses to start a production server with the test-only endpoints enabled', () => {
+    expect(() => parseConfig({ GIT_MOXFIELD_E2E: 'true', NODE_ENV: 'production' })).toThrow(
+      'Invalid git-moxfield configuration: GIT_MOXFIELD_E2E must not be set when NODE_ENV=production',
+    );
+  });
+
+  it.each([undefined, 'false', '0'])('accepts production without the flag (GIT_MOXFIELD_E2E=%s)', (flag) => {
+    expect(parseConfig({ GIT_MOXFIELD_E2E: flag, NODE_ENV: 'production' }).GIT_MOXFIELD_E2E).not.toBe(true);
+  });
+});

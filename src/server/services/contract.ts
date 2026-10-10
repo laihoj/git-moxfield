@@ -2,6 +2,12 @@
  * The application service API consumed by the UI layer (server components, server
  * actions, route handlers). The UI depends only on this interface and the DTOs in
  * `./types`, so it can be tested against fakes and the implementation can evolve.
+ *
+ * An instance is bound to one workspace (ADR 0007's owner scope): the UI obtains it with
+ * `servicesFor(user)` from `@/server/access`. Every deck id is resolved within that
+ * workspace; a deck of another workspace behaves exactly like a deck that does not
+ * exist (`null`, `[]` or a `not-found` error, never `forbidden`), so ids do not reveal
+ * whether something exists.
  */
 import type { IngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
 
@@ -44,18 +50,6 @@ export interface SetupInfoDTO {
   moxfieldApiBaseUrl: string;
 }
 
-/** The "Send to git-moxfield" bookmarklets as `javascript:` URLs. */
-export interface BookmarkletsDTO {
-  /** Desktop browsers: opens git-moxfield in a popup and hands the deck over by `postMessage`. */
-  popup: string;
-  /**
-   * Phones and in-app browsers: posts the deck to git-moxfield in the same tab. Carries
-   * this installation's capture token, so it is a credential: show it only to the user
-   * installing it, and never log it.
-   */
-  sameTab: string;
-}
-
 /**
  * Version references accepted by `compare`:
  *   `v12` or `12`  version by sequence
@@ -67,8 +61,13 @@ export interface BookmarkletsDTO {
 export type VersionRef = string;
 
 export interface DeckServices {
+  /** The workspace's decks. */
   listDecks(): Promise<DeckSummaryDTO[]>;
-  /** Parses a Moxfield URL/id, creates the deck (idempotent) and tries an initial server fetch. */
+  /**
+   * Parses a Moxfield URL/id, creates the deck in the workspace (idempotent) and tries an
+   * initial server fetch. Other workspaces tracking the same Moxfield deck do not matter:
+   * every workspace has its own deck and history.
+   */
   trackDeck(input: string): Promise<TrackDeckOutcome>;
   /** Deletes a deck and its entire history. */
   untrackDeck(deckId: string): Promise<void>;
@@ -77,8 +76,9 @@ export interface DeckServices {
   /** Server-side fetch of the current Moxfield state. Respects cooldowns and block backoff. */
   refresh(deckId: string, trigger: 'manual' | 'auto'): Promise<FetchOutcome>;
   /**
-   * Ingests a deck handed over by the user's browser (bookmarklet) or pasted manually.
-   * `data` is untrusted. With `track: false`, an untracked deck yields `status: 'untracked'`.
+   * Ingests a deck handed over by the user's browser (bookmarklet) or pasted manually,
+   * into the workspace. `data` is untrusted. With `track: false`, a deck the workspace
+   * does not track yet yields `status: 'untracked'`.
    */
   ingestCapture(input: {
     data: unknown;
@@ -120,19 +120,9 @@ export interface DeckServices {
 
   /** Converts a deck's primer markup to portable markdown via its DeckSource. */
   primerToMarkdown(source: string, primer: string): string;
-  /** Configuration facts for the setup page. Holds no secrets. */
+  /**
+   * Configuration facts for the setup page. Holds no secrets. (Pages without a signed-in
+   * user use `getSetupInfo()` from `@/server/access`.)
+   */
   getSetupInfo(): SetupInfoDTO;
-  /**
-   * The bookmarklets for git-moxfield reachable at `appUrl` (its public base URL), aimed
-   * at the configured Moxfield site and API. Creates the capture token on first use.
-   * @throws {TypeError} when `appUrl` is not an absolute http(s) URL.
-   */
-  getBookmarklets(appUrl: string): BookmarkletsDTO;
-  /**
-   * This installation's capture token: the secret the same-tab bookmarklet posts along
-   * with the deck, which authenticates its cross-site form post. Created (atomically) on
-   * first use and stable afterwards. Server-only: never send it to a browser other than
-   * inside {@link BookmarkletsDTO.sameTab}, and never log it.
-   */
-  getCaptureToken(): string;
 }

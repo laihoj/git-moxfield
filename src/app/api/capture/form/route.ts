@@ -1,16 +1,19 @@
 /**
  * `POST /api/capture/form`: target of the same-tab bookmarklet (phones and in-app
  * browsers, where popups are blocked). The bookmarklet submits a hidden form from the
- * Moxfield deck page with two fields: `token`, this installation's capture token, and
- * `payload`, the capture envelope JSON. On success the browser is redirected (303) to
- * the deck page.
+ * Moxfield deck page with two fields: `token`, the user's bookmarklet key, and `payload`,
+ * the capture envelope JSON. The deck goes into the key owner's workspace, and the
+ * browser goes on to the deck page through the sign-in hand-off (below).
  *
- * Authentication (CSRF protection) is the **capture token**: a per-installation secret
- * (see `DeckServices.getCaptureToken`) that git-moxfield bakes into the same-tab
- * bookmarklet on its setup page. Requests without the right token get 403, with a page
- * that asks the user to reinstall the bookmarklet.
+ * Authentication is the **bookmarklet key**, a per-user secret: it decides which
+ * workspace receives the capture, and requests without a valid key get 403, with a page
+ * that asks the user to create a new bookmarklet. What the key does not prove is that
+ * the browser's user ran it: any member can post their own valid key from any web page.
+ * Such a post can only ever add a deck to the key owner's own workspace, so it is
+ * harmless here; and it never changes who the browser is signed in as without asking
+ * (see the hand-off below).
  *
- * The `Origin` header cannot do this job. A real end-to-end test against
+ * The `Origin` header cannot authenticate either. A real end-to-end test against
  * https://moxfield.com showed the post arriving with `Origin: null` and
  * `Sec-Fetch-Site: cross-site`: under the default referrer policy, browsers hide the
  * origin of a non-CORS request that goes from https to http (git-moxfield on
@@ -18,23 +21,37 @@
  * too, so the origin check that remains (`null`, absent, or a configured capture origin;
  * any other explicit origin is rejected) is defence in depth only.
  *
+ * Signing in: the session cookie is `SameSite=Lax`, so the browser does not send it with
+ * this cross-site POST, and the endpoint cannot tell whether the browser is already
+ * signed in. It starts a pending hand-off instead, sets it as the hand-off cookie and
+ * redirects (303) through `/api/auth/handoff`. That top-level GET carries the browser's
+ * own session cookie again: a browser signed in as the key's owner goes straight on to
+ * the deck page; any other browser (signed out, or signed in as someone else) is asked
+ * first, on a page of this app, whether to sign in as the key's owner.
+ *
  * Decision: same-tab captures **track untracked decks automatically**. The popup flow
  * asks for confirmation before tracking, but here the request is a top-level form
  * navigation: confirming would require keeping the untrusted payload somewhere
  * (server state or the URL) between two requests. Auto-tracking is acceptable because
- * the user explicitly ran the bookmarklet on that very deck, and the capture token
- * proves the request came from the user's own bookmarklet, not from a third-party site.
- * Tracking only stores the observed deck; no version is committed without the user.
+ * the deck only ever lands in the key owner's own workspace (a forged post can only add
+ * a deck to the forger's own account), and tracking only stores the observed deck; no
+ * version is committed without the user.
  */
 import type { NextRequest } from 'next/server';
 
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD } from '@/integrations/moxfield/capture-protocol';
 import { routes } from '@/lib/routes';
+import { servicesFor } from '@/server/access';
+import { getAuthService } from '@/server/auth';
+import { handoffCookie } from '@/server/auth/cookie-spec';
+import { appendCookie, requestCookieSecurity } from '@/server/auth/cookies';
+import { HANDOFF_PATH } from '@/server/auth/paths';
+import type { StartedHandoff } from '@/server/auth/types';
+import { getConfig } from '@/server/config';
 import { createLogger } from '@/server/logger';
-import { getServices } from '@/server/services';
 
 import { isUnusableCaptureError } from '../errors';
-import { isAcceptableCaptureOrigin, isValidCaptureToken } from '../form-guard';
+import { describeRejectedKey, isAcceptableCaptureOrigin } from '../form-guard';
 import { CAPTURE_FORM_BODY_LIMIT, declaredTooLarge, readBodyLimited } from '../read-body';
 
 import { captureRejectedResponse } from './forbidden-page';
@@ -54,15 +71,23 @@ function seeOther(location: string): Response {
   return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
 }
 
-function failed(error: FormError): Response {
-  return seeOther(`/capture?mode=paste&error=${error}`);
+function pastePageWithError(error: FormError): string {
+  return `${routes.capturePaste()}&error=${error}`;
+}
+
+/**
+ * Redirects through the hand-off route to `target`, carrying the pending hand-off in its
+ * cookie: once the key is accepted, every answer goes through the hand-off.
+ */
+function handOff(request: NextRequest, started: StartedHandoff, target: string): Response {
+  const response = seeOther(`${HANDOFF_PATH}?next=${encodeURIComponent(target)}`);
+  return appendCookie(response, handoffCookie(started.handoff, new Date(), requestCookieSecurity(request)));
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const services = getServices();
   const origin = request.headers.get('origin');
   const secFetchSite = request.headers.get('sec-fetch-site');
-  const { captureAllowedOrigins } = services.getSetupInfo();
+  const { captureAllowedOrigins } = getConfig();
   if (!isAcceptableCaptureOrigin(origin, captureAllowedOrigins)) {
     log.warn('Rejected same-tab capture from an unexpected origin', {
       origin,
@@ -79,43 +104,49 @@ export async function POST(request: NextRequest): Promise<Response> {
       headers: { 'content-type': 'text/plain; charset=utf-8' },
     });
   }
-  if (declaredTooLarge(request.headers, CAPTURE_FORM_BODY_LIMIT)) return failed('too-large');
+  if (declaredTooLarge(request.headers, CAPTURE_FORM_BODY_LIMIT))
+    return seeOther(pastePageWithError('too-large'));
   const body = await readBodyLimited(request, CAPTURE_FORM_BODY_LIMIT);
-  if (!body.ok) return failed(body.reason === 'too-large' ? 'too-large' : 'invalid');
+  if (!body.ok) return seeOther(pastePageWithError(body.reason === 'too-large' ? 'too-large' : 'invalid'));
 
   let form: FormData;
   try {
     // Parse the already size-checked bytes with the platform's form parser.
     form = await new Response(body.bytes, { headers: { 'content-type': contentType } }).formData();
   } catch {
-    return failed('invalid');
+    return seeOther(pastePageWithError('invalid'));
   }
 
-  const token = form.get(CAPTURE_FORM_TOKEN_FIELD);
-  if (!isValidCaptureToken(token, services.getCaptureToken())) {
-    // Never log the token itself, only whether one was sent.
-    log.warn('Rejected same-tab capture without a valid capture token', {
+  const key = form.get(CAPTURE_FORM_TOKEN_FIELD);
+  const started = await getAuthService().startKeyHandoff(key, request.headers.get('user-agent'));
+  if (started === null) {
+    // Never log the key itself, only why it was not accepted.
+    log.warn('Rejected same-tab capture without a valid bookmarklet key', {
       origin,
       secFetchSite,
-      token: token === null ? 'missing' : 'wrong',
+      key: describeRejectedKey(key),
     });
-    return captureRejectedResponse('token');
+    return captureRejectedResponse('key');
   }
 
   const payload = form.get(CAPTURE_FORM_FIELD);
-  if (typeof payload !== 'string' || payload.trim() === '') return failed('invalid');
+  if (typeof payload !== 'string' || payload.trim() === '') {
+    return handOff(request, started, pastePageWithError('invalid'));
+  }
 
   try {
-    const outcome = await services.ingestCapture({
+    const outcome = await servicesFor(started.user).ingestCapture({
       data: payload,
       method: 'browser-capture',
       track: true,
     });
-    if (outcome.status === 'ingested') return seeOther(routes.deck(outcome.deckId, { captured: true }));
-    return failed('failed');
+    if (outcome.status === 'ingested') {
+      return handOff(request, started, routes.deck(outcome.deckId, { captured: true }));
+    }
+    return handOff(request, started, pastePageWithError('failed'));
   } catch (error) {
-    if (isUnusableCaptureError(error)) return failed('invalid');
-    log.error('Same-tab capture failed', { error });
-    return failed('failed');
+    if (isUnusableCaptureError(error)) return handOff(request, started, pastePageWithError('invalid'));
+    log.error('Same-tab capture failed', { error, userId: started.user.id });
+    return handOff(request, started, pastePageWithError('failed'));
   }
 }

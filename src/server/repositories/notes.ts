@@ -4,12 +4,12 @@
  * JSON payload (`note` for the free-text note today, see the services'
  * `FREE_TEXT_NOTE_KIND`; tournament results etc. later).
  */
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 
-import { commitNotes } from '@/server/db/schema';
+import { commitNotes, commits } from '@/server/db/schema';
 
 import { decodeJson, encodeJson } from './codec';
-import { referencing, type RepositoryContext } from './context';
+import { inWorkspace, referencing, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export interface CommitNoteRecord {
@@ -41,11 +41,24 @@ export interface CommitNoteRepository {
 }
 
 export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRepository {
+  /** Notes of commits of decks in the context's workspace. */
+  const owned = () =>
+    inArray(
+      commitNotes.commitId,
+      ctx.db.select({ id: commits.id }).from(commits).where(inWorkspace(ctx, commits.deckId)),
+    );
+
   return {
     upsert(commitId, kind, data) {
       if (!NOTE_KIND.test(kind)) {
         throw new RepositoryError('invalid-input', `Invalid note kind ${JSON.stringify(kind)}`);
       }
+      const commit = ctx.db
+        .select({ id: commits.id })
+        .from(commits)
+        .where(and(eq(commits.id, commitId), inWorkspace(ctx, commits.deckId)))
+        .get();
+      if (!commit) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
       const dataJson = encodeJson(data, 'Note data');
       const now = ctx.now();
       const row = referencing(`Note ${kind}`, () =>
@@ -66,7 +79,7 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
       const row = ctx.db
         .select()
         .from(commitNotes)
-        .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind)))
+        .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind), owned()))
         .get();
       return row ? toNoteRecord(row) : null;
     },
@@ -75,7 +88,7 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
       return ctx.db
         .select()
         .from(commitNotes)
-        .where(eq(commitNotes.commitId, commitId))
+        .where(and(eq(commitNotes.commitId, commitId), owned()))
         .orderBy(asc(commitNotes.kind))
         .all()
         .map(toNoteRecord);
@@ -84,7 +97,7 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
     delete(commitId, kind) {
       const result = ctx.db
         .delete(commitNotes)
-        .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind)))
+        .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind), owned()))
         .run();
       return result.changes > 0;
     },

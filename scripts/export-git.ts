@@ -7,6 +7,10 @@
  * never updated in place. Reads `DATABASE_PATH` (default `data/git-moxfield.db`) from the
  * environment and `.env*` files, like the app. See
  * `src/server/git-export.ts` for the repository layout.
+ *
+ * The command line acts for the operator, so it finds decks in every user's workspace.
+ * When several users track the same Moxfield deck, it lists them and asks for the
+ * git-moxfield deck id of the one to export.
  */
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
@@ -17,10 +21,10 @@ import { openDatabase } from '@/server/db/client';
 import {
   defaultExportDirectory,
   exportDeckToGit,
-  findDeckForExport,
   GitExportError,
+  locateDecksForExport,
 } from '@/server/git-export';
-import { createRepositories, type Repositories } from '@/server/repositories';
+import { createRepositories, type DeckLocation, type Repositories } from '@/server/repositories';
 
 import { loadEnvFiles } from './load-env';
 
@@ -31,14 +35,18 @@ function shellQuote(path: string): string {
   return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
 }
 
+function describeDeck(deck: DeckLocation): string {
+  return `  ${deck.externalId}  ${deck.name}  (id ${deck.deckId}, ${deck.ownerDisplayName ?? 'no owner'})`;
+}
+
 function printTrackedDecks(repos: Repositories): void {
-  const decks = repos.decks.list();
+  const decks = repos.workspaces.locateAllDecks();
   if (decks.length === 0) {
     console.error('No decks are tracked yet.');
     return;
   }
   console.error('Tracked decks:');
-  for (const deck of decks) console.error(`  ${deck.externalId}  ${deck.name}  (id ${deck.id})`);
+  for (const deck of decks) console.error(describeDeck(deck));
 }
 
 function run(reference: string, outDirArgument: string | undefined): number {
@@ -52,16 +60,26 @@ function run(reference: string, outDirArgument: string | undefined): number {
   }
   const db = openDatabase(databasePath);
   try {
-    const repos = createRepositories(db);
-    const deck = findDeckForExport(repos, reference, {
+    const system = createRepositories(db);
+    const matches = locateDecksForExport(system, reference, {
       siteOrigins: [...new Set([config.moxfieldSiteOrigin, DEFAULT_MOXFIELD_SITE_ORIGIN])],
     });
-    if (!deck) {
+    const [match, ...others] = matches;
+    if (match === undefined) {
       console.error(`No tracked deck matches ${JSON.stringify(reference)}.`);
-      printTrackedDecks(repos);
+      printTrackedDecks(system);
+      return 1;
+    }
+    if (others.length > 0) {
+      console.error(`Several users track ${JSON.stringify(reference)}. Export one by its deck id:`);
+      for (const deck of matches) console.error(describeDeck(deck));
       return 1;
     }
 
+    // Everything below reads the deck's own workspace only.
+    const repos = createRepositories(db, { workspaceId: match.workspaceId });
+    const deck = repos.decks.getById(match.deckId);
+    if (!deck) throw new Error(`Deck ${match.deckId} vanished`);
     const result = exportDeckToGit({
       repos,
       deckId: deck.id,

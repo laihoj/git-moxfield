@@ -7,6 +7,7 @@
 import { DeckSourceError } from '../deck-source';
 
 import {
+  BOOKMARKLET_KEY_PATTERN,
   CAPTURE_ENVELOPE_KIND,
   CAPTURE_FORM_FIELD,
   CAPTURE_FORM_PATH,
@@ -15,7 +16,6 @@ import {
   CAPTURE_PASTE_QUERY,
   CAPTURE_PROTOCOL_VERSION,
   CAPTURE_TIMEOUT_MS,
-  CAPTURE_TOKEN_PATTERN,
   DONE,
   ERROR,
   MAX_CAPTURE_BYTES,
@@ -75,7 +75,7 @@ function looksLikePrimer(value: PlainObject): boolean {
 function fromEnvelope(envelope: PlainObject): MoxfieldPayloadData {
   if (envelope.version !== CAPTURE_PROTOCOL_VERSION) {
     throw schemaError(
-      `This capture uses an unsupported protocol version (expected ${CAPTURE_PROTOCOL_VERSION}); update the git-moxfield bookmarklet.`,
+      `This capture uses an unsupported protocol version (expected ${CAPTURE_PROTOCOL_VERSION}): the bookmarklet is out of date. Create a new one on git-moxfield's Connect Moxfield page.`,
     );
   }
   if (envelope.source !== MOXFIELD_SOURCE_ID) throw schemaError('The capture does not come from Moxfield.');
@@ -140,31 +140,27 @@ export function parseMoxfieldCapture(data: unknown, separatePrimer?: unknown): M
   return payload;
 }
 
-interface BookmarkletBaseOptions {
+export interface BookmarkletOptions {
+  /**
+   * `popup` (desktop): popup + `postMessage`; the capture page submits the deck
+   * same-origin. `same-tab` (phones and in-app browsers): form POST to git-moxfield in
+   * the same tab.
+   */
+  mode: 'popup' | 'same-tab';
   /** Public base URL of git-moxfield, e.g. `http://localhost:3000`. */
   appUrl: string;
   /** Moxfield API base URL. Defaults to `https://api2.moxfield.com`. */
   apiBaseUrl?: string;
   /** Moxfield site origin the bookmarklet must run on. Defaults to `https://moxfield.com`. */
   siteOrigin?: string;
+  /**
+   * The owner's bookmarklet key ({@link BOOKMARKLET_KEY_PATTERN}). Both modes embed it:
+   * popup mode hands it to the capture page with the deck (PAYLOAD), same-tab mode posts
+   * it as the form field {@link CAPTURE_FORM_TOKEN_FIELD}. It authenticates the capture
+   * and signs the browser in as the key's owner.
+   */
+  key: string;
 }
-
-export type BookmarkletOptions =
-  | (BookmarkletBaseOptions & {
-      /** Desktop: popup + `postMessage`. The capture page submits the deck same-origin. */
-      mode: 'popup';
-      /** Never embedded in a popup bookmarklet, which does not need it. */
-      captureToken?: undefined;
-    })
-  | (BookmarkletBaseOptions & {
-      /** Phones and in-app browsers: form POST to git-moxfield in the same tab. */
-      mode: 'same-tab';
-      /**
-       * This installation's capture token ({@link CAPTURE_TOKEN_PATTERN}), sent as the
-       * form field {@link CAPTURE_FORM_TOKEN_FIELD}. It authenticates the cross-site post.
-       */
-      captureToken: string;
-    });
 
 /** Absolute http(s) URL without trailing slash, query or fragment. */
 function baseUrl(value: string, option: string): URL {
@@ -273,7 +269,7 @@ const onMessage = (e) => {
   if (d.t === C.ready && !answered) {
     answered = true;
     json.then(
-      (j) => popup.postMessage({ t: C.payload, n, json: j }, C.appOrigin),
+      (j) => popup.postMessage({ t: C.payload, n, json: j, key: C.key }, C.appOrigin),
       (err) => {
         popup.postMessage({ t: C.error, n, message: why(err) }, C.appOrigin);
         stop();
@@ -285,7 +281,7 @@ const onMessage = (e) => {
     hide(3000);
   } else if (d.t === C.error) {
     stop();
-    say('git-moxfield could not import the deck: ' + String(d.message), true);
+    say('Could not import the deck: ' + String(d.message), true);
   }
 };
 window.addEventListener('message', onMessage);
@@ -296,7 +292,7 @@ timer = setTimeout(() => {
 json.catch((e) => say('Could not read the deck: ' + why(e), true));
 `;
 
-/** Same-tab mode: fetch, then POST the token and the envelope to git-moxfield in this tab. */
+/** Same-tab mode: fetch, then POST the key and the envelope to git-moxfield in this tab. */
 const SAME_TAB_MODE = String.raw`
 say('Reading the deck…');
 capture(m[1]).then((j) => {
@@ -309,7 +305,7 @@ capture(m[1]).then((j) => {
   const k = document.createElement('input');
   k.type = 'hidden';
   k.name = C.tokenField;
-  k.value = C.token;
+  k.value = C.key;
   f.appendChild(k);
   const t = document.createElement('textarea');
   t.name = C.field;
@@ -334,23 +330,28 @@ capture(m[1]).then((j) => {
  * the exact app origin (never `'*'`) and carry a fresh 128-bit nonce. A small status
  * overlay on the Moxfield page reports progress; failures end in an `alert`.
  *
- * Each mode embeds only the configuration it uses; in particular only the same-tab
- * bookmarklet carries the capture token, which makes it a credential for this
- * installation's same-tab capture endpoint.
+ * Each mode embeds only the configuration it uses. Both carry the owner's key, which
+ * makes every bookmarklet a credential: whoever holds it can send decks to its owner's
+ * account and sign in as its owner. Show it only to its owner, once, and never log it.
  *
- * @throws {TypeError} when a URL option is not an absolute http(s) URL, or a same-tab
- * bookmarklet is requested without a well-formed capture token.
+ * @throws {TypeError} when a URL option is not an absolute http(s) URL or the key is not
+ * a well-formed bookmarklet key.
  */
 export function buildBookmarklet(options: BookmarkletOptions): string {
   const app = baseUrl(options.appUrl, 'appUrl');
   const api = baseUrl(options.apiBaseUrl ?? DEFAULT_MOXFIELD_API_BASE_URL, 'apiBaseUrl');
   const site = baseUrl(options.siteOrigin ?? DEFAULT_MOXFIELD_SITE_ORIGIN, 'siteOrigin');
+  // Checked at runtime too: a malformed key would only fail later, on every capture.
+  if (typeof options.key !== 'string' || !BOOKMARKLET_KEY_PATTERN.test(options.key)) {
+    throw new TypeError('buildBookmarklet: key must be a well-formed bookmarklet key');
+  }
   const common = {
     app: withoutTrailingSlash(app),
     api: withoutTrailingSlash(api),
     site: site.origin,
     kind: CAPTURE_ENVELOPE_KIND,
     version: CAPTURE_PROTOCOL_VERSION,
+    key: options.key,
   };
   let config: Record<string, string | number>;
   let modeScript: string;
@@ -368,16 +369,11 @@ export function buildBookmarklet(options: BookmarkletOptions): string {
     };
     modeScript = POPUP_MODE;
   } else {
-    // Checked at runtime too: a malformed token would only fail later, on every capture.
-    if (typeof options.captureToken !== 'string' || !CAPTURE_TOKEN_PATTERN.test(options.captureToken)) {
-      throw new TypeError('buildBookmarklet: same-tab mode needs a well-formed captureToken');
-    }
     config = {
       ...common,
       formPath: CAPTURE_FORM_PATH,
       field: CAPTURE_FORM_FIELD,
       tokenField: CAPTURE_FORM_TOKEN_FIELD,
-      token: options.captureToken,
     };
     modeScript = SAME_TAB_MODE;
   }

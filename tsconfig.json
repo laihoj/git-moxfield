@@ -40,8 +40,6 @@
     ".next-demo/dev/types/**/*.ts",
     ".next-real/types/**/*.ts",
     ".next-real/dev/types/**/*.ts",
-    ".next-verify-rebind/types/**/*.ts",
-    ".next-verify-rebind/dev/types/**/*.ts",
     ".next-e2e/types/**/*.ts",
     ".next-e2e/dev/types/**/*.ts"
   ],

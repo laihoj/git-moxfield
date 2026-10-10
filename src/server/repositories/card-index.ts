@@ -12,7 +12,7 @@ import { compareZones, isZoneId } from '@/core/zones';
 import { commits, observations, snapshotCards } from '@/server/db/schema';
 
 import { corruptData } from './codec';
-import type { RepositoryContext } from './context';
+import { inWorkspace, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 import { latestObservationFirst } from './observations';
 
@@ -68,7 +68,13 @@ export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepo
         })
         .from(commits)
         .innerJoin(snapshotCards, eq(snapshotCards.snapshotHash, commits.snapshotHash))
-        .where(and(eq(commits.deckId, deckId), eq(snapshotCards.cardKey, cardKey(key))))
+        .where(
+          and(
+            eq(commits.deckId, deckId),
+            eq(snapshotCards.cardKey, cardKey(key)),
+            inWorkspace(ctx, commits.deckId),
+          ),
+        )
         .orderBy(asc(commits.sequence))
         .all();
       const versions: CardVersionZones[] = [];
@@ -154,6 +160,7 @@ function committedCards(ctx: RepositoryContext, deckId: string): CommittedCardRo
       FROM commits c
       JOIN snapshot_cards sc ON sc.snapshot_hash = c.snapshot_hash
       WHERE c.deck_id = ${deckId}
+        AND c.deck_id IN (SELECT d.id FROM decks d WHERE d.workspace_id = ${ctx.workspaceId})
       GROUP BY sc.card_key, c.id, c.sequence
     ),
     ranked AS (
@@ -173,7 +180,7 @@ function workingCards(ctx: RepositoryContext, deckId: string): { key: string; na
   const latest = ctx.db
     .select({ snapshotHash: observations.snapshotHash })
     .from(observations)
-    .where(eq(observations.deckId, deckId))
+    .where(and(eq(observations.deckId, deckId), inWorkspace(ctx, observations.deckId)))
     .orderBy(...latestObservationFirst)
     .limit(1)
     .get();

@@ -196,6 +196,62 @@ describe('database migrations', () => {
       expect(reopen).toThrow(/foreign key violation.*observations/);
     });
 
+    it('makes the card catalog per workspace, copying each fact to the workspaces that show the card (0005)', () => {
+      // Back to the schema before 0005: a shared catalog keyed by card name only.
+      const journalPath = join(migrations, 'meta', '_journal.json');
+      const full = readFileSync(journalPath, 'utf8');
+      const journal = JSON.parse(full) as { entries: { tag: string }[] };
+      const at = journal.entries.findIndex((entry) => entry.tag === '0005_security_hardening');
+      expect(at).toBeGreaterThan(0);
+      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, at) }));
+      const fresh = join(dir, 'before-0005.db');
+      const old = openDatabase(fresh, { migrationsFolder: migrations });
+      const repos = createRepositories(old);
+      const alice = repos.users.create({ displayName: 'Alice', role: 'member' });
+      const bob = repos.users.create({ displayName: 'Bob', role: 'member' });
+      const alices = createRepositories(old, { workspaceId: alice.workspaceId });
+      const bobs = createRepositories(old, { workspaceId: bob.workspaceId });
+      const deck = (zones: string[]) => buildSnapshot({ ...baseDeckSpec(), zones: { mainboard: zones } });
+      commitTestSnapshot(alices, createTestDeck(alices), deck(['Sol Ring', 'Island']));
+      observeTestSnapshot(bobs, createTestDeck(bobs), deck(['Island', 'Mana Vault']));
+      const insert = old.$client.prepare(
+        `INSERT INTO card_catalog (key, name, type_line, primary_type, mana_cost, cmc, color_identity_json, layout, scryfall_id, updated_at)
+         VALUES (?, ?, 'Artifact', 'Artifact', '{1}', 1, '[]', 'normal', NULL, '2026-01-01T00:00:00.000Z')`,
+      );
+      for (const [key, name] of [
+        ['sol ring', 'Sol Ring'],
+        ['island', 'Island'],
+        ['mana vault', 'Mana Vault'],
+        ['unused card', 'Unused Card'],
+      ] as const) {
+        insert.run(key, name);
+      }
+      old.$client.close();
+
+      writeFileSync(journalPath, full);
+      const db = openDatabase(fresh, { migrationsFolder: migrations });
+      try {
+        const rows = db.$client
+          .prepare('SELECT workspace_id AS workspace, key FROM card_catalog ORDER BY workspace_id, key')
+          .all();
+        expect(rows).toEqual(
+          [
+            { workspace: alice.workspaceId, key: 'island' },
+            { workspace: alice.workspaceId, key: 'sol ring' },
+            { workspace: bob.workspaceId, key: 'island' },
+            { workspace: bob.workspaceId, key: 'mana vault' },
+          ].sort((a, b) => a.workspace.localeCompare(b.workspace) || a.key.localeCompare(b.key)),
+        );
+        expect(db.$client.pragma('foreign_key_check')).toEqual([]);
+        const handoffColumn = (
+          db.$client.pragma('table_info(sessions)') as { name: string; dflt_value: string }[]
+        ).find((column) => column.name === 'pending_handoff');
+        expect(handoffColumn?.dflt_value).toBe('false');
+      } finally {
+        db.$client.close();
+      }
+    });
+
     it('opens an up-to-date database unchanged', () => {
       const db = reopen();
       try {

@@ -9,6 +9,8 @@
  */
 import { createHash } from 'node:crypto';
 
+import { CAPTURE_ENVELOPE_KIND, CAPTURE_PROTOCOL_VERSION } from '@/integrations/moxfield/capture-protocol';
+
 /** `'Island'`, `'3 Island'`, or an object for printing/finish control. */
 export type MoxCardSpec =
   | string
@@ -274,8 +276,8 @@ export function buildCaptureEnvelope(
   capturedAt = '2026-10-09T12:00:00.000Z',
 ): Record<string, unknown> {
   return {
-    kind: 'git-moxfield/capture',
-    version: 1,
+    kind: CAPTURE_ENVELOPE_KIND,
+    version: CAPTURE_PROTOCOL_VERSION,
     source: 'moxfield',
     pageUrl: `https://moxfield.com/decks/${spec.publicId}`,
     capturedAt,

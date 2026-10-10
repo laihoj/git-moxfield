@@ -1,9 +1,24 @@
 /**
  * Browser capture protocol between the "Send to git-moxfield" bookmarklet (running on a
- * Moxfield deck page) and git-moxfield's `/capture` page.
+ * Moxfield deck page) and git-moxfield's `/capture` page and capture endpoints.
  *
  * This module is imported by client components: it must stay dependency-free and
  * browser-safe (no Node built-ins, no zod, no imports at all).
+ *
+ * ## Version 2 (accounts, ADR 0006)
+ *
+ * Every bookmarklet belongs to one user: it embeds that user's **bookmarklet key**
+ * ({@link BOOKMARKLET_KEY_PATTERN}, `gmk_…`), in both modes. Running it captures the
+ * deck into the key owner's workspace *and signs that browser in*. Changes from version 1:
+ *
+ * - The envelope's `version` is 2. Version-1 envelopes (bookmarklets made before
+ *   accounts) are rejected with a message asking to create a new bookmarklet.
+ * - PAYLOAD carries the key: `{ t, n, json, key }`.
+ * - The capture page posts the key along with the deck to {@link CAPTURE_API_PATH}
+ *   ({@link CaptureRequestBody}); the endpoint authenticates the key, or else the
+ *   browser's session cookie, and sets the session cookie.
+ * - The same-tab form's {@link CAPTURE_FORM_TOKEN_FIELD} carries the key instead of the
+ *   installation-wide capture token, which no longer exists.
  *
  * ## Popup mode (desktop)
  *
@@ -23,15 +38,18 @@
  *    page loads before the bookmarklet's listener is ready.
  * 5. The bookmarklet accepts a message only if `event.source === popup`,
  *    `event.origin === appOrigin` and `event.data.n === nonce`. On the first READY it
- *    waits for step 3 and replies `{ t: PAYLOAD, n, json }` (`json` = the envelope
- *    string) via `popup.postMessage(…, appOrigin)` — never with `'*'`. If capturing
+ *    waits for step 3 and replies `{ t: PAYLOAD, n, json, key }` (`json` = the envelope
+ *    string, `key` = the bookmarklet key) via `popup.postMessage(…, appOrigin)` — never
+ *    with `'*'`, so the key only ever reaches the exact git-moxfield origin. If capturing
  *    failed it replies `{ t: ERROR, n, message }` instead. Later READYs are ignored.
  * 6. The capture page accepts PAYLOAD/ERROR only if `event.source === window.opener`,
  *    `event.origin` is an allowed Moxfield origin and `event.data.n` equals its nonce.
- *    It checks `json.length <= MAX_CAPTURE_BYTES`, submits the envelope to the
- *    git-moxfield server (same-origin), stops sending READY and posts `{ t: DONE, n }`
- *    to the opener (`targetOrigin` = Moxfield site origin). If the server rejects the
- *    capture, it posts `{ t: ERROR, n, message }` to the opener instead of DONE.
+ *    It checks `json.length <= MAX_CAPTURE_BYTES`, submits the envelope and the key to
+ *    the git-moxfield server (same-origin `POST` {@link CAPTURE_API_PATH}, body
+ *    {@link CaptureRequestBody}), stops sending READY and posts `{ t: DONE, n }` to the
+ *    opener (`targetOrigin` = Moxfield site origin). If the server rejects the capture,
+ *    it posts `{ t: ERROR, n, message }` to the opener instead of DONE. The key is kept
+ *    in memory only for these requests (never stored, rendered or logged).
  * 7. On DONE the bookmarklet removes its listener and shows "Sent"; on ERROR it removes
  *    its listener and shows the message. It gives up after {@link CAPTURE_TIMEOUT_MS}.
  *
@@ -43,22 +61,32 @@
  * - Same-tab mode (mobile / in-app browsers, no popups): after fetching, the bookmarklet
  *   submits a hidden `<form method="POST" action="{appUrl}{CAPTURE_FORM_PATH}"
  *   target="_self">` (browser-default `application/x-www-form-urlencoded`) with two
- *   fields: {@link CAPTURE_FORM_TOKEN_FIELD}, this installation's capture token
- *   ({@link CAPTURE_TOKEN_PATTERN}, baked into the bookmarklet when git-moxfield builds
- *   it), and {@link CAPTURE_FORM_FIELD}, the envelope JSON string.
+ *   fields: {@link CAPTURE_FORM_TOKEN_FIELD}, the user's bookmarklet key, and
+ *   {@link CAPTURE_FORM_FIELD}, the envelope JSON string.
  *
- *   The token is what authenticates the post. Its `Origin` header cannot: browsers send
+ *   The key is what authenticates the post. Its `Origin` header cannot: browsers send
  *   `Origin: null` for this cross-site form post from https://moxfield.com to an
  *   http:// git-moxfield (the referrer policy hides the origin on an https → http
- *   downgrade), and any other site can produce `Origin: null` too. The popup mode needs
- *   no token: its capture page submits the deck same-origin.
+ *   downgrade), and any other site can produce `Origin: null` too. Nor can the session
+ *   cookie: it is `SameSite=Lax`, so browsers do not send it with a cross-site `POST`.
+ *   The endpoint therefore answers with a short-lived hand-off cookie and a redirect
+ *   through `/api/auth/handoff`, where the browser's own session cookie is visible again
+ *   (see that route).
+ *
+ * ## The capture endpoint
+ *
+ * `POST {@link CAPTURE_API_PATH}` takes same-origin JSON ({@link CaptureRequestBody}).
+ * It authenticates the `key` when one is sent (a wrong or revoked key is an error, never
+ * silently replaced by the session), otherwise the session cookie; without either it
+ * answers 401 ({@link CaptureErrorBody} with code `unauthenticated`). Manual paste sends
+ * no key and so requires a signed-in session.
  */
 
 /** `kind` of a {@link CaptureEnvelope}. */
 export const CAPTURE_ENVELOPE_KIND = 'git-moxfield/capture';
 
-/** Version of the envelope and message protocol. */
-export const CAPTURE_PROTOCOL_VERSION = 1;
+/** Version of the envelope and message protocol (2: per-user bookmarklet keys). */
+export const CAPTURE_PROTOCOL_VERSION = 2;
 
 /** Capture page → opener: "I am loaded; send the payload". `{ t, n }`. */
 export const READY = 'git-moxfield:ready';
@@ -99,11 +127,42 @@ export const CAPTURE_FORM_PATH = '/api/capture/form';
 /** Form field holding the envelope JSON in same-tab mode. */
 export const CAPTURE_FORM_FIELD = 'payload';
 
-/** Form field holding the installation's capture token in same-tab mode. */
+/** Form field holding the user's bookmarklet key in same-tab mode. */
 export const CAPTURE_FORM_TOKEN_FIELD = 'token';
 
-/** An installation's capture token: 256 random bits as 64 lowercase hex characters. */
-export const CAPTURE_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+/**
+ * A bookmarklet key: `gmk_` + 256 random bits, base64url without padding. Must match the
+ * `key` tokens of `src/server/auth/tokens.ts` (checked by a test).
+ */
+export const BOOKMARKLET_KEY_PATTERN = /^gmk_[A-Za-z0-9_-]{43}$/;
+
+/** Endpoint receiving captures from the capture page and the paste form. */
+export const CAPTURE_API_PATH = '/api/capture';
+
+/** How a capture reached git-moxfield. */
+export type CaptureRequestMethod = 'browser-capture' | 'manual-paste';
+
+/** JSON body of `POST {@link CAPTURE_API_PATH}`. */
+export interface CaptureRequestBody {
+  /** The envelope JSON string, or `{ deck, primer }` from the paste form. */
+  payload: string | Record<string, unknown>;
+  method: CaptureRequestMethod;
+  /** `false`: an untracked deck is answered with `status: 'untracked'` instead of being tracked. */
+  track: boolean;
+  /** The bookmarklet key from the PAYLOAD message (popup mode); omitted for manual paste. */
+  key?: string;
+}
+
+/** Error body of the capture endpoint (any non-2xx status). */
+export interface CaptureErrorBody {
+  /** User-facing message. */
+  error: string;
+  /**
+   * Machine-readable reason for 401s: `unauthenticated` (no key and no session: sign in)
+   * or `invalid-key` (the bookmarklet's key is unknown or revoked: make a new one).
+   */
+  code?: 'unauthenticated' | 'invalid-key';
+}
 
 export type CaptureMessageType = (typeof CAPTURE_MESSAGE_TYPES)[keyof typeof CAPTURE_MESSAGE_TYPES];
 
@@ -117,6 +176,11 @@ export interface CapturePayloadMessage {
   n: string;
   /** {@link CaptureEnvelope} serialized as JSON. */
   json: string;
+  /**
+   * The bookmarklet key ({@link BOOKMARKLET_KEY_PATTERN}); absent from version-1
+   * bookmarklets, whose envelope the server rejects with an upgrade message.
+   */
+  key?: string;
 }
 
 export interface CaptureErrorMessage {
@@ -165,7 +229,7 @@ export function isCaptureMessage(value: unknown): value is CaptureMessage {
     case DONE:
       return true;
     case PAYLOAD:
-      return typeof value.json === 'string';
+      return typeof value.json === 'string' && (value.key === undefined || typeof value.key === 'string');
     case ERROR:
       return typeof value.message === 'string';
     default:

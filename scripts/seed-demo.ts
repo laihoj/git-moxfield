@@ -7,6 +7,12 @@
  *                             the environment and .env* files, like the app)
  *   pnpm seed:demo --force    replace an existing demo deck
  *
+ * The deck belongs to the demo user, an admin named "Demo" with a workspace of its own
+ * (created on first run, reused afterwards). The script ends by printing a one-time
+ * recovery link (valid 24 hours) that signs a browser in as that user; its base URL is
+ * `PUBLIC_APP_URL`, else http://localhost:3000. Seed a separate database
+ * (`DATABASE_PATH=data/demo.db`) rather than your real one.
+ *
  * How it works: the script drives the real service layer (createServices) with a
  * controllable clock. Every Moxfield state is handed over through `ingestCapture`,
  * exactly like the "Send to git-moxfield" bookmarklet does, using capture envelopes
@@ -21,9 +27,11 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
 import { openDatabase } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
+import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
 import { createDeckSourceRegistry } from '@/server/sources';
 import {
@@ -39,6 +47,12 @@ import { loadEnvFiles } from './load-env';
 
 /** Moxfield-style public id of the demo deck (not a real Moxfield deck). */
 export const DEMO_PUBLIC_ID = 'gitMoxfieldDemoBlueFarm';
+
+/** Display name of the demo user who owns the demo deck. */
+export const DEMO_USER_NAME = 'Demo';
+
+/** Base URL printed in the sign-in link when `PUBLIC_APP_URL` is not set. */
+const DEFAULT_APP_URL = 'http://localhost:3000';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -441,6 +455,17 @@ function uncommittedEdits(deck: DemoDeck): void {
     );
 }
 
+/**
+ * The demo user: the admin named {@link DEMO_USER_NAME}, created with a workspace of its
+ * own when there is none. (It never adopts the `local` workspace of a pre-account
+ * installation, so seeding a real database cannot take over its history.)
+ */
+export function ensureDemoUser(repos: Repositories): UserRecord {
+  const existing = repos.users.findByDisplayName(DEMO_USER_NAME).find((user) => user.role === 'admin');
+  if (existing) return existing.disabledAt === null ? existing : repos.users.setDisabled(existing.id, false);
+  return repos.users.create({ displayName: DEMO_USER_NAME, role: 'admin' });
+}
+
 /** A clock the seed moves forward explicitly; the services must be created with its `now`. */
 export class DemoClock {
   constructor(private ms: number) {}
@@ -543,10 +568,12 @@ async function main(): Promise<void> {
 
   const db = openDatabase(appConfig.DATABASE_PATH);
   try {
+    const demoUser = ensureDemoUser(createRepositories(db));
     const services = createServices({
       db,
       sources: createDeckSourceRegistry(config, { fetchImpl: api.fetch, logger }),
       config,
+      workspaceId: demoUser.workspaceId,
       now: clock.now,
       logger,
     });
@@ -572,6 +599,15 @@ async function main(): Promise<void> {
       `Seeded "${overview?.name ?? 'Blue Farm (demo)'}" with ${overview?.versionCount ?? 0} versions (status: ${overview?.status ?? 'unknown'}) into ${appConfig.DATABASE_PATH}.`,
     );
     console.log(`/decks/${deckId}`);
+
+    // Signs a browser in as the demo user (the real clock: the link must be valid now).
+    const auth = createAuthService({ db, config: appConfig, logger });
+    const link = await auth.createRecoveryLink(SYSTEM_ACTOR, demoUser.id);
+    const appUrl = appConfig.PUBLIC_APP_URL ?? DEFAULT_APP_URL;
+    console.log(
+      `\nSign in as the demo user "${demoUser.displayName}" with this one-time link (valid until ${link.expiresAt}):`,
+    );
+    console.log(new URL(link.path, appUrl).href);
   } finally {
     db.$client.close();
   }
