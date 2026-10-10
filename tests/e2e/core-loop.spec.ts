@@ -9,6 +9,7 @@ import type { Locator, Page } from '@playwright/test';
 
 import { blueFarmDeck } from '../mock-moxfield/scenarios';
 
+import { signIn } from './support/accounts';
 import { APP_URL } from './support/constants';
 import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
@@ -85,6 +86,7 @@ test('tracks a deck, commits two versions and follows the changes through every 
   page,
   context,
 }, testInfo) => {
+  await signIn(context);
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
   const deck = await createBlueFarmCopy(testInfo);
   let deckId = '';

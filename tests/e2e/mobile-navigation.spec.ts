@@ -6,6 +6,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 
+import { signIn } from './support/accounts';
 import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
@@ -69,8 +70,12 @@ async function expectPhoneLayout(page: Page, activeTab: string): Promise<void> {
   await expectNothingBehindBottomNav(page);
 }
 
-test('the bottom navigation, the commit form and every page work on a phone', async ({ page }, testInfo) => {
+test('the bottom navigation, the commit form and every page work on a phone', async ({
+  page,
+  context,
+}, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'The bottom navigation is the phone layout.');
+  await signIn(context);
   const deck = await createBlueFarmCopy(testInfo, 'Pocket Farm');
   let deckId = '';
 

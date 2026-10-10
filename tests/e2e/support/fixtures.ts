@@ -4,15 +4,26 @@
  * - starts from a known environment: the mock Moxfield is back to its seeded decks in
  *   mode `ok`, and the app's in-process state is reset (`resetApp`: server fetching
  *   resumes after a block). The database is shared by all tests and both projects, so
- *   journeys track decks of their own (`./decks.ts`);
+ *   every test signs in users of its own (`./accounts.ts`), who see only their own decks;
  * - stays off the internet: card previews from Scryfall's image CDN get a placeholder,
  *   any other request outside the app and the mock is aborted (and reported below);
  * - fails on browser console errors and warnings (React's hydration mismatches among
- *   them) and on uncaught page errors, from every page of its browser context, popups
+ *   them) and on uncaught page errors, from every page of its browser contexts, popups
  *   included. A test that provokes an error on purpose declares it with
  *   `consoleErrors.allow(pattern)`.
+ *
+ * `newContext()` opens another browser context: a second device or browser, sharing no
+ * cookies with `context` (signed out until something signs it in). It gets the project's
+ * device settings, the same network isolation and the same console checks, and is closed
+ * when the test ends.
  */
-import { expect, test as base, type ConsoleMessage } from '@playwright/test';
+import {
+  expect,
+  test as base,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type ConsoleMessage,
+} from '@playwright/test';
 
 import { resetApp } from './app';
 import { APP_URL, MOCK_MOXFIELD_URL } from './constants';
@@ -25,10 +36,22 @@ export interface ConsoleErrors {
   allow(pattern: RegExp): void;
 }
 
+/**
+ * Opens a new, signed-out browser context (another device), prepared like `context`.
+ * `options` override the project's device settings (e.g. `devices['Pixel 7']`).
+ */
+export type NewContext = (options?: BrowserContextOptions) => Promise<BrowserContext>;
+
 interface Fixtures {
   consoleErrors: ConsoleErrors;
+  newContext: NewContext;
   freshEnvironment: undefined;
   hermeticNetwork: undefined;
+}
+
+interface InternalFixtures {
+  /** Collects console problems from every context of the test; fails the test on any not allowed. */
+  browserProblems: BrowserProblems;
 }
 
 const LOCAL_ORIGINS: ReadonlySet<string> = new Set([
@@ -51,7 +74,43 @@ function describeMessage(message: ConsoleMessage): string {
   return `console.${message.type()}: ${message.text()}${where}`;
 }
 
-export const test = base.extend<Fixtures>({
+/** Keeps `context` off the internet: placeholder card images, everything else non-local aborted. */
+async function isolateNetwork(context: BrowserContext): Promise<void> {
+  await context.route(
+    (url) => !isLocal(url),
+    (route) =>
+      route.request().url().startsWith(SCRYFALL_IMAGES)
+        ? route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PLACEHOLDER_CARD_IMAGE })
+        : route.abort('blockedbyclient'),
+  );
+}
+
+/** Console errors, warnings and uncaught errors of the test's browser contexts. */
+class BrowserProblems implements ConsoleErrors {
+  readonly problems: string[] = [];
+  private readonly allowed: RegExp[] = [];
+
+  allow(pattern: RegExp): void {
+    this.allowed.push(pattern);
+  }
+
+  /** Records the problems of every page of `context`, popups included. */
+  watch(context: BrowserContext): void {
+    context.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') this.report(describeMessage(message));
+    });
+    context.on('weberror', (webError) => {
+      const error = webError.error();
+      this.report(`Uncaught ${error.name}: ${error.message}`);
+    });
+  }
+
+  private report(problem: string): void {
+    if (!this.allowed.some((pattern) => pattern.test(problem))) this.problems.push(problem);
+  }
+}
+
+export const test = base.extend<Fixtures & InternalFixtures>({
   freshEnvironment: [
     async ({}, use) => {
       await mockMoxfield.reset();
@@ -63,39 +122,44 @@ export const test = base.extend<Fixtures>({
 
   hermeticNetwork: [
     async ({ context }, use) => {
-      await context.route(
-        (url) => !isLocal(url),
-        (route) =>
-          route.request().url().startsWith(SCRYFALL_IMAGES)
-            ? route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PLACEHOLDER_CARD_IMAGE })
-            : route.abort('blockedbyclient'),
-      );
+      await isolateNetwork(context);
       await use(undefined);
     },
     { auto: true },
   ],
 
-  consoleErrors: [
+  browserProblems: [
     async ({ context }, use) => {
-      const allowed: RegExp[] = [];
-      const problems: string[] = [];
-      const report = (problem: string): void => {
-        if (!allowed.some((pattern) => pattern.test(problem))) problems.push(problem);
-      };
-      context.on('console', (message) => {
-        if (message.type() === 'error' || message.type() === 'warning') report(describeMessage(message));
-      });
-      context.on('weberror', (webError) => {
-        const error = webError.error();
-        report(`Uncaught ${error.name}: ${error.message}`);
-      });
-      await use({
-        allow: (pattern) => {
-          allowed.push(pattern);
-        },
-      });
-      expect(problems, 'Browser console errors, warnings and uncaught errors').toEqual([]);
+      const problems = new BrowserProblems();
+      problems.watch(context);
+      await use(problems);
+      expect(problems.problems, 'Browser console errors, warnings and uncaught errors').toEqual([]);
     },
     { auto: true },
+  ],
+
+  consoleErrors: [
+    async ({ browserProblems }, use) => {
+      await use(browserProblems);
+    },
+    { scope: 'test' },
+  ],
+
+  newContext: [
+    async ({ browser, browserProblems }, use) => {
+      const opened: BrowserContext[] = [];
+      await use(async (options) => {
+        // `browser.newContext()` applies the project's `use` options (device, base URL)
+        // wherever `options` leave them out.
+        const context = await browser.newContext(options);
+        opened.push(context);
+        browserProblems.watch(context);
+        await isolateNetwork(context);
+        return context;
+      });
+      // Closed before `browserProblems` checks what they reported.
+      for (const context of opened) await context.close();
+    },
+    { scope: 'test' },
   ],
 });

@@ -1,9 +1,10 @@
 /**
  * Decks of their own for e2e journeys, and the UI steps journeys share.
  *
- * The e2e database is shared by every test of a run (and by both projects), and a deck
- * can be tracked only once. Each journey therefore puts a copy of the seeded Blue Farm
- * deck on the mock Moxfield under a public id of its own, and tracks that copy.
+ * The e2e database is shared by every test of a run (and by both projects). Every test
+ * works as users of its own, whose workspaces only ever hold their own decks; on top of
+ * that, each journey puts a copy of the seeded Blue Farm deck on the mock Moxfield under a
+ * public id of its own and tracks that copy, so no two tests ever touch the same deck.
  */
 import { randomBytes } from 'node:crypto';
 

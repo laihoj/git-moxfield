@@ -3,7 +3,8 @@
  * servers of `playwright.config.ts` and before the first test.
  *
  * 1. Deletes the e2e database (`data/e2e.db` and its `-wal`/`-shm`/`-journal` files) so
- *    every run starts without tracked decks. This is safe because the app opens its
+ *    every run starts unclaimed, without users or decks (the `first-run` project claims
+ *    it, see `playwright.config.ts`). This is safe because the app opens its
  *    database lazily, on the first request that needs it, and Playwright waits for the
  *    app by probing its TCP port rather than requesting a page, so nothing has opened
  *    the database yet. A dev server on port 3100 that was started outside Playwright and

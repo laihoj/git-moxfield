@@ -4,6 +4,7 @@
  * URL, copies the JSON and pastes it (and, optionally, the primer's JSON), confirms
  * tracking the deck and commits it.
  */
+import { signIn } from './support/accounts';
 import {
   DECK_PAGE_PATH,
   commitVersion,
@@ -21,7 +22,8 @@ async function moxfieldJson(url: string): Promise<string> {
   return response.text();
 }
 
-test('a deck pasted as JSON is tracked and committed', async ({ page }, testInfo) => {
+test('a deck pasted as JSON is tracked and committed', async ({ page, context }, testInfo) => {
+  await signIn(context);
   const deck = await createBlueFarmCopy(testInfo, 'Pasted Farm');
   const deckDataUrl = `${MOCK_MOXFIELD_URL}/v3/decks/all/${deck.publicId}`;
   const deckJson = await moxfieldJson(deckDataUrl);

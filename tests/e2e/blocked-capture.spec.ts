@@ -2,10 +2,11 @@
  * Journey 2, the usual situation with the real Moxfield: it blocks server-side fetches
  * (Cloudflare), so the deck arrives through the bookmarklet instead. Tracking the deck
  * runs into the block, the deck page explains what to do, the user opens the deck on
- * Moxfield with "Update from Moxfield" and runs the same-tab bookmarklet (as on a phone)
- * taken from the setup page, which sends the deck and lands on its git-moxfield page.
- * Committing works without the server ever reaching Moxfield.
+ * Moxfield with "Update from Moxfield" and runs their same-tab bookmarklet (as on a
+ * phone), which sends the deck and lands on its git-moxfield page, in the same signed-in
+ * session. Committing works without the server ever reaching Moxfield.
  */
+import { signIn, signedInDevices } from './support/accounts';
 import { runBookmarklet } from './support/bookmarklet';
 import { APP_URL } from './support/constants';
 import {
@@ -22,6 +23,7 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
   page,
   context,
 }, testInfo) => {
+  const { bookmarklets } = await signIn(context, { bookmarkletLabel: 'Phone' });
   await mockMoxfield.setMode('blocked');
   const deck = await createBlueFarmCopy(testInfo, 'Blocked Farm');
   const moxfieldDeckUrl = mockMoxfield.deckPageUrl(deck.publicId);
@@ -72,8 +74,8 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
     await moxfieldTab.waitForURL(moxfieldDeckUrl);
     await expect(moxfieldTab.getByRole('heading', { level: 1, name: 'Blocked Farm' })).toBeVisible();
 
-    // The bookmarklet from the setup page carries this installation's capture token.
-    await runBookmarklet(moxfieldTab, { mode: 'same-tab' });
+    // The bookmarklet carries the user's key; the browser is already signed in as that user.
+    await runBookmarklet(moxfieldTab, bookmarklets['same-tab']);
     await expect(moxfieldTab).toHaveURL(`${APP_URL}/decks/${deckId}?captured=1`);
     expect(deckIdFromUrl(moxfieldTab.url())).toBe(deckId);
 
@@ -104,8 +106,14 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
     await moxfieldTab.close();
   });
 
+  await test.step('the bookmarklet kept the session the browser had, instead of starting another', async () => {
+    await page.goto('/account');
+    await expect(signedInDevices(page)).toHaveCount(1);
+    await expect(signedInDevices(page)).toContainText('This device');
+  });
+
   await test.step('commit the captured deck', async () => {
-    await page.reload();
+    await page.goto(`/decks/${deckId}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Blocked Farm' })).toBeVisible();
     await commitVersion(page, { sequence: 1, message: 'Captured from the browser' });
     await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v1' })).toBeVisible();

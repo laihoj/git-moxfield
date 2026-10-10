@@ -9,6 +9,7 @@
  */
 import type { Page } from '@playwright/test';
 
+import { signIn } from './support/accounts';
 import { APP_URL } from './support/constants';
 import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
@@ -51,6 +52,7 @@ async function clipboard(page: Page): Promise<string> {
 
 test('an older primer can be copied back to Moxfield exactly', async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'selection and keyboard copy are exercised on desktop');
+  await signIn(context);
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
 
   const deck = await createBlueFarmCopy(testInfo);
