@@ -122,6 +122,22 @@ export function deckRoutes(scope: DeckScope): DeckRoutes {
   };
 }
 
+/**
+ * The page a GET form opens when it is submitted: its `action` with the form's fields as
+ * the query, as a browser builds it (the action's own query and fragment are replaced;
+ * file fields, which a GET form cannot send, are left out). Used by `Form`
+ * (`src/components/ui/navigation.tsx`) to navigate on the client.
+ */
+export function formSubmissionRoute(action: Route, fields: Iterable<[string, FormDataEntryValue]>): Route {
+  const params = new URLSearchParams();
+  for (const [name, value] of fields) {
+    if (typeof value === 'string') params.append(name, value);
+  }
+  const path = action.replace(/[?#].*$/s, '');
+  const search = params.toString();
+  return (search === '' ? path : `${path}?${search}`) as Route;
+}
+
 /** The owner's pages of a deck (`/decks/<deckId>/…`). */
 export function ownerDeckRoutes(deckId: string): DeckRoutes {
   return deckRoutes({ kind: 'owner', deckId });

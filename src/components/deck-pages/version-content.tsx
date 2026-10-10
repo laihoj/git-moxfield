@@ -10,7 +10,6 @@ import {
   Undo2,
 } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { CompareMenu, type CompareMenuItem } from '@/components/deck/compare-menu';
@@ -25,6 +24,7 @@ import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CopyButton } from '@/components/ui/copy-button';
 import { Disclosure } from '@/components/ui/disclosure';
+import { Link } from '@/components/ui/navigation';
 import { AbsoluteTime, RelativeTime } from '@/components/ui/relative-time';
 import { SegmentedLinks } from '@/components/ui/tabs';
 import { playedCardCount } from '@/core/canonical';

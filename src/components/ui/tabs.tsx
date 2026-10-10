@@ -1,7 +1,8 @@
 import clsx from 'clsx';
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+
+import { Link } from './navigation';
 
 export interface TabLinkItem {
   id: string;

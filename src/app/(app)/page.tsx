@@ -1,10 +1,10 @@
 import { Bookmark, GitCommitHorizontal, Link2 } from 'lucide-react';
 import type { Metadata } from 'next';
-import Link from 'next/link';
 
 import { DeckCard } from '@/components/deck/deck-card';
 import { TrackDeckForm } from '@/components/deck/track-deck-form';
 import { Card } from '@/components/ui/card';
+import { Link } from '@/components/ui/navigation';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 

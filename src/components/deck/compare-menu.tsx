@@ -3,10 +3,10 @@
 import clsx from 'clsx';
 import { ChevronDown, GitCompareArrows } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import { useEffect, useId, useRef, useState } from 'react';
 
 import { buttonClasses } from '@/components/ui/button';
+import { Link } from '@/components/ui/navigation';
 
 export interface CompareMenuItem {
   label: string;

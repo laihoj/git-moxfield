@@ -1,7 +1,6 @@
 'use client';
 
 import { ArrowUpRight, Link2 } from 'lucide-react';
-import Link from 'next/link';
 import { useActionState, useEffect, useId, useState, type ReactNode } from 'react';
 
 import type { RelinkDeckState } from '@/app/action-types';
@@ -9,6 +8,7 @@ import { relinkDeckAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { fieldDescriptionIds, Input } from '@/components/ui/field';
+import { Link } from '@/components/ui/navigation';
 import { AbsoluteTime } from '@/components/ui/relative-time';
 import { routes } from '@/lib/routes';
 import type { DeckRelinkDTO } from '@/server/services/types';

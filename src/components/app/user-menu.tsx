@@ -3,12 +3,12 @@
 import clsx from 'clsx';
 import { ChevronDown, LogOut, ShieldCheck, UserRound } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useId, useRef, useState, type ComponentType } from 'react';
 
 import { signOutAction } from '@/app/auth-actions';
 import { Avatar } from '@/components/ui/avatar';
+import { Link } from '@/components/ui/navigation';
 import { Spinner } from '@/components/ui/spinner';
 import { routes } from '@/lib/routes';
 

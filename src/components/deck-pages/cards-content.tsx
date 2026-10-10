@@ -1,11 +1,11 @@
 import { ChevronRight, Search, SearchX } from 'lucide-react';
-import Link from 'next/link';
 
 import { CardSearch } from '@/components/deck/card-search';
 import { ManaCost } from '@/components/deck/mana-cost';
 import { ZoneBadge } from '@/components/deck/zone-badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { CardSearchResultDTO } from '@/server/services/types';

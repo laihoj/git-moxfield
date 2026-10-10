@@ -1,12 +1,12 @@
 import clsx from 'clsx';
 import { History, Tag } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { VersionTimeline } from '@/components/deck/version-timeline';
 import { ButtonLink } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Link } from '@/components/ui/navigation';
 import { pluralize } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { TagCountDTO, VersionListItemDTO } from '@/server/services/types';

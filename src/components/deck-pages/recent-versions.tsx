@@ -1,9 +1,9 @@
 import { ArrowRight, History } from 'lucide-react';
-import Link from 'next/link';
 
 import { VersionTimeline } from '@/components/deck/version-timeline';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Link } from '@/components/ui/navigation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { VersionListItemDTO } from '@/server/services/types';
 

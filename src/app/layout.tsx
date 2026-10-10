@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 
+import { NavigationProgress } from '@/components/ui/navigation';
 import { Toaster } from '@/components/ui/toaster';
 
 import './globals.css';
@@ -42,6 +43,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         >
           Skip to content
         </a>
+        <NavigationProgress />
         <Toaster>{children}</Toaster>
       </body>
     </html>

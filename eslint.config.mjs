@@ -30,6 +30,30 @@ export default defineConfig([
     },
   },
   {
+    // In-app links and GET forms go through src/components/ui/navigation.tsx, which decides
+    // how Next.js prefetches them. (Listed before the src/core and src/integrations rules,
+    // which replace it there and forbid every `next/*` import anyway.)
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/components/ui/navigation.tsx', 'src/components/ui/navigation.test.tsx'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'next/link',
+              message: 'Use Link from @/components/ui/navigation: it applies the app’s prefetch policy.',
+            },
+            {
+              name: 'next/form',
+              message: 'Use Form from @/components/ui/navigation: it applies the app’s prefetch policy.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/core/**/*.ts'],
     rules: {
       'no-restricted-imports': [

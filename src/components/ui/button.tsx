@@ -1,8 +1,8 @@
 import clsx from 'clsx';
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
+import { Link } from './navigation';
 import { Spinner } from './spinner';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';

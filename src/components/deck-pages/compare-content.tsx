@@ -1,5 +1,4 @@
 import { ArrowDown, ArrowRight, GitCompareArrows } from 'lucide-react';
-import Link from 'next/link';
 
 import { CompareForm } from '@/components/deck/compare-form';
 import { DiffView, diffCountLabel } from '@/components/deck/diff-view';
@@ -10,6 +9,7 @@ import { Alert } from '@/components/ui/alert';
 import { Card, CardHeader } from '@/components/ui/card';
 import { CopyButton } from '@/components/ui/copy-button';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';

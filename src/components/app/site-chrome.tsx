@@ -1,6 +1,7 @@
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+
+import { Link } from '@/components/ui/navigation';
 
 import packageJson from '../../../package.json';
 

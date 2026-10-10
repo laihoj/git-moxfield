@@ -2,9 +2,9 @@
 
 import clsx from 'clsx';
 import type { Route } from 'next';
-import Link from 'next/link';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { Link } from '@/components/ui/navigation';
 import { scryfallImageUrl } from '@/lib/scryfall';
 
 const HOVER_QUERY = '(hover: hover) and (pointer: fine)';

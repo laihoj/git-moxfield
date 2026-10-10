@@ -1,13 +1,13 @@
 'use client';
 
 import { ArrowLeftRight, GitCompareArrows } from 'lucide-react';
-import Form from 'next/form';
 import { useId, useState } from 'react';
 
 import type { VersionRefDTO } from '@/server/services/types';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { IconButton } from '@/components/ui/icon-button';
+import { Form } from '@/components/ui/navigation';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 

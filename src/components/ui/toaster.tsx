@@ -3,8 +3,9 @@
 import clsx from 'clsx';
 import { CircleAlert, CircleCheck, Info, X } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+
+import { Link } from './navigation';
 
 export type ToastTone = 'success' | 'info' | 'error';
 

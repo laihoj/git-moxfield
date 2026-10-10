@@ -1,7 +1,6 @@
 import clsx from 'clsx';
 import { ArrowRight, Equal } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import {
@@ -17,6 +16,7 @@ import { isPlayedZone, sortZones, zoneLabel, type ZoneId } from '@/core/zones';
 import { Overline } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { MINUS_SIGN, pluralize } from '@/lib/format';
 import { formatLabel } from '@/lib/presentation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';

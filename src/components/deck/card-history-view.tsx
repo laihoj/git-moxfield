@@ -1,12 +1,12 @@
 import clsx from 'clsx';
 import type { Route } from 'next';
-import Link from 'next/link';
 
 import type { CardFacts } from '@/core/model';
 import type { CardHistory, CardHistoryEntry, CardHistoryRun, ZoneQuantity } from '@/core/history/types';
 import { zoneLabel } from '@/core/zones';
 import { Card } from '@/components/ui/card';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { SegmentedLinks } from '@/components/ui/tabs';
 import { formatTimes, joinList, pluralize, versionLabel, versionRangeLabel } from '@/lib/format';

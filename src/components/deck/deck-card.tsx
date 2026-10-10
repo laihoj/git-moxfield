@@ -1,8 +1,8 @@
 import { ChevronRight, TriangleAlert } from 'lucide-react';
-import Link from 'next/link';
 
 import type { DeckSummaryDTO } from '@/server/services/types';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
 import { deckTitle, describeFetchError, describeStatus, isUnnamedDeck } from '@/lib/presentation';

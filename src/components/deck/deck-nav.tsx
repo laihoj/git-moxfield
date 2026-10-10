@@ -3,10 +3,10 @@
 import clsx from 'clsx';
 import { Activity, GitCompareArrows, History, LayoutDashboard, Search } from 'lucide-react';
 import type { Route } from 'next';
-import Link from 'next/link';
 import { useSelectedLayoutSegments } from 'next/navigation';
 import type { ComponentType } from 'react';
 
+import { Link } from '@/components/ui/navigation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 type DeckSection = 'overview' | 'history' | 'compare' | 'cards';

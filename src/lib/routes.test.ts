@@ -4,6 +4,7 @@ import { CLAIM_PATH, SHARED_DECK_PATH, SIGN_IN_PATH, sharedDeckPath, signInPath 
 
 import {
   deckRoutes,
+  formSubmissionRoute,
   ownerDeckRoutes,
   routes,
   sharedDeckRoutes,
@@ -120,5 +121,36 @@ describe('deck routes', () => {
 
   it('builds the owner-only share page', () => {
     expect(routes.deckShare('d1')).toBe('/decks/d1/share');
+  });
+});
+
+describe('form submission routes', () => {
+  it('puts the fields into the query, as a browser submits a GET form', () => {
+    const fields: [string, FormDataEntryValue][] = [
+      ['from', 'v1'],
+      ['to', 'working'],
+      ['q', 'Dress Down & co'],
+    ];
+    expect(formSubmissionRoute(ownerDeckRoutes('d1').compare(), fields)).toBe(
+      '/decks/d1/compare?from=v1&to=working&q=Dress+Down+%26+co',
+    );
+  });
+
+  it('keeps empty and repeated fields, and leaves out files', () => {
+    const file = new File(['x'], 'x.txt');
+    expect(
+      formSubmissionRoute(ownerDeckRoutes('d1').cards(), [
+        ['q', ''],
+        ['tag', 'a'],
+        ['tag', 'b'],
+        ['upload', file],
+      ]),
+    ).toBe('/decks/d1/cards?q=&tag=a&tag=b');
+  });
+
+  it('replaces the query and fragment of the action, and adds none without fields', () => {
+    const action = ownerDeckRoutes('d1').compare({ from: 'v1', to: 'v2', hash: 'primer' });
+    expect(formSubmissionRoute(action, [['to', 'v3']])).toBe('/decks/d1/compare?to=v3');
+    expect(formSubmissionRoute(action, [])).toBe('/decks/d1/compare');
   });
 });

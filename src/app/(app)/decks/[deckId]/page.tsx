@@ -1,5 +1,4 @@
 import { X } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import type { IngestWarning } from '@/core/model';
@@ -14,6 +13,7 @@ import { RecentVersions } from '@/components/deck-pages/recent-versions';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardHeader } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
+import { Link } from '@/components/ui/navigation';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { ownerDeckRoutes, routes } from '@/lib/routes';

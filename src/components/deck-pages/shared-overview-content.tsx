@@ -1,5 +1,4 @@
 import { History, Undo2 } from 'lucide-react';
-import Link from 'next/link';
 
 import { DiffView, diffCountLabel, initialPlayedCount } from '@/components/deck/diff-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
@@ -9,6 +8,7 @@ import { ButtonLink } from '@/components/ui/button';
 import { Card, CardHeader, Overline } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';

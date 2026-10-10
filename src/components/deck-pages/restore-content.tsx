@@ -1,8 +1,8 @@
 import { ChevronLeft, ShieldCheck } from 'lucide-react';
-import Link from 'next/link';
 
 import { RestorePanel } from '@/components/deck/restore-panel';
 import { VersionBadge } from '@/components/deck/version-row';
+import { Link } from '@/components/ui/navigation';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { SharedRestoreDTO } from '@/server/services/types';

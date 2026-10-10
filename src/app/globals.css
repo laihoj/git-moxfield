@@ -299,6 +299,47 @@
   }
 
   /*
+   * Navigation progress (NavigationProgress, src/components/ui/navigation.tsx): a thin bar
+   * along the top of the window while a navigation waits for the server. It appears only
+   * once the wait is noticeable (so quick navigations never flash it), creeps towards the
+   * end without reaching it, and when the next page shows, fills up and fades out.
+   */
+  .navigation-progress {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    right: 0;
+    left: 0;
+    z-index: 50;
+    height: 3px;
+    pointer-events: none;
+    background: var(--accent);
+    transform-origin: left;
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+  }
+
+  .navigation-progress[data-active] {
+    opacity: 1;
+    transition: opacity 0s linear 200ms;
+    animation: navigation-progress 10s cubic-bezier(0.08, 0.7, 0.2, 1) 200ms both;
+  }
+
+  @keyframes navigation-progress {
+    from {
+      transform: scaleX(0.05);
+    }
+    to {
+      transform: scaleX(0.92);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .navigation-progress[data-active] {
+      animation: none;
+    }
+  }
+
+  /*
    * Primer typography (rendered markdown from Moxfield, see PrimerView). Headings are
    * shifted down two levels in the markup; `data-level` keeps their visual size.
    */

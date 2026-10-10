@@ -1,10 +1,10 @@
 import clsx from 'clsx';
 import { Crown } from 'lucide-react';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import type { VersionListItemDTO } from '@/server/services/types';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';

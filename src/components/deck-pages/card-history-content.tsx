@@ -1,7 +1,7 @@
 import { ChevronLeft } from 'lucide-react';
-import Link from 'next/link';
 
 import { CardHistoryView, type CardHistoryViewProps } from '@/components/deck/card-history-view';
+import { Link } from '@/components/ui/navigation';
 import { deckRoutes } from '@/lib/routes';
 
 /** The card key of a `[cardKey]` route segment (decoded), or `null` when it cannot be one. */

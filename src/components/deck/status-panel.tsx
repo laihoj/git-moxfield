@@ -1,6 +1,5 @@
 import clsx from 'clsx';
 import { ArrowUpRight, Bookmark, ClipboardPaste } from 'lucide-react';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import type { ServerFetchStatus } from '@/integrations/deck-source';
@@ -9,6 +8,7 @@ import { Alert } from '@/components/ui/alert';
 import { ButtonLink, ExternalButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { Link } from '@/components/ui/navigation';
 import { ClockTime, RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
 import { describeFetchError, describeStatus } from '@/lib/presentation';

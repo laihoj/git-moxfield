@@ -1,12 +1,12 @@
 import { CircleCheck, ClipboardPaste, KeyRound, PartyPopper } from 'lucide-react';
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
-import Link from 'next/link';
 
 import { CreateBookmarklet } from '@/components/setup/create-bookmarklet';
 import { Alert } from '@/components/ui/alert';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Link } from '@/components/ui/navigation';
 import { ClockTime, RelativeTime } from '@/components/ui/relative-time';
 import { describeDevice } from '@/lib/devices';
 import { joinList, pluralize } from '@/lib/format';

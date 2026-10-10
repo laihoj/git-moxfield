@@ -1,8 +1,9 @@
 'use client';
 
 import clsx from 'clsx';
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+
+import { Link } from '@/components/ui/navigation';
 
 /**
  * Header navigation of signed-in users: Decks and Connect Moxfield, with the current

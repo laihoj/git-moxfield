@@ -2,9 +2,9 @@
 
 import clsx from 'clsx';
 import { Share2 } from 'lucide-react';
-import Link from 'next/link';
 import { useSelectedLayoutSegment } from 'next/navigation';
 
+import { Link } from '@/components/ui/navigation';
 import { routes } from '@/lib/routes';
 
 import { DECK_HEADER_LINK } from './deck-header';

@@ -1,10 +1,10 @@
 'use client';
 
 import { Search, X } from 'lucide-react';
-import Form from 'next/form';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, useTransition } from 'react';
 
+import { Form } from '@/components/ui/navigation';
 import { Spinner } from '@/components/ui/spinner';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
