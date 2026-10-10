@@ -149,3 +149,29 @@ export function ClockTime({ value, className }: { value: string; className?: str
     </time>
   );
 }
+
+/**
+ * `<time>` for a deadline that may pass while the page is open: `Expires in 14 min`,
+ * `Expires in less than a minute`, then `Expired`.
+ */
+export function ExpiryTime({ value, className }: { value: string; className?: string }) {
+  const clock = useClock();
+  const remaining = Date.parse(value) - clock.now;
+  const text =
+    remaining <= 0
+      ? 'Expired'
+      : remaining < 60_000
+        ? 'Expires in less than a minute'
+        : `Expires ${formatRelativeTime(value, clock.now, 'long', { future: true })}`;
+  return (
+    <time
+      key={clockKey(clock)}
+      dateTime={value}
+      title={formatFullDateTime(value)}
+      className={className}
+      suppressHydrationWarning
+    >
+      {text}
+    </time>
+  );
+}

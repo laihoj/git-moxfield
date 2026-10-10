@@ -4,10 +4,9 @@
  */
 import type { NextRequest } from 'next/server';
 
-import { getServices } from '@/server/services';
 import type { RestoreDTO } from '@/server/services/types';
 
-import { decodeSegment, parseSequence } from '../../../data';
+import { deckServices, decodeSegment, parseSequence } from '../../../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,8 +64,8 @@ export async function GET(
 ): Promise<Response> {
   const { deckId, sequence: rawSequence } = await params;
   const sequence = parseSequence(rawSequence);
-  const restore =
-    sequence === null ? null : await getServices().restoreExport(decodeSegment(deckId), sequence);
+  const id = decodeSegment(deckId);
+  const restore = sequence === null ? null : await (await deckServices(id)).restoreExport(id, sequence);
   if (restore === null) {
     return new Response('Version not found.\n', {
       status: 404,

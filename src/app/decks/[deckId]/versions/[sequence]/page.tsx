@@ -35,9 +35,9 @@ import { playedCardCount } from '@/core/canonical';
 import { pluralize, versionLabel } from '@/lib/format';
 import { describeIngestMethod, noteText } from '@/lib/presentation';
 import { routes, type VersionTab } from '@/lib/routes';
-import { FREE_TEXT_NOTE_KIND, getServices } from '@/server/services';
+import { FREE_TEXT_NOTE_KIND } from '@/server/services';
 
-import { decodeSegment, loadTags, parseSequence } from '../../data';
+import { deckServices, decodeSegment, loadTags, parseSequence } from '../../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +50,7 @@ async function loadVersion(params: PageProps<'/decks/[deckId]/versions/[sequence
   const deckId = decodeSegment(rawDeckId);
   const sequence = parseSequence(rawSequence);
   if (sequence === null) return null;
-  return getServices().getVersion(deckId, sequence);
+  return (await deckServices(deckId)).getVersion(deckId, sequence);
 }
 
 export async function generateMetadata({
@@ -77,7 +77,7 @@ export default async function VersionPage({
   const primerMarkdown =
     snapshot.primer === null || snapshot.primer === ''
       ? null
-      : getServices().primerToMarkdown(deck.source, snapshot.primer);
+      : (await deckServices(deck.id)).primerToMarkdown(deck.source, snapshot.primer);
 
   const compareItems: CompareMenuItem[] = [];
   if (previous !== null) {

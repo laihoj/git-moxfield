@@ -74,3 +74,35 @@ export function ownOrigins(headers: HeaderSource, requestUrl: string): Set<strin
   if (configured !== undefined) origins.add(new URL(configured).origin);
   return origins;
 }
+
+interface RequestLike {
+  headers: HeaderSource;
+  url: string;
+}
+
+/**
+ * Whether a browser sent `request` from a page of this app (the CSRF check of endpoints
+ * that act on the browser's cookies): `Origin` must be one of the app's own origins
+ * ({@link ownOrigins}). When the browser hides the origin (no `Origin` header, or the
+ * opaque `null`, which a same-origin form post sends under a `no-referrer` policy),
+ * `Sec-Fetch-Site` must say `same-origin`: browsers set it themselves, so no other site
+ * can claim it. A request with neither is refused.
+ */
+export function isSameOriginRequest(request: RequestLike): boolean {
+  const origin = request.headers.get('origin');
+  if (origin !== null && origin !== 'null') return ownOrigins(request.headers, request.url).has(origin);
+  return request.headers.get('sec-fetch-site') === 'same-origin';
+}
+
+/**
+ * Whether a browser says `request` came from another site or origin: an `Origin` header
+ * that is not one of the app's own origins, or a `Sec-Fetch-Site` other than
+ * `same-origin` or `none` (typed into the address bar). Requests from programs, which
+ * send neither header, are not cross-origin by this test.
+ */
+export function isCrossOriginBrowserRequest(request: RequestLike): boolean {
+  const origin = request.headers.get('origin');
+  if (origin !== null && !ownOrigins(request.headers, request.url).has(origin)) return true;
+  const site = request.headers.get('sec-fetch-site');
+  return site !== null && site !== 'same-origin' && site !== 'none';
+}

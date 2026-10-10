@@ -12,9 +12,7 @@ import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
-import { getServices } from '@/server/services';
-
-import { decodeSegment, loadOverview } from '../data';
+import { deckServices, decodeSegment, loadOverview } from '../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +46,8 @@ export default async function CardsPage({ params, searchParams }: PageProps<'/de
     );
   }
 
-  const results = query === '' ? [] : await getServices().searchCards(deckId, query, RESULT_LIMIT);
+  const results =
+    query === '' ? [] : await (await deckServices(deckId)).searchCards(deckId, query, RESULT_LIMIT);
 
   return (
     <div className="flex flex-col gap-4">

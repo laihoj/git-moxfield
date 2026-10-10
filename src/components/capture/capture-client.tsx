@@ -15,8 +15,9 @@ import {
   type CaptureMessage,
 } from '@/integrations/moxfield/capture-protocol';
 import { Alert } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { routes } from '@/lib/routes';
 
 import { CaptureStatus, WaitingPanel } from './capture-status';
 import { FormErrorNotice, PasteCapture } from './paste-capture';
@@ -64,7 +65,12 @@ type ReceiverPhase =
   | { kind: 'waiting' }
   | { kind: 'received' }
   | { kind: 'timeout' }
-  | { kind: 'opener-error'; message: string };
+  | { kind: 'opener-error'; message: string }
+  /** The deck came without a bookmarklet key: a bookmarklet made before accounts. */
+  | { kind: 'outdated' };
+
+const OUTDATED_MESSAGE =
+  'This bookmarklet is out of date: it was made before git-moxfield had accounts. Make a new one on git-moxfield’s Connect Moxfield page.';
 
 export interface CaptureClientProps {
   /** Origins allowed to send captures (Moxfield's site origin by default). */
@@ -75,14 +81,20 @@ export interface CaptureClientProps {
   initialMode: 'auto' | 'paste';
   /** Error code from the same-tab capture endpoint (`?error=`). */
   formError: string | null;
+  /**
+   * Whether this browser was signed in when the page was rendered. The bookmarklet
+   * hand-over works without it (its key signs the browser in); pasting a deck does not.
+   */
+  signedIn: boolean;
 }
 
 /**
  * Receiving side of the bookmarklet protocol (see `capture-protocol.ts`): announces
  * READY to the opener until the Moxfield tab answers, accepts the payload only from
- * the opener, an allowed origin and with the matching nonce, imports it, and reports
- * DONE or ERROR back. Without an opener or nonce, or after a timeout, it offers the
- * manual paste form.
+ * the opener, an allowed origin and with the matching nonce, imports it together with
+ * the bookmarklet key that came with it (which signs this browser in), and reports DONE
+ * or ERROR back. Without an opener or nonce, or after a timeout, it offers the manual
+ * paste form (or sign-in first, for a signed-out browser).
  */
 export function CaptureClient({
   allowedOrigins,
@@ -90,12 +102,15 @@ export function CaptureClient({
   siteOrigin,
   initialMode,
   formError,
+  signedIn,
 }: CaptureClientProps) {
   const current = useCaptureSession();
   const [mode, setMode] = useState(initialMode);
   const [phase, setPhase] = useState<ReceiverPhase>({ kind: 'waiting' });
   const submission = useCaptureSubmission();
-  const importPayload = useEffectEvent((json: string) => submission.submit(json, 'browser-capture'));
+  const importPayload = useEffectEvent((json: string, key: string) =>
+    submission.submit(json, 'browser-capture', key),
+  );
   /** Primitive dependency: the origins array is a new object on every server render. */
   const originsKey = allowedOrigins.join(' ');
 
@@ -140,6 +155,11 @@ export function CaptureClient({
       if (data.t !== PAYLOAD) return;
       stop();
       const replyOrigin = event.origin;
+      if (data.key === undefined) {
+        post({ t: ERROR, n: nonce, message: OUTDATED_MESSAGE }, replyOrigin);
+        setPhase({ kind: 'outdated' });
+        return;
+      }
       if (data.json.length > MAX_CAPTURE_BYTES) {
         const message = 'The deck is too large to import.';
         post({ t: ERROR, n: nonce, message }, replyOrigin);
@@ -147,7 +167,7 @@ export function CaptureClient({
         return;
       }
       setPhase({ kind: 'received' });
-      void importPayload(data.json).then((result) => {
+      void importPayload(data.json, data.key).then((result) => {
         post(
           result.ok ? { t: DONE, n: nonce } : { t: ERROR, n: nonce, message: result.message },
           replyOrigin,
@@ -186,6 +206,24 @@ export function CaptureClient({
       </Shell>
     );
   }
+  if (!handOver && !signedIn) {
+    return (
+      <Shell title="Send to git-moxfield">
+        <Alert
+          tone="info"
+          title="Sign in to paste a deck"
+          actions={
+            <ButtonLink href={routes.signIn(routes.capturePaste())} variant="primary" size="sm">
+              Sign in
+            </ButtonLink>
+          }
+        >
+          This page receives decks from the “Send to git-moxfield” bookmarklet on a Moxfield deck page, which
+          also signs you in. To paste deck data instead, sign in first.
+        </Alert>
+      </Shell>
+    );
+  }
   if (!handOver) {
     return (
       <Shell title="Paste a deck from Moxfield">
@@ -199,6 +237,15 @@ export function CaptureClient({
     );
   }
 
+  if (phase.kind === 'timeout' && !signedIn) {
+    return (
+      <Shell title="Send to git-moxfield">
+        <Alert tone="warn" role="alert" title="No answer from the Moxfield tab">
+          The deck did not arrive. Run the bookmarklet again on the deck page.
+        </Alert>
+      </Shell>
+    );
+  }
   if (phase.kind === 'timeout') {
     return (
       <Shell title="Paste a deck from Moxfield">
@@ -224,6 +271,21 @@ export function CaptureClient({
             <span className="break-words">{phase.message}</span>
           </Alert>
         )}
+        {phase.kind === 'outdated' && (
+          <Alert
+            tone="warn"
+            role="alert"
+            title="This bookmarklet is out of date"
+            actions={
+              <ButtonLink href={routes.setup()} variant="secondary" size="sm">
+                Make a new bookmarklet
+              </ButtonLink>
+            }
+          >
+            It was made before git-moxfield had accounts. Bookmarklets now carry a personal key: make a new
+            one, and delete the old bookmark.
+          </Alert>
+        )}
         <CaptureStatus
           phase={submission.phase}
           onTrack={() => {
@@ -234,7 +296,7 @@ export function CaptureClient({
             submission.reset();
           }}
         />
-        {(phase.kind === 'opener-error' || submission.phase.kind === 'failed') && (
+        {signedIn && (phase.kind === 'opener-error' || submission.phase.kind === 'failed') && (
           <div>
             <Button
               variant="secondary"

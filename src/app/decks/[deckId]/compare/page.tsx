@@ -18,10 +18,9 @@ import { RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
-import { getServices } from '@/server/services';
 import type { CompareSideDTO, DeckOverviewDTO } from '@/server/services/types';
 
-import { decodeSegment, loadOverview } from '../data';
+import { deckServices, decodeSegment, loadOverview } from '../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -88,7 +87,7 @@ export default async function ComparePage({ params, searchParams }: PageProps<'/
 
   const from = param(query.from) ?? defaults.from;
   const to = param(query.to) ?? defaults.to;
-  const services = getServices();
+  const services = await deckServices(deckId);
   const comparison = await services.compare(deckId, from, to);
 
   if (comparison === null) {

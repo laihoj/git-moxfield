@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 
 import { CaptureClient } from '@/components/capture/capture-client';
-import { getServices } from '@/server/services';
+import { routes } from '@/lib/routes';
+import { getSetupInfo } from '@/server/access';
+import { getCurrentUser, requireUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +21,14 @@ const FORM_ERRORS: ReadonlySet<string> = new Set(['invalid', 'too-large', 'faile
  */
 export default async function CapturePage({ searchParams }: PageProps<'/capture'>) {
   const { mode, error } = await searchParams;
-  const setup = getServices().getSetupInfo();
   const formError = typeof error === 'string' && FORM_ERRORS.has(error) ? error : null;
+  // Manual paste needs a signed-in browser. The bookmarklet hand-over does not: its
+  // PAYLOAD carries the bookmarklet key, which signs the browser in.
+  const user =
+    mode === 'paste' || formError !== null
+      ? await requireUser({ next: routes.capturePaste() })
+      : await getCurrentUser();
+  const setup = getSetupInfo();
   return (
     <CaptureClient
       allowedOrigins={setup.captureAllowedOrigins}
@@ -28,6 +36,7 @@ export default async function CapturePage({ searchParams }: PageProps<'/capture'
       siteOrigin={setup.moxfieldSiteOrigin}
       initialMode={mode === 'paste' || formError !== null ? 'paste' : 'auto'}
       formError={formError}
+      signedIn={user !== null}
     />
   );
 }

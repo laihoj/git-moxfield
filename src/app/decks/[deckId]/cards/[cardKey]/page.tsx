@@ -5,9 +5,7 @@ import { notFound } from 'next/navigation';
 
 import { CardHistoryView } from '@/components/deck/card-history-view';
 import { routes } from '@/lib/routes';
-import { getServices } from '@/server/services';
-
-import { decodeSegment } from '../../data';
+import { deckServices, decodeSegment } from '../../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +13,8 @@ async function loadHistory(params: PageProps<'/decks/[deckId]/cards/[cardKey]'>[
   const { deckId, cardKey } = await params;
   const key = decodeSegment(cardKey);
   if (key.trim() === '' || key.length > 300) return null;
-  return getServices().cardHistory(decodeSegment(deckId), key, { includeWorking: true });
+  const id = decodeSegment(deckId);
+  return (await deckServices(id)).cardHistory(id, key, { includeWorking: true });
 }
 
 export async function generateMetadata({

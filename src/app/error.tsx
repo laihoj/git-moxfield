@@ -21,6 +21,7 @@ export default function ErrorPage({
   return (
     <EmptyState
       className="mx-auto mt-6 max-w-xl"
+      headingLevel={1}
       icon={<TriangleAlert aria-hidden="true" />}
       title="Something went wrong"
       description={

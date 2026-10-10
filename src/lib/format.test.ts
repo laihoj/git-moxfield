@@ -42,6 +42,14 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(ago(-3_600_000), NOW, 'long', { future: true })).toBe('in 1 hour');
     expect(formatRelativeTime(ago(-3_600_000), NOW)).toBe('just now');
   });
+
+  it('rounds an upcoming time just under a day to a day, not to 24 hours', () => {
+    const future = { future: true };
+    expect(formatRelativeTime(ago(-23 * 3_600_000), NOW, 'long', future)).toBe('in 23 hours');
+    expect(formatRelativeTime(ago(-(DAY - 60_000)), NOW, 'long', future)).toBe('in 1 day');
+    expect(formatRelativeTime(ago(-DAY), NOW, 'long', future)).toBe('in 1 day');
+    expect(formatRelativeTime(ago(-7 * DAY), NOW, 'long', future)).toBe('in 7 days');
+  });
 });
 
 describe('formatClockTime', () => {

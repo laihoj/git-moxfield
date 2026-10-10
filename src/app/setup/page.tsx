@@ -1,18 +1,25 @@
-import clsx from 'clsx';
-import { CircleCheck, ClipboardPaste, KeyRound, Monitor, Smartphone } from 'lucide-react';
+import { CircleCheck, ClipboardPaste, KeyRound, PartyPopper } from 'lucide-react';
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
 
-import { BookmarkletLink } from '@/components/capture/bookmarklet-link';
+import { CreateBookmarklet } from '@/components/setup/create-bookmarklet';
 import { Alert } from '@/components/ui/alert';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { CopyButton } from '@/components/ui/copy-button';
 import { ClockTime, RelativeTime } from '@/components/ui/relative-time';
+import { describeDevice } from '@/lib/devices';
+import { joinList, pluralize } from '@/lib/format';
+import { routes, WELCOME_REASONS, type WelcomeReason } from '@/lib/routes';
+import { getSetupInfo } from '@/server/access';
+import {
+  getAuthService,
+  MAX_KEY_LABEL_LENGTH,
+  type BookmarkletKeyDTO,
+  type SessionUser,
+} from '@/server/auth';
+import { requireUser } from '@/server/auth/current-user';
 import type { SetupInfoDTO } from '@/server/services/contract';
-import { getServices } from '@/server/services';
 
 import { publicAppUrl } from '../request-origin';
 
@@ -20,15 +27,60 @@ export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = { title: 'Connect Moxfield' };
 
-/** Connect Moxfield: server fetch status, the bookmarklets and the paste fallback. */
-export default async function SetupPage() {
-  const setup = getServices().getSetupInfo();
-  const appUrl = publicAppUrl(await headers());
-  const bookmarklets = appUrl === null ? null : getServices().getBookmarklets(appUrl);
+/**
+ * Connect Moxfield: server fetch status, the user's personal bookmarklets (ADR 0006) and
+ * the paste fallback. Right after signing up, claiming or recovering (`?welcome=…`) it
+ * greets the user and leads with creating a bookmarklet.
+ */
+export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
+  const user = await requireUser({ next: routes.setup() });
+  const { welcome: rawWelcome } = await searchParams;
+  const welcome = WELCOME_REASONS.find((reason) => reason === rawWelcome) ?? null;
+  const requestHeaders = await headers();
+  const setup = getSetupInfo();
+  const appUrl = publicAppUrl(requestHeaders);
+  const keys = await getAuthService().listKeys(user);
   const siteHost = new URL(setup.moxfieldSiteOrigin).host;
+
+  const bookmarkletCard = (
+    <Card as="section" aria-labelledby="bookmarklet-heading" className="flex flex-col gap-5">
+      <div>
+        <h2 id="bookmarklet-heading" className="text-base font-semibold text-fg">
+          The “Send to git-moxfield” bookmarklet
+        </h2>
+        <p className="mt-1 text-sm text-pretty text-muted">
+          A bookmark that, clicked on a deck page on {siteHost}, reads the deck and its primer with your
+          browser and hands them to git-moxfield. Decks you have not tracked yet ask for confirmation first.
+        </p>
+        <p className="mt-2 text-sm text-pretty text-muted">
+          Each bookmarklet is a personal key: it also signs its browser in to your account. Make one for every
+          browser you use.
+        </p>
+      </div>
+
+      {appUrl === null ? (
+        <Alert tone="warn" title="Can’t make a bookmarklet here">
+          git-moxfield could not tell its own address from this request. Set <code>PUBLIC_APP_URL</code> (for
+          example <code>http://localhost:3000</code>) and reload.
+        </Alert>
+      ) : (
+        <CreateBookmarklet
+          defaultLabel={describeDevice(requestHeaders.get('user-agent')).label}
+          maxLabelLength={MAX_KEY_LABEL_LENGTH}
+          siteHost={siteHost}
+          appUrl={appUrl}
+          autoFocus={welcome !== null}
+        />
+      )}
+
+      <KeySummary keys={keys} />
+    </Card>
+  );
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
+      {welcome !== null && <Welcome reason={welcome} user={user} />}
+
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Connect Moxfield</h1>
         <p className="mt-1 text-sm text-pretty text-muted">
@@ -38,115 +90,9 @@ export default async function SetupPage() {
         </p>
       </div>
 
+      {welcome !== null && bookmarkletCard}
       <ServerFetchCard setup={setup} />
-
-      <Card as="section" aria-labelledby="bookmarklet-heading" className="flex flex-col gap-5">
-        <div>
-          <h2 id="bookmarklet-heading" className="text-base font-semibold text-fg">
-            The “Send to git-moxfield” bookmarklet
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            A bookmark that, clicked on a deck page on {siteHost}, reads the deck and its primer with your
-            browser and hands them to git-moxfield. Decks you have not tracked yet ask for confirmation first.
-          </p>
-        </div>
-
-        {bookmarklets === null ? (
-          <Alert tone="warn" title="Cannot build the bookmarklet">
-            The app&apos;s address could not be determined from this request. Set <code>PUBLIC_APP_URL</code>{' '}
-            (for example <code>http://localhost:3000</code>) and reload.
-          </Alert>
-        ) : (
-          <>
-            <InstructionBlock
-              icon={<Monitor aria-hidden="true" className="size-4" />}
-              title="Desktop (Chrome, Firefox, Safari, Edge)"
-              className="max-md:order-2"
-            >
-              <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-fg marker:text-subtle">
-                <li>
-                  Show the bookmarks bar (<Kbd>Ctrl</Kbd>/<Kbd>⌘</Kbd> + <Kbd>Shift</Kbd> + <Kbd>B</Kbd>).
-                </li>
-                <li>Drag this button onto the bar:</li>
-              </ol>
-              <div className="flex flex-wrap items-start gap-3 pl-5">
-                <BookmarkletLink code={bookmarklets.popup} label="Send to git-moxfield" />
-                <CopyButton
-                  text={bookmarklets.popup}
-                  label="Copy bookmarklet code"
-                  subject="Bookmarklet code"
-                  size="sm"
-                />
-              </div>
-              <ol
-                start={3}
-                className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-fg marker:text-subtle"
-              >
-                <li>
-                  Open one of your decks on {siteHost} and click the bookmark. A git-moxfield window opens
-                  with the deck.
-                </li>
-              </ol>
-            </InstructionBlock>
-
-            <InstructionBlock
-              icon={<Smartphone aria-hidden="true" className="size-4" />}
-              title="Phone and tablet (Safari on iOS, Chrome on Android, in-app browsers)"
-              className="max-md:order-1"
-            >
-              <p className="text-sm text-muted">
-                Phones block popups, so this variant sends the deck in the same tab and opens it in{' '}
-                <span className="whitespace-nowrap">git-moxfield</span>.
-              </p>
-              <div className="flex flex-wrap items-start gap-3">
-                <CopyButton
-                  text={bookmarklets.sameTab}
-                  label="Copy same-tab bookmarklet"
-                  subject="Same-tab bookmarklet code"
-                  variant="primary"
-                />
-                <BookmarkletLink code={bookmarklets.sameTab} label="Send to git-moxfield (same tab)" />
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <h4 className="mb-1.5 text-sm font-semibold text-fg">iPhone and iPad</h4>
-                  <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-fg marker:text-subtle">
-                    <li>Copy the same-tab bookmarklet above.</li>
-                    <li>
-                      Bookmark any page (Share › Add Bookmark) and name it{' '}
-                      <span className="whitespace-nowrap">“Send to git-moxfield”</span>.
-                    </li>
-                    <li>Open Bookmarks › Edit, select it and replace its address with the copied code.</li>
-                    <li>On a deck page, open Bookmarks and tap it.</li>
-                  </ol>
-                </div>
-                <div>
-                  <h4 className="mb-1.5 text-sm font-semibold text-fg">Android (Chrome)</h4>
-                  <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-fg marker:text-subtle">
-                    <li>Copy the same-tab bookmarklet above.</li>
-                    <li>Bookmark any page (⋮ › ☆), then edit it: name it “gm”, paste the code as its URL.</li>
-                    <li>
-                      On a deck page, type <Kbd>gm</Kbd> in the address bar and pick the bookmark from the
-                      suggestions.
-                    </li>
-                  </ol>
-                </div>
-              </div>
-            </InstructionBlock>
-
-            <p className="text-xs text-muted max-md:order-3">
-              The bookmarklets send decks to{' '}
-              <code className="rounded bg-surface-2 px-1 py-0.5">{appUrl}</code>. To use them from another
-              device, start git-moxfield with{' '}
-              <code className="rounded bg-surface-2 px-1 py-0.5 whitespace-nowrap">pnpm start:lan</code>{' '}
-              (otherwise only this computer can reach it) and protect it with Basic auth, then open it there
-              with the address it should use, or set{' '}
-              <code className="rounded bg-surface-2 px-1 py-0.5">PUBLIC_APP_URL</code> (for example your
-              computer&apos;s LAN address).
-            </p>
-          </>
-        )}
-      </Card>
+      {welcome === null && bookmarkletCard}
 
       <Card as="section" aria-labelledby="paste-heading" className="flex flex-col gap-3">
         <h2 id="paste-heading" className="flex items-center gap-2 text-base font-semibold text-fg">
@@ -211,7 +157,7 @@ function ServerFetchCard({ setup }: { setup: SetupInfoDTO }) {
       <Alert tone={setup.userAgentConfigured ? 'success' : 'info'} title="Server fetch: on">
         {setup.userAgentConfigured
           ? 'git-moxfield fetches decks from Moxfield itself, using your Moxfield-issued User-Agent.'
-          : 'git-moxfield will try to fetch decks itself. Without a Moxfield-issued User-Agent, Moxfield usually blocks this; git-moxfield then pauses server fetching and you use the bookmarklet below.'}
+          : 'git-moxfield will try to fetch decks itself. Without a Moxfield-issued User-Agent, Moxfield usually blocks this; git-moxfield then pauses server fetching and you use the bookmarklet instead.'}
       </Alert>
     );
   }
@@ -237,34 +183,60 @@ function ServerFetchCard({ setup }: { setup: SetupInfoDTO }) {
   );
 }
 
-function InstructionBlock({
-  icon,
-  title,
-  className,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  className?: string;
-  children: ReactNode;
-}) {
+const WELCOME: Record<WelcomeReason, (name: string) => { title: string; body: string }> = {
+  invite: (name) => ({
+    title: `Welcome to git-moxfield, ${name}`,
+    body: 'Your account is ready. One more step: make your bookmarklet. It sends decks from Moxfield and signs you in, so you never need a password.',
+  }),
+  claimed: () => ({
+    title: 'You’re the admin of this git-moxfield',
+    body: 'Make your bookmarklet first. Then invite friends from Admin, in the menu at the top.',
+  }),
+  'claimed-local': () => ({
+    title: 'You’re the admin of this git-moxfield',
+    body: 'The decks and history already here are now yours. Make your bookmarklet, then invite friends from Admin, in the menu at the top.',
+  }),
+  recovery: (name) => ({
+    title: `Welcome back, ${name}`,
+    body: 'You’re signed in again. Every other device was signed out and your old bookmarklets were revoked, in case one was lost or stolen. Make a new bookmarklet for this browser.',
+  }),
+};
+
+/** Greeting after signing up, claiming or recovering. */
+function Welcome({ reason, user }: { reason: WelcomeReason; user: SessionUser }) {
+  const { title, body } = WELCOME[reason](user.displayName);
   return (
     <section
-      className={clsx('flex flex-col gap-3 rounded-lg border border-border bg-surface-2/50 p-4', className)}
+      aria-labelledby="welcome-heading"
+      className="flex gap-3.5 rounded-xl border border-accent/30 bg-accent-soft/50 p-4 md:p-5"
     >
-      <h3 className="flex items-start gap-2 text-sm font-semibold text-fg">
-        <span className="flex h-5 shrink-0 items-center text-muted">{icon}</span>
-        {title}
-      </h3>
-      {children}
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg">
+        <PartyPopper aria-hidden="true" className="size-4" />
+      </span>
+      <div className="min-w-0">
+        <h2 id="welcome-heading" className="text-base font-semibold break-words text-fg">
+          {title}
+        </h2>
+        <p className="mt-0.5 text-sm text-pretty text-fg/80">{body}</p>
+      </div>
     </section>
   );
 }
 
-function Kbd({ children }: { children: ReactNode }) {
+/** Bookmarklet names listed before the rest is summed up (`and 2 more`). */
+const LISTED_KEYS = 3;
+
+/** The user's existing bookmarklets, by name, with a link to manage them. */
+function KeySummary({ keys }: { keys: readonly BookmarkletKeyDTO[] }) {
+  if (keys.length === 0) return null;
+  const names = keys.slice(0, LISTED_KEYS).map((key) => `“${key.label}”`);
+  if (keys.length > LISTED_KEYS) names.push(`${keys.length - LISTED_KEYS} more`);
   return (
-    <kbd className="rounded border border-border-strong bg-surface px-1.5 py-0.5 font-sans text-xs font-medium text-fg shadow-card">
-      {children}
-    </kbd>
+    <p className="border-t border-border pt-4 text-sm text-pretty text-muted">
+      You have {pluralize(keys.length, 'bookmarklet')}: <span className="text-fg">{joinList(names)}</span>.{' '}
+      <Link href={routes.account()} className="font-medium whitespace-nowrap text-accent hover:underline">
+        Manage them in Account
+      </Link>
+    </p>
   );
 }

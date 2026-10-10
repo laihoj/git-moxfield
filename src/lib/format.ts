@@ -84,6 +84,8 @@ function formatFutureTime(remaining: number): string {
   if (remaining < HOUR) return `in ${Math.max(1, Math.round(remaining / MINUTE))} min`;
   if (remaining < DAY) {
     const hours = Math.round(remaining / HOUR);
+    // 23.5 hours and more round to a day, as in the past tense (`yesterday`).
+    if (hours >= 24) return 'in 1 day';
     return `in ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
   }
   const days = Math.round(remaining / DAY);

@@ -9,6 +9,12 @@ export interface EmptyStateProps {
   actions?: ReactNode;
   /** `inline` sits inside a card without its own border. */
   variant?: 'boxed' | 'inline';
+  /**
+   * Renders the title as a heading of this level. Set it when the empty state is the whole
+   * page (`1`: not found, errors), so the page has its heading; leave it out for
+   * placeholders inside a page, whose title is just emphasized text.
+   */
+  headingLevel?: 1 | 2;
   className?: string;
 }
 
@@ -19,8 +25,10 @@ export function EmptyState({
   description,
   actions,
   variant = 'boxed',
+  headingLevel,
   className,
 }: EmptyStateProps) {
+  const Title = headingLevel === undefined ? 'p' : (`h${headingLevel}` as const);
   return (
     <div
       className={clsx(
@@ -34,7 +42,7 @@ export function EmptyState({
           {icon}
         </div>
       )}
-      <p className="text-base font-semibold text-balance text-fg">{title}</p>
+      <Title className="text-base font-semibold text-balance text-fg">{title}</Title>
       {description !== undefined && (
         <div className="mt-1 max-w-md text-sm text-balance text-muted">{description}</div>
       )}

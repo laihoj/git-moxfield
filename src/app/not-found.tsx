@@ -11,6 +11,7 @@ export default function NotFound() {
   return (
     <EmptyState
       className="mx-auto mt-6 max-w-xl"
+      headingLevel={1}
       icon={<Compass aria-hidden="true" />}
       title="We couldn’t find that"
       description="The deck, version or card may have been removed, or the link is mistyped."

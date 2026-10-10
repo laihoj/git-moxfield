@@ -57,6 +57,9 @@ describe('StatusPanel', () => {
   });
 
   it('shows uncommitted changes with Moxfield and version details', () => {
+    // Relative times depend on "now": pin it shortly after the fixtures' timestamps.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-09T12:05:00.000Z'));
     renderWithProviders(<StatusPanel deck={deck()} />);
     expect(screen.getByRole('heading', { name: 'Uncommitted changes' })).toBeInTheDocument();
     expect(metaItemTexts(screen.getByRole('list', { name: 'Moxfield activity' }))).toEqual([

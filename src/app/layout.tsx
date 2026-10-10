@@ -1,10 +1,13 @@
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
+import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 
 import { BrandMark } from '@/components/app/brand-mark';
 import { MainNav } from '@/components/app/main-nav';
+import { UserMenu } from '@/components/app/user-menu';
 import { Toaster } from '@/components/ui/toaster';
+import { getCurrentUser } from '@/server/auth/current-user';
 
 import packageJson from '../../package.json';
 import './globals.css';
@@ -27,7 +30,15 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+/**
+ * Every page: header (navigation and the user menu when signed in, only the brand when
+ * signed out), main content and footer.
+ */
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Every page depends on who is signed in. Stop prerendering here, before the session
+  // lookup opens the database: a build must never open, migrate or write to it.
+  await connection();
+  const user = await getCurrentUser();
   return (
     <html lang="en">
       <body className="flex min-h-dvh flex-col">
@@ -38,7 +49,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           Skip to content
         </a>
         <Toaster>
-          <header className="border-b border-border bg-surface/85 pt-[env(safe-area-inset-top)] backdrop-blur-md">
+          {/* Above the page's own positioned elements, so the user menu's panel overlaps them. */}
+          <header className="relative z-40 border-b border-border bg-surface/85 pt-[env(safe-area-inset-top)] backdrop-blur-md">
             <div className="page-gutter mx-auto flex h-14 w-full max-w-[1080px] items-center justify-between gap-4">
               <Link
                 href="/"
@@ -47,7 +59,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <BrandMark />
                 git-moxfield
               </Link>
-              <MainNav />
+              {user !== null && (
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <MainNav />
+                  <UserMenu displayName={user.displayName} isAdmin={user.role === 'admin'} />
+                </div>
+              )}
             </div>
           </header>
           <main

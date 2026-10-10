@@ -4,11 +4,14 @@ import clsx from 'clsx';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-/** Header navigation: Decks and Connect Moxfield, with the current section highlighted. */
+/**
+ * Header navigation of signed-in users: Decks and Connect Moxfield, with the current
+ * section highlighted (neither on the account and admin pages, which the user menu opens).
+ */
 export function MainNav() {
   const pathname = usePathname();
   const setupActive = pathname.startsWith('/setup') || pathname.startsWith('/capture');
-  const decksActive = !setupActive;
+  const decksActive = pathname === '/' || pathname.startsWith('/decks');
   const item = (active: boolean): string =>
     clsx(
       'rounded-lg px-3 py-2.5 transition-colors',

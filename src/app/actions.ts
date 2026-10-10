@@ -1,17 +1,20 @@
 'use server';
 
 /**
- * Server actions: the UI's only write path. Every action validates its input with zod,
- * calls the service layer, revalidates the affected pages and returns a typed,
- * serializable result. Unexpected errors are logged and replaced by a generic message,
- * so no internal details reach the browser.
+ * Server actions: the UI's only write path. Every action resolves the signed-in user
+ * from the session cookie again (redirecting to sign-in without one), validates its input
+ * with zod, calls the services bound to the user's workspace, revalidates the affected
+ * pages and returns a typed, serializable result. Unexpected errors are logged and
+ * replaced by a generic message, so no internal details reach the browser.
  */
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
+import { servicesFor } from '@/server/access';
+import { requireUser } from '@/server/auth/current-user';
 import { createLogger } from '@/server/logger';
-import { getServices, isServiceError } from '@/server/services';
+import { isServiceError, type DeckServices } from '@/server/services';
 import { noteText } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 
@@ -49,6 +52,14 @@ function revalidateDeck(deckId: string): void {
   revalidatePath('/');
 }
 
+/**
+ * Services of the signed-in user. Redirects to sign-in without a session, so call it
+ * before any `try` block (the redirect is thrown).
+ */
+async function ownerServices(): Promise<DeckServices> {
+  return servicesFor(await requireUser());
+}
+
 function formString(formData: FormData, name: string): string {
   const value = formData.get(name);
   return typeof value === 'string' ? value : '';
@@ -59,6 +70,7 @@ export async function trackDeckAction(
   _previous: TrackDeckState,
   formData: FormData,
 ): Promise<TrackDeckState> {
+  const services = await ownerServices();
   const input = formString(formData, 'deck').trim();
   if (input === '') return { status: 'error', message: 'Paste a Moxfield deck URL.', input };
   if (input.length > 2048)
@@ -66,7 +78,7 @@ export async function trackDeckAction(
 
   let deckId: string;
   try {
-    const outcome = await getServices().trackDeck(input);
+    const outcome = await services.trackDeck(input);
     if (!outcome.ok) return { status: 'error', message: outcome.reason, input };
     deckId = outcome.deckId;
   } catch (error) {
@@ -83,13 +95,14 @@ export async function trackDeckAction(
  * re-renders mid-interaction because of a server action it did not ask for.
  */
 export async function refreshAction(deckId: string, trigger: 'manual' | 'auto'): Promise<RefreshResult> {
+  const services = await ownerServices();
   const id = deckIdSchema.safeParse(deckId);
   const kind = z.enum(['manual', 'auto']).safeParse(trigger);
   if (!id.success || !kind.success) {
     return { ok: false, code: 'internal', message: 'Invalid request.', retryAfterSeconds: null };
   }
   try {
-    const outcome = await getServices().refresh(id.data, kind.data);
+    const outcome = await services.refresh(id.data, kind.data);
     if (kind.data === 'manual') revalidateDeck(id.data);
     if (outcome.ok) return { ok: true, changed: outcome.changedSinceLastObservation };
     return {
@@ -119,6 +132,7 @@ const commitSchema = z.object({
 
 /** Commits the reviewed Moxfield state as the next version. */
 export async function commitAction(_previous: CommitState, formData: FormData): Promise<CommitState> {
+  const services = await ownerServices();
   const parsed = commitSchema.safeParse({
     deckId: formString(formData, 'deckId'),
     message: formString(formData, 'message'),
@@ -135,7 +149,7 @@ export async function commitAction(_previous: CommitState, formData: FormData): 
   }
   const { deckId, message, expectedObservationId, expectedHeadCommitId, tags } = parsed.data;
   try {
-    const outcome = await getServices().commit(deckId, {
+    const outcome = await services.commit(deckId, {
       message,
       expectedObservationId,
       expectedHeadCommitId: expectedHeadCommitId === '' ? null : expectedHeadCommitId,
@@ -161,10 +175,11 @@ const tagInputSchema = z.object({ deckId: deckIdSchema, sequence: sequenceSchema
 
 /** Adds a tag to a version. Returns the version's tags after the change. */
 export async function addTagAction(deckId: string, sequence: number, tag: string): Promise<TagResult> {
+  const services = await ownerServices();
   const parsed = tagInputSchema.safeParse({ deckId, sequence, tag });
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? 'Invalid tag.' };
   try {
-    const outcome = await getServices().addTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
+    const outcome = await services.addTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
     if (!outcome.ok) return { ok: false, message: outcome.reason };
     revalidateDeck(parsed.data.deckId);
     return { ok: true, tags: outcome.tags };
@@ -175,10 +190,11 @@ export async function addTagAction(deckId: string, sequence: number, tag: string
 
 /** Removes a tag from a version. Returns the version's tags after the change. */
 export async function removeTagAction(deckId: string, sequence: number, tag: string): Promise<TagResult> {
+  const services = await ownerServices();
   const parsed = tagInputSchema.safeParse({ deckId, sequence, tag });
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? 'Invalid tag.' };
   try {
-    const outcome = await getServices().removeTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
+    const outcome = await services.removeTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
     if (!outcome.ok) return { ok: false, message: outcome.reason };
     revalidateDeck(parsed.data.deckId);
     return { ok: true, tags: outcome.tags };
@@ -197,6 +213,7 @@ const noteSchema = z.object({
 
 /** Saves (or, with empty text, clears) the free-text note of a version. */
 export async function setNoteAction(_previous: NoteState, formData: FormData): Promise<NoteState> {
+  const services = await ownerServices();
   const parsed = noteSchema.safeParse({
     deckId: formString(formData, 'deckId'),
     sequence: formString(formData, 'sequence'),
@@ -206,7 +223,7 @@ export async function setNoteAction(_previous: NoteState, formData: FormData): P
     return { status: 'error', message: parsed.error.issues[0]?.message ?? 'Invalid note.' };
   const { deckId, sequence, text } = parsed.data;
   try {
-    const note = await getServices().setNote(deckId, sequence, text);
+    const note = await services.setNote(deckId, sequence, text);
     revalidateDeck(deckId);
     return {
       status: 'saved',
@@ -220,10 +237,11 @@ export async function setNoteAction(_previous: NoteState, formData: FormData): P
 
 /** Deletes a deck and its whole history from git-moxfield (never touches Moxfield). */
 export async function untrackDeckAction(deckId: string): Promise<UntrackResult> {
+  const services = await ownerServices();
   const id = deckIdSchema.safeParse(deckId);
   if (!id.success) return { ok: false, message: 'Invalid request.' };
   try {
-    await getServices().untrackDeck(id.data);
+    await services.untrackDeck(id.data);
   } catch (error) {
     return { ok: false, message: failureMessage(error, 'untrackDeck', { deckId: id.data }) };
   }

@@ -35,3 +35,61 @@ export interface UntrackResult {
   ok: false;
   message: string;
 }
+
+// ---------------------------------------------------------------------------
+// Accounts (ADR 0006): `./auth-actions.ts`, `./account-actions.ts`, `./admin-actions.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * State of a sign-in form (claim, invite, one-time link). Success redirects instead of
+ * returning. `field` names the input the message is about; `values` keeps what was typed,
+ * because React resets a form after its action runs.
+ */
+export type SignInFormState =
+  | { status: 'idle' }
+  | {
+      status: 'error';
+      message: string;
+      field?: 'code' | 'name';
+      values?: { code?: string; name?: string };
+    };
+
+/** Result of a one-off account or admin action (revoke, sign out a device, disable). */
+export type AccountActionResult = { ok: true } | { ok: false; message: string };
+
+/** State of the display name form. */
+export type RenameState =
+  | { status: 'idle' }
+  | { status: 'saved'; displayName: string }
+  | { status: 'error'; message: string; value: string };
+
+/**
+ * State of "Create a bookmarklet". The bookmarklets embed the new key in plaintext: they
+ * exist only in this state, in the browser of the user who created them, until the page
+ * is left (never stored, never shown again).
+ */
+export type CreateBookmarkletState =
+  | { status: 'idle' }
+  | { status: 'created'; id: string; label: string; popup: string; sameTab: string }
+  | { status: 'error'; message: string; label: string };
+
+/** A QR code as an SVG path of its dark modules, on a `size` × `size` grid (no quiet zone). */
+export interface QrCodeData {
+  size: number;
+  path: string;
+}
+
+/**
+ * A new one-time link (device link, invite, recovery link), shown once to whoever made
+ * it. `url` contains the link's secret token.
+ */
+export type IssuedLinkState =
+  | { status: 'idle' }
+  | { status: 'created'; url: string; expiresAt: string; qr?: QrCodeData }
+  | { status: 'error'; message: string };
+
+/** State of the admin's "Invite someone" form. `url` contains the invite's secret token. */
+export type CreateInviteState =
+  | { status: 'idle' }
+  | { status: 'created'; url: string; expiresAt: string; note: string; role: 'admin' | 'member' }
+  | { status: 'error'; message: string; values: { note: string; role: string } };

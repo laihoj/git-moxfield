@@ -40,11 +40,14 @@ export function CardHeader({ title, level = 'h2', id, description, actions, clas
   const Heading = level;
   return (
     <div className={clsx('flex flex-wrap items-start justify-between gap-x-4 gap-y-2', className)}>
-      <div className="min-w-0 flex-1">
+      {/* At least 16rem wide: on narrow screens the actions wrap below instead of squeezing the text. */}
+      <div className="min-w-[min(100%,16rem)] flex-1">
         <Heading id={id} className="text-base font-semibold tracking-tight text-fg">
           {title}
         </Heading>
-        {description !== undefined && <div className="mt-0.5 text-sm text-muted">{description}</div>}
+        {description !== undefined && (
+          <div className="mt-0.5 text-sm text-pretty text-muted">{description}</div>
+        )}
       </div>
       {actions !== undefined && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>

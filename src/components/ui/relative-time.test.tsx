@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { formatDateTime, formatFullDateTime } from '@/lib/format';
 
-import { AbsoluteTime, ClockTime, RelativeTime } from './relative-time';
+import { AbsoluteTime, ClockTime, ExpiryTime, RelativeTime } from './relative-time';
 
 const EDITED = '2026-10-09T09:00:00.000Z';
 
@@ -100,5 +100,23 @@ describe('AbsoluteTime and ClockTime', () => {
     const [absolute, clock] = container.querySelectorAll('time');
     expect(absolute).toHaveTextContent(formatDateTime(EDITED));
     expect(clock?.textContent).toMatch(/^(\w{3} \d{1,2}, )?\d{1,2}:\d{2}\s[AP]M$/);
+  });
+});
+
+describe('ExpiryTime', () => {
+  it.each([
+    ['2026-10-09T12:15:00.000Z', 'Expires in 15 min'],
+    ['2026-10-10T11:00:00.000Z', 'Expires in 23 hours'],
+    ['2026-10-10T12:00:00.000Z', 'Expires in 1 day'],
+    ['2026-10-16T12:00:00.000Z', 'Expires in 7 days'],
+    ['2026-10-09T12:00:30.000Z', 'Expires in less than a minute'],
+    ['2026-10-09T12:00:00.000Z', 'Expired'],
+    ['2026-10-09T11:00:00.000Z', 'Expired'],
+  ])('describes a deadline at %s as %j', (deadline, text) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-09T12:00:00.000Z'));
+    const html = renderToString(<ExpiryTime value={deadline} />);
+    expect(html).toContain(`>${text}</time>`);
+    expect(html).toContain(`dateTime="${deadline}"`);
   });
 });

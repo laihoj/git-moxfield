@@ -7,9 +7,7 @@ import { RestorePanel } from '@/components/deck/restore-panel';
 import { VersionBadge } from '@/components/deck/version-row';
 import { versionLabel } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getServices } from '@/server/services';
-
-import { decodeSegment, parseSequence } from '../../../data';
+import { deckServices, decodeSegment, parseSequence } from '../../../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +15,8 @@ async function loadRestore(params: PageProps<'/decks/[deckId]/versions/[sequence
   const { deckId, sequence: rawSequence } = await params;
   const sequence = parseSequence(rawSequence);
   if (sequence === null) return null;
-  return getServices().restoreExport(decodeSegment(deckId), sequence);
+  const id = decodeSegment(deckId);
+  return (await deckServices(id)).restoreExport(id, sequence);
 }
 
 export async function generateMetadata({

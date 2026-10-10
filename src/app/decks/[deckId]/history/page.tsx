@@ -11,9 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { pluralize } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
-import { getServices } from '@/server/services';
-
-import { decodeSegment, loadOverview, loadTags } from '../data';
+import { deckServices, decodeSegment, loadOverview, loadTags } from '../data';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +29,7 @@ export default async function HistoryPage({ params, searchParams }: PageProps<'/
   const [overview, tags, versions] = await Promise.all([
     loadOverview(deckId),
     loadTags(deckId),
-    getServices().listVersions(deckId, { tag }),
+    deckServices(deckId).then((services) => services.listVersions(deckId, { tag })),
   ]);
   if (overview === null) notFound();
 

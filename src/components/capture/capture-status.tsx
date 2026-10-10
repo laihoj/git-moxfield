@@ -4,8 +4,9 @@ import { Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Alert } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, ButtonLink } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { routes } from '@/lib/routes';
 
 import type { SubmissionPhase } from './use-capture-submission';
 
@@ -61,7 +62,28 @@ export function CaptureStatus({ phase, onTrack, onCancel }: CaptureStatusProps) 
       );
     case 'failed':
       return (
-        <Alert tone="error" role="alert" title="The deck could not be imported">
+        <Alert
+          tone="error"
+          role="alert"
+          title={
+            phase.code === 'invalid-key'
+              ? 'This bookmarklet no longer works'
+              : phase.code === 'unauthenticated'
+                ? 'You’re signed out'
+                : 'The deck could not be imported'
+          }
+          actions={
+            phase.code === 'invalid-key' ? (
+              <ButtonLink href={routes.setup()} variant="secondary" size="sm">
+                Make a new bookmarklet
+              </ButtonLink>
+            ) : phase.code === 'unauthenticated' ? (
+              <ButtonLink href={routes.signIn(routes.capturePaste())} variant="secondary" size="sm">
+                Sign in
+              </ButtonLink>
+            ) : undefined
+          }
+        >
           <span className="break-words">{phase.message}</span>
         </Alert>
       );

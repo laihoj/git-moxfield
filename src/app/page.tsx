@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { DeckCard } from '@/components/deck/deck-card';
 import { TrackDeckForm } from '@/components/deck/track-deck-form';
 import { Card } from '@/components/ui/card';
-import { getServices } from '@/server/services';
+import { servicesFor } from '@/server/access';
+import { requireUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,7 @@ const LOOP_STEPS = [
 ] as const;
 
 export default async function DecksPage() {
-  const decks = await getServices().listDecks();
+  const decks = await servicesFor(await requireUser()).listDecks();
 
   if (decks.length === 0) {
     return (
