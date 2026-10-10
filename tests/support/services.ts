@@ -1,0 +1,240 @@
+/**
+ * Test harness for the service layer: an in-memory database, the REAL Moxfield deck
+ * source wired to a {@link FakeMoxfieldApi}, a manual clock shared by the services and
+ * the Moxfield client (cooldowns, block backoff), and a silent logger that records
+ * entries for assertions.
+ */
+import type { Db } from '@/server/db/client';
+import { parseConfig, type AppConfig } from '@/server/config';
+import type { Logger } from '@/server/logger';
+import { createRepositories, type Repositories } from '@/server/repositories';
+import {
+  createServices,
+  KeyedMutex,
+  type CommitOutcome,
+  type DeckServices,
+  type FetchOutcome,
+  type VersionRefDTO,
+} from '@/server/services';
+import { createDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
+import { openTestDatabase } from '@tests/support/db';
+import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
+
+/** A clock that only moves when told to. */
+export class ManualClock {
+  private ms: number;
+
+  constructor(start = '2026-10-09T12:00:00.000Z') {
+    this.ms = Date.parse(start);
+  }
+
+  readonly now = (): Date => new Date(this.ms);
+
+  readonly epochMs = (): number => this.ms;
+
+  advance(seconds: number): void {
+    this.ms += seconds * 1000;
+  }
+
+  iso(): string {
+    return new Date(this.ms).toISOString();
+  }
+}
+
+export interface LogEntry {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  context: Record<string, unknown> | undefined;
+}
+
+/** A logger that writes nothing and keeps every entry for assertions. */
+export function recordingLogger(): Logger & { entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  const log =
+    (level: LogEntry['level']) =>
+    (message: string, context?: Record<string, unknown>): void => {
+      entries.push({ level, message, context });
+    };
+  return { entries, debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
+}
+
+export interface ServiceHarness {
+  services: DeckServices;
+  api: FakeMoxfieldApi;
+  clock: ManualClock;
+  db: Db;
+  /** Repositories on the same database, for assertions that bypass the services. */
+  repos: Repositories;
+  config: AppConfig;
+  sources: DeckSourceRegistry;
+  logger: ReturnType<typeof recordingLogger>;
+  /** Creates another service instance on the same database, sources and locks. */
+  sibling(): DeckServices;
+}
+
+export interface ServiceHarnessOptions {
+  /** Extra environment variables for `parseConfig`. */
+  env?: Record<string, string | undefined>;
+  /** Replaces the registry built from the config (e.g. to wrap a source). */
+  sources?: (defaults: DeckSourceRegistry) => DeckSourceRegistry;
+}
+
+/**
+ * Services over a fresh in-memory database. Defaults: no request spacing, a 10 s
+ * refresh cooldown, auto refresh after 300 s and a one-hour block backoff.
+ */
+export function createServiceHarness(options: ServiceHarnessOptions = {}): ServiceHarness {
+  const api = new FakeMoxfieldApi();
+  const clock = new ManualClock();
+  const logger = recordingLogger();
+  const config = parseConfig({
+    MOXFIELD_API_BASE_URL: api.apiBaseUrl,
+    MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0',
+    REFRESH_COOLDOWN_SECONDS: '10',
+    AUTO_REFRESH_AFTER_SECONDS: '300',
+    MOXFIELD_BLOCK_BACKOFF_SECONDS: '3600',
+    ...options.env,
+  });
+  const defaults = createDeckSourceRegistry(config, {
+    fetchImpl: api.fetch,
+    now: clock.epochMs,
+    sleep: () => Promise.resolve(),
+    logger,
+  });
+  const sources = options.sources ? options.sources(defaults) : defaults;
+  const db = openTestDatabase();
+  const locks = new KeyedMutex();
+  const build = (): DeckServices => createServices({ db, sources, config, now: clock.now, logger, locks });
+  return {
+    services: build(),
+    api,
+    clock,
+    db,
+    repos: createRepositories(db, { now: clock.now }),
+    config,
+    sources,
+    logger,
+    sibling: build,
+  };
+}
+
+export const BLUE_FARM_PUBLIC_ID = 'BlueFarmTestDeck000001';
+export const BLUE_FARM_URL = `https://moxfield.com/decks/${BLUE_FARM_PUBLIC_ID}`;
+
+/** Primer of {@link blueFarmSpec}, using Moxfield directives. */
+export const BLUE_FARM_PRIMER = [
+  '# Blue Farm',
+  '',
+  "Win with [[Thassa's Oracle]] after [[Underworld Breach]] loops.",
+  '',
+  '===panel: Mulligans',
+  'Keep fast mana and a tutor.',
+  '===endpanel',
+].join('\n');
+
+/**
+ * A small Tymna/Kraum deck on (fake) Moxfield. Card lists can be replaced through
+ * `overrides`; the version defaults to 1.
+ */
+export function blueFarmSpec(overrides: Partial<MoxDeckSpec> = {}): MoxDeckSpec {
+  return {
+    publicId: BLUE_FARM_PUBLIC_ID,
+    name: 'Blue Farm',
+    format: 'commander',
+    description: 'Tymna/Kraum turbo',
+    version: 1,
+    hubs: ['cEDH'],
+    lastUpdatedAtUtc: '2026-10-01T12:00:00.000Z',
+    commanders: ['Tymna the Weaver', "Kraum, Ludevic's Opus"],
+    mainboard: [
+      'Dress Down',
+      'Underworld Breach',
+      "Thassa's Oracle",
+      'Demonic Tutor',
+      'Rhystic Study',
+      'Orcish Bowmasters',
+      'Force of Will',
+      'Mana Vault',
+      'Sol Ring',
+      'Command Tower',
+      '3 Island',
+    ],
+    considering: ['Mnemonic Betrayal', 'Peer into the Abyss'],
+    sideboard: ['Pyroclasm'],
+    primer: BLUE_FARM_PRIMER,
+    ...overrides,
+  };
+}
+
+/** Moves a card between two board lists of a spec (returns a new spec). */
+export function moveCard(
+  spec: MoxDeckSpec,
+  name: string,
+  from: 'mainboard' | 'considering' | 'sideboard',
+  to: 'mainboard' | 'considering' | 'sideboard',
+): MoxDeckSpec {
+  const source = spec[from] ?? [];
+  const entry = source.find((card) => specName(card) === name);
+  if (entry === undefined) throw new Error(`${name} is not in ${from}`);
+  return {
+    ...spec,
+    [from]: source.filter((card) => card !== entry),
+    [to]: [...(spec[to] ?? []), entry],
+  };
+}
+
+function specName(card: MoxCardSpec): string {
+  return typeof card === 'string' ? card.replace(/^\d+\s+/, '') : card.name;
+}
+
+/** Narrows away `null`/`undefined`, failing the test with `what` otherwise. */
+export function defined<T>(value: T | null | undefined, what = 'value'): T {
+  if (value === null || value === undefined) throw new Error(`Expected ${what} to be defined`);
+  return value;
+}
+
+/** Puts `spec` on the fake Moxfield and tracks it; returns the deck id. */
+export async function trackDeck(
+  harness: ServiceHarness,
+  spec: MoxDeckSpec = blueFarmSpec(),
+): Promise<string> {
+  harness.api.setDeck(spec);
+  const outcome = await harness.services.trackDeck(`https://moxfield.com/decks/${spec.publicId}`);
+  if (!outcome.ok) throw new Error(`Tracking failed: ${outcome.reason}`);
+  return outcome.deckId;
+}
+
+/** Publishes `spec` on the fake Moxfield, waits out the refresh cooldown and refreshes. */
+export async function publishAndRefresh(
+  harness: ServiceHarness,
+  deckId: string,
+  spec: MoxDeckSpec,
+): Promise<FetchOutcome> {
+  harness.api.setDeck(spec);
+  harness.clock.advance(60);
+  return harness.services.refresh(deckId, 'manual');
+}
+
+/** Commits the working state exactly as the deck overview presents it for review. */
+export async function commitReviewed(
+  harness: ServiceHarness,
+  deckId: string,
+  message: string,
+  tags?: string[],
+): Promise<CommitOutcome> {
+  const overview = defined(await harness.services.getOverview(deckId), 'overview');
+  const working = defined(overview.working, 'working state');
+  harness.clock.advance(1);
+  return harness.services.commit(deckId, {
+    message,
+    expectedObservationId: working.id,
+    expectedHeadCommitId: overview.head?.commitId ?? null,
+    ...(tags ? { tags } : {}),
+  });
+}
+
+/** The version of a successful commit; fails the test for any other outcome. */
+export function committed(outcome: CommitOutcome): VersionRefDTO {
+  if (!outcome.ok) throw new Error(`Commit failed (${outcome.reason}): ${outcome.message}`);
+  return outcome.version;
+}
