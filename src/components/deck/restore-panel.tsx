@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { ArrowUpRight, Download, Eraser, Eye, Hand, Info } from 'lucide-react';
 
 import { isKnownZone, type ZoneId } from '@/core/zones';
-import type { RestoreExport, RestoreSection } from '@/integrations/deck-source';
+import type { RestoreExport, RestorePrimer, RestoreSection } from '@/integrations/deck-source';
 import { Badge } from '@/components/ui/badge';
 import { buttonClasses, ExternalButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -79,6 +79,7 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
         {restore.sections.map((section) => (
           <SectionBlock key={section.zone} section={section} />
         ))}
+        {restore.primer !== null && <PrimerBlock primer={restore.primer} />}
       </section>
 
       {restore.combined !== null && (
@@ -222,6 +223,57 @@ function SectionBlock({ section }: { section: RestoreSection }) {
             />
             <span className="text-xs text-muted tabular">{pluralize(lines, 'line')}</span>
           </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * The version's primer as Moxfield markup. Pasted into Moxfield's primer editor it
+ * reproduces the primer exactly, directives and card links included. `id` makes it
+ * linkable (`…/restore#restore-primer`) from the compare and version pages.
+ */
+function PrimerBlock({ primer }: { primer: RestorePrimer }) {
+  const lines = lineCount(primer.text);
+  return (
+    <Card
+      as="article"
+      id="restore-primer"
+      aria-labelledby="restore-primer-label"
+      className="flex scroll-mt-4 flex-col gap-3"
+    >
+      <div className="flex flex-col gap-0.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <h3 id="restore-primer-label" className="text-sm font-semibold tracking-wide text-fg uppercase">
+            Primer
+          </h3>
+          {primer.text !== '' && (
+            <span className="text-sm text-muted tabular">{pluralize(lines, 'line')}</span>
+          )}
+        </div>
+        <p className="text-sm break-words text-muted">{primer.target}</p>
+      </div>
+      {primer.text === '' ? (
+        <p className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-3 text-sm text-fg">
+          <Eraser aria-hidden="true" className="size-4 shrink-0 text-muted" />
+          Clear the primer in Moxfield if it has one: this version has no primer.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <TextBlock id="restore-primer-text" label="Primer source" text={primer.text} />
+          <p className="text-xs text-muted">
+            Moxfield markup, exactly as captured. Paste it into the primer editor as is.
+          </p>
+          <CopyButton
+            text={primer.text}
+            label="Copy primer"
+            subject="Primer"
+            variant="primary"
+            size="lg"
+            block
+            className="mt-2"
+          />
         </div>
       )}
     </Card>

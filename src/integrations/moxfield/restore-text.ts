@@ -175,8 +175,15 @@ function buildInstructions(snapshot: CanonicalSnapshot, sections: readonly Resto
       `Set the companion: make sure ${cardList(zoneCards(snapshot, 'companions'))} is in the Sideboard, then use its card menu › Set as Companion.`,
     );
   }
+  if (snapshot.primer !== null) {
+    steps.push(
+      snapshot.primer === ''
+        ? `This version has no primer: if the deck has one now, clear it (${PRIMER_TARGET}).`
+        : `Restore the primer: ${PRIMER_TARGET}, select all text, paste the Primer block and save.`,
+    );
+  }
   steps.push(
-    'Compare the deck name, format, description, hubs and primer with this version and edit them by hand if they differ.',
+    'Compare the deck name, format, description and hubs with this version and edit them by hand if they differ.',
   );
   const counts = sections
     .filter((section) => section.cardCount > 0 || ALWAYS_EXPORTED.includes(section.zone))
@@ -199,10 +206,12 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
   const deckFields = ['deck name', 'format'];
   if (snapshot.deck.tags.length > 0) deckFields.push('hubs');
   if (snapshot.deck.description !== '') deckFields.push('description');
-  if (snapshot.primer !== null && snapshot.primer !== '') deckFields.push('primer');
   limitations.push(
     `The ${listText(deckFields)} are not part of the pasted text and must be restored by hand.`,
   );
+  if (snapshot.primer === null) {
+    limitations.push('The primer was not captured for this version, so it cannot be restored from here.');
+  }
 
   if (hasCombined && zoneCount(snapshot, 'considering') > 0) {
     limitations.push(
@@ -274,6 +283,9 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
  * they have cards. `combined` is the Main Deck plus a `SIDEBOARD:` block for Moxfield's
  * "Create New Deck › Paste in List" form, or `null` when there is no mainboard.
  */
+/** Where a primer is edited on Moxfield (the deck page's Primer tab, `/decks/{id}/primer`). */
+const PRIMER_TARGET = 'Deck page › Primer › Edit';
+
 export function moxfieldRestoreExport(snapshot: CanonicalSnapshot): RestoreExport {
   const sections = buildSections(snapshot);
   const main = zoneText(snapshot, 'mainboard');
@@ -288,6 +300,9 @@ export function moxfieldRestoreExport(snapshot: CanonicalSnapshot): RestoreExpor
   return {
     source: MOXFIELD_SOURCE_ID,
     sections,
+    // The primer is kept verbatim in Moxfield's own markup, so pasting it into
+    // Moxfield's primer editor reproduces it exactly (directives and [[Card]] links).
+    primer: snapshot.primer === null ? null : { text: snapshot.primer, target: PRIMER_TARGET },
     combined,
     instructions: buildInstructions(snapshot, sections),
     limitations: buildLimitations(snapshot, combined !== null),

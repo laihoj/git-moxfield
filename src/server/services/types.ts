@@ -127,6 +127,11 @@ export interface CompareDTO {
   to: CompareSideDTO;
   diff: DeckDiff;
   primerDiff: PrimerDiff;
+  /**
+   * Each side's primer source (the source's own markup), so a primer can be copied back
+   * to Moxfield: `''` for no primer (or the empty deck), `null` when not captured.
+   */
+  primers: { from: string | null; to: string | null };
   catalog: Record<CardKey, CardFacts>;
   /** All versions, newest first, for the pickers. */
   versions: VersionRefDTO[];

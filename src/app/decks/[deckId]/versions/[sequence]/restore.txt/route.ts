@@ -40,6 +40,11 @@ function restoreText({ deck, version, export: restore }: RestoreDTO): string {
     lines.push(section.text === '' ? '(empty: clear this tab)' : section.text.trimEnd());
     lines.push('');
   }
+  if (restore.primer !== null) {
+    lines.push('=== Primer ===', `Paste into: ${restore.primer.target}`);
+    lines.push(restore.primer.text === '' ? '(no primer: clear the primer)' : restore.primer.text.trimEnd());
+    lines.push('');
+  }
   if (restore.combined !== null) {
     lines.push(
       '=== Create a new deck instead (combined list) ===',

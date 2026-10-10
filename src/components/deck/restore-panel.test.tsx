@@ -80,3 +80,39 @@ describe('RestorePanel', () => {
     );
   });
 });
+
+describe('RestorePanel primer', () => {
+  function renderPrimer(primer: string | null) {
+    return renderWithProviders(
+      <RestorePanel
+        restore={moxfieldRestoreExport(buildSnapshot({ zones: { mainboard: ['Sol Ring'] }, primer }))}
+        deckUrl="https://moxfield.com/decks/abc"
+        downloadHref="/decks/d/versions/3/restore.txt"
+      />,
+    );
+  }
+
+  it('offers the primer source verbatim, with its Moxfield target and a copy button', () => {
+    const primer = "===panel: Win lines\n1. [[Thassa's Oracle]] + [[Demonic Consultation]]\n===endpanel\n";
+    renderPrimer(primer);
+    const block = screen.getByRole('article', { name: 'Primer' });
+    expect(block).toHaveAttribute('id', 'restore-primer');
+    expect(block).toHaveTextContent('Deck page › Primer › Edit');
+    expect(block).toHaveTextContent('3 lines');
+    expect(within(block).getByRole('textbox', { name: 'Primer source' })).toHaveValue(primer);
+    expect(within(block).getByRole('button', { name: 'Copy primer' })).toHaveClass('bg-accent');
+  });
+
+  it('asks to clear the primer when the version had none', () => {
+    renderPrimer('');
+    const block = screen.getByRole('article', { name: 'Primer' });
+    expect(block).toHaveTextContent('this version has no primer');
+    expect(within(block).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('has no primer block when the primer was not captured', () => {
+    renderPrimer(null);
+    expect(screen.queryByRole('article', { name: 'Primer' })).not.toBeInTheDocument();
+    expect(screen.getByText(/The primer was not captured for this version/)).toBeInTheDocument();
+  });
+});

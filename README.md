@@ -158,13 +158,17 @@ Moxfield's **Bulk Edit**, which has one tab per board:
 | Sideboard                    | Bulk Edit › Sideboard                                           |
 | Considering                  | Bulk Edit › Considering                                         |
 | Attractions, contraptions, … | Bulk Edit › Other › …                                           |
+| Primer                       | Deck page › Primer › Edit (paste the exact Moxfield markup)     |
 
 Lines look like `1 Thassa's Oracle (THB) 308 *F*`, so printings and finishes are
 restored too. Empty boards come with an explicit "clear this tab" step, because saving
-Bulk Edit replaces each board. The page also lists limitations: alter/proxy flags,
-card tags, non-English printings, multiple printings of one card, and the primer
-(restore that by hand). Restoring never changes git-moxfield's history. After you save
-in Moxfield, the restored state shows up as uncommitted changes.
+Bulk Edit replaces each board. The primer is offered verbatim, in Moxfield's own markup
+(`===panel:` directives, `[[Card]]` links), so pasting it into Moxfield's primer editor
+reproduces it exactly. A version's primer can also be copied from its Primer tab, or
+from either side of a Compare. The page also lists limitations: alter/proxy flags, card
+tags, non-English printings, multiple printings of one card. Restoring never changes
+git-moxfield's history. After you save in Moxfield, the restored state shows up as
+uncommitted changes.
 
 ## Connecting Moxfield (important)
 
@@ -408,8 +412,8 @@ Verified against live Moxfield on 2026-10-09.
   so the bookmarklet is the practical path today. If Moxfield adds a COOP header or a
   stricter CSP, the popup bookmarklet may stop working. The same-tab variant and paste
   remain.
-- Restore cannot set commanders, the companion or the primer through Bulk Edit;
-  these are manual steps. Card tags (`#tag` / `#!tag`) are not restored, because
+- Restore cannot set commanders or the companion through Bulk Edit; these are manual
+  steps. The primer is a separate paste into Moxfield's primer editor. Card tags (`#tag` / `#!tag`) are not restored, because
   Moxfield's JSON does not say whether a tag is deck-specific or global.
 - Restore text uses `Front // Back` names for double-faced cards. Moxfield's own
   export currently writes `Front / Back`, and both are expected to resolve.

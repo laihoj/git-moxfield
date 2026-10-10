@@ -139,14 +139,15 @@ describe('moxfieldRestoreExport — golden', () => {
       'If any other Bulk Edit tab (Other › Attraction Deck, Other › Contraption Deck, Other › Sticker Sheets, Other › Planar Deck and Other › Schemes) contains cards, clear it too: this version has none there.',
       ...BULK_EDIT_STEPS_TAIL,
       'Set the companion: make sure "Lurrus of the Dream-Den" is in the Sideboard, then use its card menu › Set as Companion.',
-      'Compare the deck name, format, description, hubs and primer with this version and edit them by hand if they differ.',
+      'Restore the primer: Deck page › Primer › Edit, select all text, paste the Primer block and save.',
+      'Compare the deck name, format, description and hubs with this version and edit them by hand if they differ.',
       'Check the card counts on the deck page: Commanders 2, Companion 1, Mainboard 6, Sideboard 1, Considering 0, Tokens 1, Dungeon deck 1.',
     ]);
   });
 
   it('lists the limitations relevant to this snapshot', () => {
     expect(result.limitations).toEqual([
-      'The deck name, format, hubs, description and primer are not part of the pasted text and must be restored by hand.',
+      'The deck name, format, hubs and description are not part of the pasted text and must be restored by hand.',
       'Alter and proxy markings cannot be expressed in import text; mark them again by hand: "Æther Snap".',
       'Non-English printings cannot be added via Bulk Edit; Moxfield adds these cards in English: "Æther Snap".',
       'Several printings of one card ("Island") need the "Allow multiple printings" deck preference; otherwise Moxfield keeps only one printing.',
@@ -185,7 +186,8 @@ describe('moxfieldRestoreExport — simple and empty decks', () => {
       'In the "Considering" tab, select all text and replace it with the Considering section (1 card).',
       'If any other Bulk Edit tab (Other › Attraction Deck, Other › Contraption Deck, Other › Sticker Sheets, Other › Planar Deck and Other › Schemes) contains cards, clear it too: this version has none there.',
       ...BULK_EDIT_STEPS_TAIL,
-      'Compare the deck name, format, description, hubs and primer with this version and edit them by hand if they differ.',
+      'This version has no primer: if the deck has one now, clear it (Deck page › Primer › Edit).',
+      'Compare the deck name, format, description and hubs with this version and edit them by hand if they differ.',
       'Check the card counts on the deck page: Mainboard 1, Sideboard 0, Considering 1.',
     ]);
   });
@@ -275,6 +277,33 @@ describe('moxfieldRestoreExport — simple and empty decks', () => {
       '',
       '1 Island (ZNR) 271\n1 Peer into the Abyss (M21) 360\n',
     ]);
+  });
+});
+
+describe('moxfieldRestoreExport — primer', () => {
+  it('returns the primer verbatim in Moxfield markup, so pasting it reproduces the primer', () => {
+    const primer =
+      "===center\n# **Blue Farm**\n===endcenter\n\n===panel: Win lines\n1. [[Thassa's Oracle]] + [[Demonic Consultation]]\n===endpanel\n";
+    const result = moxfieldRestoreExport(buildSnapshot({ primer }));
+    expect(result.primer).toEqual({ text: primer, target: 'Deck page › Primer › Edit' });
+    expect(result.limitations.join('\n')).not.toMatch(/primer/i);
+  });
+
+  it('offers clearing the primer when the version had none', () => {
+    const result = moxfieldRestoreExport(buildSnapshot({ primer: '' }));
+    expect(result.primer).toEqual({ text: '', target: 'Deck page › Primer › Edit' });
+    expect(result.instructions).toContain(
+      'This version has no primer: if the deck has one now, clear it (Deck page › Primer › Edit).',
+    );
+  });
+
+  it('cannot restore a primer that was not captured, and says so', () => {
+    const result = moxfieldRestoreExport(buildSnapshot({ primer: null }));
+    expect(result.primer).toBeNull();
+    expect(result.instructions.join('\n')).not.toMatch(/primer/i);
+    expect(result.limitations).toContain(
+      'The primer was not captured for this version, so it cannot be restored from here.',
+    );
   });
 });
 

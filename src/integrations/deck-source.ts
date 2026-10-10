@@ -129,10 +129,24 @@ export interface RestoreSection {
   cardCount: number;
 }
 
+/** The primer of a version, ready to paste into the source site's primer editor. */
+export interface RestorePrimer {
+  /**
+   * The primer exactly as captured, in the source's own markup (e.g. Moxfield's
+   * `===panel:` directives and `[[Card]]` references), so pasting it reproduces the
+   * primer. `''` when the version has no primer.
+   */
+  text: string;
+  /** Where to paste it, e.g. `Deck page › Primer › Edit`. */
+  target: string;
+}
+
 export interface RestoreExport {
   source: string;
   /** Per-zone sections in canonical zone order. Empty zones included when the target must be cleared. */
   sections: RestoreSection[];
+  /** The version's primer, or `null` when it was not captured (then it cannot be restored). */
+  primer: RestorePrimer | null;
   /** Single combined text, when the source's importer accepts all zones in one paste. */
   combined: { text: string; note: string } | null;
   /** Ordered, user-facing steps. */

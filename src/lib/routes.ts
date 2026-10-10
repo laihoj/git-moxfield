@@ -41,8 +41,9 @@ export const routes = {
       hash,
     ),
 
-  restore: (deckId: string, sequence: number): Route =>
-    `/decks/${enc(deckId)}/versions/${sequence}/restore` as Route,
+  /** `section: 'primer'` links straight to the primer block of the restore page. */
+  restore: (deckId: string, sequence: number, section?: 'primer'): Route =>
+    `/decks/${enc(deckId)}/versions/${sequence}/restore${section === 'primer' ? '#restore-primer' : ''}` as Route,
 
   restoreText: (deckId: string, sequence: number): string =>
     `/decks/${enc(deckId)}/versions/${sequence}/restore.txt`,

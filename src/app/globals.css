@@ -464,3 +464,16 @@
     padding-bottom: calc(var(--bottom-nav-offset) + env(safe-area-inset-bottom));
   }
 }
+
+/*
+ * Screen-reader-only text must never end up in copied text. Diff rows carry spoken
+ * prefixes ("Removed: …", "Moved from Mainboard to Considering: …") that would
+ * otherwise be pasted along with the visible text. Assistive technology still reads
+ * it; it just cannot be selected.
+ */
+@layer base {
+  .sr-only {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}

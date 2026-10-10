@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { CompareForm } from '@/components/deck/compare-form';
 import { DiffView, diffCountLabel } from '@/components/deck/diff-view';
 import { PrimerDiffView } from '@/components/deck/primer-diff-view';
+import { CopyButton } from '@/components/ui/copy-button';
 import { SummaryChips } from '@/components/deck/summary-chips';
 import { VersionBadge } from '@/components/deck/version-row';
 import { Alert } from '@/components/ui/alert';
@@ -164,14 +165,31 @@ export default async function ComparePage({ params, searchParams }: PageProps<'/
 
       {(primerDiff.unknown || primerDiff.hunks.length > 0) && (
         <Card as="section" aria-labelledby="primer" className="scroll-mt-4">
-          <h2 id="primer" className="mb-3 text-base font-semibold text-fg">
-            Primer
-          </h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <h2 id="primer" className="text-base font-semibold text-fg">
+              Primer
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              <PrimerCopyButton side={comparison.from} primer={comparison.primers.from} />
+              <PrimerCopyButton side={comparison.to} primer={comparison.primers.to} />
+            </div>
+          </div>
           <PrimerDiffView diff={primerDiff} />
         </Card>
       )}
     </div>
   );
+}
+
+/**
+ * Copies one side's primer source, to put that primer back on Moxfield (a diff mixes
+ * both sides, so it is not something to copy from). Nothing to copy for the empty deck,
+ * an uncaptured primer or a version without a primer.
+ */
+function PrimerCopyButton({ side, primer }: { side: CompareSideDTO; primer: string | null }) {
+  if (side.kind === 'empty' || primer === null || primer === '') return null;
+  const name = side.kind === 'version' ? versionLabel(side.version.sequence) : 'current';
+  return <CopyButton text={primer} label={`Copy ${name} primer`} subject={`${name} primer`} size="sm" />;
 }
 
 function SideSummary({ side, label, deckId }: { side: CompareSideDTO; label: string; deckId: string }) {

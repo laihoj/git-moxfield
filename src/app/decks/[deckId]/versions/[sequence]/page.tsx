@@ -285,7 +285,31 @@ export default async function VersionPage({
                 ) : primerMarkdown === null ? (
                   <EmptyNote>This deck had no primer in this version.</EmptyNote>
                 ) : (
-                  <PrimerView markdown={primerMarkdown} />
+                  <>
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border pb-3">
+                      <p className="text-sm text-muted">
+                        To put this primer back on Moxfield, copy its source and paste it into the primer
+                        editor.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <CopyButton
+                          text={snapshot.primer}
+                          label="Copy primer"
+                          subject="Primer"
+                          variant="secondary"
+                          size="sm"
+                        />
+                        <ButtonLink
+                          href={routes.restore(deck.id, version.sequence, 'primer')}
+                          variant="ghost"
+                          size="sm"
+                        >
+                          Restore steps
+                        </ButtonLink>
+                      </div>
+                    </div>
+                    <PrimerView markdown={primerMarkdown} />
+                  </>
                 )}
               </Card>
             </>

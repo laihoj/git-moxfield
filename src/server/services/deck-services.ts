@@ -602,6 +602,7 @@ class DefaultDeckServices implements DeckServices {
         to: toSide.side,
         diff,
         primerDiff: primerLineDiff(fromSnapshot.primer, toSnapshot.primer),
+        primers: { from: fromSnapshot.primer, to: toSnapshot.primer },
         catalog: this.catalogFor(diffCardKeys(diff)),
         versions: this.repos.commits.listForDeck(deckId).map(toVersionRefDTO),
         hasWorking: state.working !== null,
