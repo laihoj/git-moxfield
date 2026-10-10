@@ -163,6 +163,33 @@ describe('moxfieldRestoreExport — golden', () => {
   });
 });
 
+describe('moxfieldRestoreExport — target deck', () => {
+  const snapshot = buildSnapshot({
+    zones: { commanders: ['Tymna the Weaver'], mainboard: ['Sol Ring', '3 Island'] },
+    primer: '# Primer\n',
+  });
+
+  it('restores into the deck the snapshot was captured from by default', () => {
+    const result = moxfieldRestoreExport(snapshot);
+    expect(moxfieldRestoreExport(snapshot, 'source-deck')).toEqual(result);
+    expect(result.instructions[0]).toBe(
+      'Open the deck on Moxfield and reload the page, so you edit its latest state.',
+    );
+  });
+
+  it('only changes the first step for a deck of the reader’s own (someone the deck was shared with)', () => {
+    const source = moxfieldRestoreExport(snapshot, 'source-deck');
+    const own = moxfieldRestoreExport(snapshot, 'own-deck');
+    expect(own.instructions[0]).toBe(
+      'Open a deck of your own on Moxfield (or create one) and reload its page, so you edit its latest state.',
+    );
+    expect({ ...own, instructions: own.instructions.slice(1) }).toEqual({
+      ...source,
+      instructions: source.instructions.slice(1),
+    });
+  });
+});
+
 describe('moxfieldRestoreExport — simple and empty decks', () => {
   it('only states always-relevant limitations for a plain deck', () => {
     const snapshot = buildSnapshot({

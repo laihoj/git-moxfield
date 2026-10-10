@@ -7,7 +7,7 @@ import type { VersionListItemDTO } from '@/server/services/types';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { pluralize, versionLabel } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { DiffStatsInline } from './diff-stats';
 
@@ -35,7 +35,8 @@ export function VersionBadge({ sequence, latest = false }: { sequence: number; l
 }
 
 export interface VersionRowProps {
-  deckId: string;
+  /** The deck pages the row links within (the owner's or a share link's). */
+  scope: DeckScope;
   version: VersionListItemDTO;
   latest: boolean;
   /** Leading control (selection checkbox) rendered above the stretched link. */
@@ -50,7 +51,7 @@ export interface VersionRowProps {
  * primer/commander indicators. The whole row links to the version page.
  */
 export function VersionRow({
-  deckId,
+  scope,
   version,
   latest,
   leading,
@@ -68,7 +69,7 @@ export function VersionRow({
     >
       {leading}
       <Link
-        href={routes.version(deckId, version.sequence)}
+        href={deckRoutes(scope).version(version.sequence)}
         className="shrink-0 rounded-md after:absolute after:inset-0 after:content-[''] focus-visible:outline-offset-4"
         aria-label={`${versionLabel(version.sequence)}: ${version.message}`}
       >

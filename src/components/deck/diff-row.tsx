@@ -6,7 +6,7 @@ import type { CanonicalPrinting, CardFacts, CardKey } from '@/core/model';
 import type { CardChange } from '@/core/diff/types';
 import { zoneLabel } from '@/core/zones';
 import { MINUS_SIGN } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
@@ -124,7 +124,8 @@ function changeQuantity(change: CardChange): number | null {
 export interface DiffRowProps {
   change: CardChange;
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  /** The deck pages the card name links within (the owner's or a share link's). */
+  scope: DeckScope;
   /** Show the zone badge for zone-scoped changes (used where the section is not a zone, e.g. Commanders). */
   showZone?: boolean;
 }
@@ -134,12 +135,12 @@ export interface DiffRowProps {
  * detail, mana cost and, for moves, `from → to` zone badges. On small screens the
  * zone badges wrap below the name.
  */
-export function DiffRow({ change, catalog, deckId, showZone = false }: DiffRowProps) {
+export function DiffRow({ change, catalog, scope, showZone = false }: DiffRowProps) {
   const { glyph, tone, meaning } = glyphOf(change);
   const facts = catalog[change.key];
   const quantity = changeQuantity(change);
   const detail = changeDetail(change);
-  const href: Route = routes.card(deckId, change.key);
+  const href: Route = deckRoutes(scope).card(change.key);
 
   let zones: ReactNode = null;
   if (change.type === 'moved') {

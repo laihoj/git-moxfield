@@ -1,15 +1,15 @@
 'use client';
 
 import clsx from 'clsx';
-import { Activity, GitCompareArrows, History, Search } from 'lucide-react';
+import { Activity, GitCompareArrows, History, LayoutDashboard, Search } from 'lucide-react';
 import type { Route } from 'next';
 import Link from 'next/link';
 import { useSelectedLayoutSegments } from 'next/navigation';
 import type { ComponentType } from 'react';
 
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
-type DeckSection = 'status' | 'history' | 'compare' | 'cards';
+type DeckSection = 'overview' | 'history' | 'compare' | 'cards';
 
 interface NavItem {
   id: DeckSection;
@@ -18,9 +18,15 @@ interface NavItem {
   Icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' }>;
 }
 
-/** Active section from the segments below `/decks/[deckId]`; version pages belong to History. */
-function activeSection(segments: readonly string[]): DeckSection {
+/**
+ * Active section from the segments below the deck (`/decks/[deckId]` or `/s/[token]`);
+ * version pages belong to History. Pages outside the four sections (the owner's Share
+ * page) mark none.
+ */
+function activeSection(segments: readonly string[]): DeckSection | null {
   switch (segments[0]) {
+    case undefined:
+      return 'overview';
     case 'history':
     case 'versions':
       return 'history';
@@ -29,7 +35,7 @@ function activeSection(segments: readonly string[]): DeckSection {
     case 'cards':
       return 'cards';
     default:
-      return 'status';
+      return null;
   }
 }
 
@@ -38,14 +44,20 @@ function activeSection(segments: readonly string[]): DeckSection {
  * `md` up; a fixed bottom bar with icons on small screens (respecting the home
  * indicator's safe area). The bottom bar marks the page with `data-bottom-nav`, which
  * reserves space for it at the end of the page (see globals.css).
+ *
+ * Share link viewers get the same tabs within the link's pages, with Overview in place
+ * of Status: they see committed versions only, never the state of the deck on Moxfield.
  */
-export function DeckNav({ deckId }: { deckId: string }) {
+export function DeckNav({ scope }: { scope: DeckScope }) {
   const active = activeSection(useSelectedLayoutSegments());
+  const routes = deckRoutes(scope);
   const items: NavItem[] = [
-    { id: 'status', label: 'Status', href: routes.deck(deckId), Icon: Activity },
-    { id: 'history', label: 'History', href: routes.history(deckId), Icon: History },
-    { id: 'compare', label: 'Compare', href: routes.compare(deckId), Icon: GitCompareArrows },
-    { id: 'cards', label: 'Cards', href: routes.cards(deckId), Icon: Search },
+    scope.kind === 'owner'
+      ? { id: 'overview', label: 'Status', href: routes.overview(), Icon: Activity }
+      : { id: 'overview', label: 'Overview', href: routes.overview(), Icon: LayoutDashboard },
+    { id: 'history', label: 'History', href: routes.history(), Icon: History },
+    { id: 'compare', label: 'Compare', href: routes.compare(), Icon: GitCompareArrows },
+    { id: 'cards', label: 'Cards', href: routes.cards(), Icon: Search },
   ];
 
   return (

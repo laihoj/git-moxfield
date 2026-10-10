@@ -58,7 +58,8 @@ export async function commitVersion(
   { sequence, message, tags = [] }: CommitOptions,
 ): Promise<void> {
   if (message !== undefined) await page.getByLabel('Commit message').fill(message);
-  const tagInput = page.getByLabel('Tags');
+  // The input ("Tags (optional)"), not the tag lists of the versions beside the form.
+  const tagInput = page.getByRole('textbox', { name: /^Tags\b/ });
   for (const tag of tags) {
     await tagInput.fill(tag);
     await tagInput.press('Enter');

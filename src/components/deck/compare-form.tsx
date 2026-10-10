@@ -9,12 +9,14 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { IconButton } from '@/components/ui/icon-button';
 import { versionLabel } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 export interface CompareFormProps {
-  deckId: string;
+  /** The deck pages the comparison opens within (the owner's or a share link's). */
+  scope: DeckScope;
   /** Versions, newest first. */
   versions: readonly VersionRefDTO[];
+  /** Offer the current Moxfield deck as a side (owners only; viewers see committed versions). */
   hasWorking: boolean;
   /** Current selections as version refs (`v12`, `working`, `empty`). */
   from: string;
@@ -36,7 +38,7 @@ function optionLabel(version: VersionRefDTO): string {
  * known) or any version, newest first. Submits as a GET form (`?from=&to=`), so every
  * comparison has a shareable URL.
  */
-export function CompareForm({ deckId, versions, hasWorking, from, to }: CompareFormProps) {
+export function CompareForm({ scope, versions, hasWorking, from, to }: CompareFormProps) {
   const id = useId();
   const [fromValue, setFromValue] = useState(from);
   const [toValue, setToValue] = useState(to);
@@ -55,7 +57,7 @@ export function CompareForm({ deckId, versions, hasWorking, from, to }: CompareF
 
   return (
     <Form
-      action={routes.compare(deckId)}
+      action={deckRoutes(scope).compare()}
       className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 gap-y-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] md:gap-x-2"
     >
       <div className="col-start-1 row-start-1 flex min-w-0 flex-col gap-1.5">

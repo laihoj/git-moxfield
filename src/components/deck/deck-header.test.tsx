@@ -25,6 +25,13 @@ describe('DeckHeader', () => {
     expect(screen.getByRole('link', { name: /Moxfield/ })).toHaveAttribute('target', '_blank');
   });
 
+  it('has no Moxfield link without a deck URL (a share link viewer’s header)', () => {
+    render(<DeckHeader name="Blue Farm" commanders={['Tymna the Weaver']} format="commander" />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Blue Farm' })).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Moxfield/)).not.toBeInTheDocument();
+  });
+
   it('shows the Moxfield id as secondary text while the deck has no name', () => {
     render(
       <DeckHeader

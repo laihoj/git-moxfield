@@ -1,7 +1,7 @@
 'use client';
 
 import { Bookmark, Trash2 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 
 import { revokeKeyAction } from '@/app/account-actions';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -16,8 +16,11 @@ import type { BookmarkletKeyDTO } from '@/server/auth/types';
 /**
  * The user's bookmarklets: name, when made (and in a browser which bookmarklet signed
  * in), when last used, and revoke. Revoking says exactly what else ends with it, and
- * offers to revoke the bookmarklets made through it too: what a thief holding a copy of
- * it could have made, or a replacement the user made themselves, which only they know.
+ * offers to revoke the bookmarklets and the share links made through it too: what a thief
+ * holding a copy of it could have made, or what the user made themselves, which only
+ * they know. The share links are always offered, whatever this page counted when it
+ * loaded: a thief may make one meanwhile, and the server revokes those that exist when
+ * the revocation runs.
  */
 export function KeyList({ keys }: { keys: readonly BookmarkletKeyDTO[] }) {
   if (keys.length === 0) {
@@ -46,9 +49,19 @@ export function KeyList({ keys }: { keys: readonly BookmarkletKeyDTO[] }) {
 
 function KeyRow({ bookmarklet: key }: { bookmarklet: BookmarkletKeyDTO }) {
   const [includeDerived, setIncludeDerived] = useState(false);
-  const checkboxId = useId();
+  const [includeShareLinks, setIncludeShareLinks] = useState(false);
+  const derivedCheckboxId = useId();
+  const shareLinksCheckboxId = useId();
   const derivedNames = joinList(key.derived.map((derived) => `“${derived.label}”`));
   const several = key.derived.length > 1;
+  // The links revokeKey reaches with these choices, as counted when the page loaded.
+  const shareLinkCount = key.shareLinkCount + (includeDerived ? key.derivedShareLinkCount : 0);
+  const shareLinks =
+    shareLinkCount === 0
+      ? 'any share links'
+      : shareLinkCount === 1
+        ? 'the share link'
+        : `the ${shareLinkCount} share links`;
 
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-3.5 md:px-5">
@@ -96,34 +109,70 @@ function KeyRow({ bookmarklet: key }: { bookmarklet: BookmarkletKeyDTO }) {
           </>
         }
         details={
-          key.derived.length > 0 && (
-            <div className="flex gap-2.5 text-sm text-fg">
-              <input
-                id={checkboxId}
-                type="checkbox"
-                checked={includeDerived}
-                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)"
-                onChange={(event) => {
-                  setIncludeDerived(event.target.checked);
-                }}
-              />
-              <label htmlFor={checkboxId} className="min-w-0 cursor-pointer text-pretty">
+          <div className="flex flex-col gap-3">
+            {key.derived.length > 0 && (
+              <ConfirmOption id={derivedCheckboxId} checked={includeDerived} onChange={setIncludeDerived}>
                 Also revoke {several ? 'the bookmarklets' : 'the bookmarklet'} made in a browser it signed in:{' '}
                 <span className="font-medium break-words">{derivedNames}</span>.{' '}
                 <span className="text-muted">
                   Do this if “{key.label}” may have been stolen; leave {several ? 'them' : 'it'} if you made{' '}
                   {several ? 'them' : 'it'} yourself.
                 </span>
-              </label>
-            </div>
-          )
+              </ConfirmOption>
+            )}
+            <ConfirmOption
+              id={shareLinksCheckboxId}
+              checked={includeShareLinks}
+              onChange={setIncludeShareLinks}
+            >
+              Also revoke {shareLinks} made in{' '}
+              {includeDerived && key.derived.length > 0
+                ? 'browsers these bookmarklets signed in'
+                : 'a browser it signed in'}
+              .{' '}
+              <span className="text-muted">
+                Read-only links to your decks keep working otherwise. Do this if “{key.label}” may have been
+                stolen; links you shared yourself stop working too.
+              </span>
+            </ConfirmOption>
+          </div>
         }
         confirmLabel="Revoke bookmarklet"
         onConfirm={async () => {
-          const result = await revokeKeyAction(key.id, includeDerived);
+          const result = await revokeKeyAction(key.id, includeDerived, includeShareLinks);
           return result.ok ? null : result.message;
         }}
       />
     </li>
+  );
+}
+
+/** A checkbox choice inside the revoke confirmation. */
+function ConfirmOption({
+  id,
+  checked,
+  onChange,
+  children,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex gap-2.5 text-sm text-fg">
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        className="mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)"
+        onChange={(event) => {
+          onChange(event.target.checked);
+        }}
+      />
+      <label htmlFor={id} className="min-w-0 cursor-pointer text-pretty">
+        {children}
+      </label>
+    </div>
   );
 }

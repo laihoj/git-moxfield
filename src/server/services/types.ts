@@ -191,3 +191,107 @@ export interface TagCountDTO {
   name: string;
   count: number;
 }
+
+/** A compare side from the committed history: a version or the empty deck, never the working state. */
+export type CommittedCompareSideDTO = Exclude<CompareSideDTO, { kind: 'working' }>;
+
+// ---------------------------------------------------------------------------
+// Share links (ADR 0007)
+// ---------------------------------------------------------------------------
+
+/** A share link as listed to the deck's owner. Its token is never stored, so it never appears again. */
+export interface ShareLinkDTO {
+  id: string;
+  deckId: string;
+  /** The owner's name for the link ("For Mikko"). */
+  label: string;
+  /** Whether viewers see the owner's private version notes. */
+  includeNotes: boolean;
+  createdAt: string;
+  /** Last view through the link (recorded at most hourly); `null` before the first view. */
+  lastViewedAt: string | null;
+}
+
+/**
+ * A new share link. `url` contains the link's token: show it once, to the owner who
+ * created the link, and never log or store it. It cannot be shown again; a lost link is
+ * revoked and replaced.
+ */
+export interface CreatedShareLinkDTO {
+  link: ShareLinkDTO;
+  url: string;
+}
+
+/** What a share link grants, for the viewer pages (banner, notes). */
+export interface ShareInfoDTO {
+  /**
+   * The owner's name for the link ("For Mikko"). Written by the owner for themselves;
+   * shown to viewers only if the page chooses to.
+   */
+  label: string;
+  /** Whether version pages include the owner's notes. */
+  includeNotes: boolean;
+  /** Display name of the deck's owner. */
+  ownerDisplayName: string;
+  /** The shared deck. Not a secret, and never needed to reach it: the token decides. */
+  deckId: string;
+}
+
+/**
+ * A shared deck as viewers see it: committed facts only. Name, format and commanders
+ * come from the latest version (HEAD), never from the latest Moxfield state, and there
+ * is no status, working state or fetch error. Every field is a field of
+ * {@link DeckSummaryDTO}, so components can take either.
+ *
+ * Nothing says where the deck lives on Moxfield (no `url`, no `externalId`): its URL
+ * opens the live deck, uncommitted changes included, and for an unlisted deck it is the
+ * only key to it. Unlike the share link, it could not be taken back.
+ */
+export interface SharedDeckDTO {
+  id: string;
+  source: string;
+  /**
+   * The latest version's deck name; `''` before the first version, or when that version
+   * has no name. Show it with `sharedDeckTitle`.
+   */
+  name: string;
+  /** The latest version's format; `''` before the first version. */
+  format: string;
+  /** The latest version's commanders. */
+  commanders: string[];
+  head: VersionRefDTO | null;
+  versionCount: number;
+}
+
+/** A shared deck's overview: the deck and its newest versions. */
+export interface SharedOverviewDTO extends SharedDeckDTO {
+  /** The newest versions, newest first (at most `RECENT_VERSION_COUNT`). */
+  recentVersions: VersionListItemDTO[];
+}
+
+/**
+ * A version as viewers see it: `notes` is empty unless the link includes notes. Without
+ * the source metadata, which names the deck on Moxfield (id, URL) and its authors there.
+ */
+export interface SharedVersionDetailDTO extends Omit<VersionDetailDTO, 'deck' | 'sourceMetadata'> {
+  deck: SharedDeckDTO;
+}
+
+/** A comparison of two committed states (versions or the empty deck). */
+export interface SharedCompareDTO extends Omit<CompareDTO, 'deck' | 'from' | 'to' | 'hasWorking'> {
+  deck: SharedDeckDTO;
+  from: CommittedCompareSideDTO;
+  to: CommittedCompareSideDTO;
+  /** Viewers never see the working state. */
+  hasWorking: false;
+}
+
+/** A card's history over the committed versions (never a working-state point). */
+export interface SharedCardHistoryDTO extends Omit<CardHistoryDTO, 'deck'> {
+  deck: SharedDeckDTO;
+}
+
+/** The restore export of a version, for viewers. */
+export interface SharedRestoreDTO extends Omit<RestoreDTO, 'deck'> {
+  deck: SharedDeckDTO;
+}

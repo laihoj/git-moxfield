@@ -106,18 +106,47 @@ export async function createBookmarkletAction(
 /**
  * Revokes one of the user's bookmarklets: browsers it signed in, and browsers signed in
  * with a device link made on one of those, are signed out (except this one). With
- * `includeDerived`, also the bookmarklets made in those browsers.
+ * `includeDerived`, also the bookmarklets made in those browsers; with
+ * `includeShareLinks`, also the share links made in those browsers (ADR 0007), which
+ * would otherwise keep working.
  */
-export async function revokeKeyAction(keyId: string, includeDerived = false): Promise<AccountActionResult> {
+export async function revokeKeyAction(
+  keyId: string,
+  includeDerived = false,
+  includeShareLinks = false,
+): Promise<AccountActionResult> {
   const user = await requireUser({ next: routes.account() });
   const id = idSchema.safeParse(keyId);
-  if (!id.success || typeof includeDerived !== 'boolean') return { ok: false, message: 'Invalid request.' };
+  if (!id.success || typeof includeDerived !== 'boolean' || typeof includeShareLinks !== 'boolean') {
+    return { ok: false, message: 'Invalid request.' };
+  }
   try {
-    const revoked = await getAuthService().revokeKey(user, id.data, { includeDerived });
+    const revoked = await getAuthService().revokeKey(user, id.data, { includeDerived, includeShareLinks });
     revalidateAccount();
+    // Every deck's Share page lists its links.
+    if (includeShareLinks) revalidatePath('/decks/[deckId]/share', 'page');
     return revoked ? { ok: true } : { ok: false, message: 'This bookmarklet was already revoked.' };
   } catch (error) {
     return { ok: false, message: failureMessage(error, 'revokeKey', user) };
+  }
+}
+
+/**
+ * Revokes the share links (ADR 0007) made in browsers one of the user's bookmarklets
+ * signed in, also after the bookmarklet itself was revoked without them.
+ */
+export async function revokeKeyShareLinksAction(keyId: string): Promise<AccountActionResult> {
+  const user = await requireUser({ next: routes.account() });
+  const id = idSchema.safeParse(keyId);
+  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  try {
+    const revoked = await getAuthService().revokeKeyShareLinks(user, id.data);
+    revalidatePath('/account');
+    // Every deck's Share page lists its links.
+    revalidatePath('/decks/[deckId]/share', 'page');
+    return revoked > 0 ? { ok: true } : { ok: false, message: 'These share links were already revoked.' };
+  } catch (error) {
+    return { ok: false, message: failureMessage(error, 'revokeKeyShareLinks', user) };
   }
 }
 

@@ -13,6 +13,7 @@ import {
   type ParseDeckUrlResult,
   type RawSourcePayload,
   type RestoreExport,
+  type RestoreTarget,
   type ServerFetchStatus,
 } from '../deck-source';
 
@@ -188,8 +189,8 @@ export class MoxfieldDeckSource implements DeckSource {
     return normalizeMoxfieldPayload(data.value, { siteOrigin: this.siteOrigin });
   }
 
-  exportForRestore(snapshot: CanonicalSnapshot): RestoreExport {
-    return moxfieldRestoreExport(snapshot);
+  exportForRestore(snapshot: CanonicalSnapshot, target?: RestoreTarget): RestoreExport {
+    return moxfieldRestoreExport(snapshot, target);
   }
 
   primerToMarkdown(primer: string): string {

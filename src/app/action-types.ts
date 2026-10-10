@@ -3,7 +3,7 @@
  * client components can import them without importing the actions' server code.
  */
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
-import type { CommitOutcome } from '@/server/services/types';
+import type { CommitOutcome, ShareLinkDTO } from '@/server/services/types';
 
 /** State of the "Track a Moxfield deck" form (`useActionState`). */
 export type TrackDeckState = { status: 'idle' } | { status: 'error'; message: string; input: string };
@@ -93,3 +93,16 @@ export type CreateInviteState =
   | { status: 'idle' }
   | { status: 'created'; url: string; expiresAt: string; note: string; role: 'admin' | 'member' }
   | { status: 'error'; message: string; values: { note: string; role: string } };
+
+// ---------------------------------------------------------------------------
+// Share links (ADR 0007): `./share-actions.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of creating a share link. `url` holds the link's token: it exists only here, in
+ * the browser of the owner who made it, until the page is left (never stored, never
+ * shown again).
+ */
+export type CreateShareLinkResult =
+  | { status: 'created'; url: string; link: ShareLinkDTO }
+  | { status: 'error'; message: string; field?: 'label' };

@@ -6,12 +6,13 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, useTransition } from 'react';
 
 import { Spinner } from '@/components/ui/spinner';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 const DEBOUNCE_MS = 250;
 
 export interface CardSearchProps {
-  deckId: string;
+  /** The deck pages the search runs within (the owner's or a share link's). */
+  scope: DeckScope;
   /** The current `?q=` value. */
   query: string;
 }
@@ -21,8 +22,9 @@ export interface CardSearchProps {
  * short pause (results are rendered by the server); Enter searches immediately and
  * the form works as a plain GET form without JavaScript.
  */
-export function CardSearch({ deckId, query }: CardSearchProps) {
+export function CardSearch({ scope, query }: CardSearchProps) {
   const router = useRouter();
+  const routes = deckRoutes(scope);
   const [value, setValue] = useState(query);
   const [pending, startTransition] = useTransition();
   const timer = useRef<number | undefined>(undefined);
@@ -38,13 +40,13 @@ export function CardSearch({ deckId, query }: CardSearchProps) {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       startTransition(() => {
-        router.replace(routes.cards(deckId, { q: next.trim() }), { scroll: false });
+        router.replace(routes.cards({ q: next.trim() }), { scroll: false });
       });
     }, DEBOUNCE_MS);
   }
 
   return (
-    <Form action={routes.cards(deckId)} role="search" className="relative">
+    <Form action={routes.cards()} role="search" className="relative">
       <label htmlFor="card-search" className="sr-only">
         Search cards
       </label>

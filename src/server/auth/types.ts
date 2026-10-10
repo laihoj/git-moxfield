@@ -66,6 +66,36 @@ export interface BookmarkletKeyDTO {
    * it is the owner's choice.
    */
   derived: KeyRefDTO[];
+  /**
+   * Share links (ADR 0007) that are not revoked and were made in browsers this key signed
+   * in (directly, or through a device link made on one of them): read access someone
+   * holding a stolen copy of this key could have handed out, and which outlives the key.
+   * `revokeKey` with `includeShareLinks` revokes them; they may be the owner's own, so it
+   * is the owner's choice.
+   */
+  shareLinkCount: number;
+  /**
+   * Share links made the same way through the keys made through this one (see
+   * `derived`): `revokeKey` with both `includeDerived` and `includeShareLinks` revokes
+   * these too.
+   */
+  derivedShareLinkCount: number;
+}
+
+/**
+ * A revoked bookmarklet key whose share links (ADR 0007) still work: read access made in
+ * browsers it signed in, which outlived the key because it was revoked without them. The
+ * owner can still revoke those links (`revokeKeyShareLinks`).
+ */
+export interface RevokedKeyShareLinksDTO {
+  id: string;
+  label: string;
+  revokedAt: string;
+  /**
+   * Share links that are not revoked and were made in browsers this key signed in
+   * (directly, or through a device link made on one of them); at least 1.
+   */
+  shareLinkCount: number;
 }
 
 /** The "Send to git-moxfield" bookmarklets of one key, as `javascript:` URLs. */

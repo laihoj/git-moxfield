@@ -8,12 +8,13 @@ import type { VersionListItemDTO } from '@/server/services/types';
 import { ButtonLink } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { versionLabel } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { VersionRow } from './version-row';
 
 export interface VersionTimelineProps {
-  deckId: string;
+  /** The deck pages the rows and comparisons link within (the owner's or a share link's). */
+  scope: DeckScope;
   /** Versions, newest first. */
   versions: readonly VersionListItemDTO[];
   /** Sequence of the latest version (highlighted). */
@@ -33,7 +34,7 @@ export interface VersionTimelineProps {
  * selected" for two versions, or "with previous" / "with current Moxfield deck" for one.
  */
 export function VersionTimeline({
-  deckId,
+  scope,
   versions,
   headSequence,
   selectable = false,
@@ -65,7 +66,7 @@ export function VersionTimeline({
           return (
             <VersionRow
               key={version.commitId}
-              deckId={deckId}
+              scope={scope}
               version={version}
               latest={version.sequence === headSequence}
               compact={compact}
@@ -91,7 +92,7 @@ export function VersionTimeline({
       </ol>
       {selectable && selected.length > 0 && (
         <SelectionBar
-          deckId={deckId}
+          scope={scope}
           selected={selected}
           versions={versions}
           hasWorking={hasWorking}
@@ -105,18 +106,19 @@ export function VersionTimeline({
 }
 
 function SelectionBar({
-  deckId,
+  scope,
   selected,
   versions,
   hasWorking,
   onClear,
 }: {
-  deckId: string;
+  scope: DeckScope;
   selected: readonly number[];
   versions: readonly VersionListItemDTO[];
   hasWorking: boolean;
   onClear: () => void;
 }) {
+  const routes = deckRoutes(scope);
   const sorted = [...selected].sort((a, b) => a - b);
   const [first = 0, second] = sorted;
   const previousSequence = versions.find((version) => version.sequence === first)?.parentSequence ?? null;
@@ -136,7 +138,7 @@ function SelectionBar({
       </p>
       {second !== undefined ? (
         <ButtonLink
-          href={routes.compare(deckId, { from: versionLabel(first), to: versionLabel(second) })}
+          href={routes.compare({ from: versionLabel(first), to: versionLabel(second) })}
           variant="primary"
           size="sm"
           icon={<GitCompareArrows aria-hidden="true" className="size-4" />}
@@ -147,7 +149,7 @@ function SelectionBar({
         <>
           {previousSequence !== null && (
             <ButtonLink
-              href={routes.compare(deckId, { from: versionLabel(previousSequence), to: versionLabel(first) })}
+              href={routes.compare({ from: versionLabel(previousSequence), to: versionLabel(first) })}
               variant="secondary"
               size="sm"
             >
@@ -156,7 +158,7 @@ function SelectionBar({
           )}
           {hasWorking && (
             <ButtonLink
-              href={routes.compare(deckId, { from: versionLabel(first), to: 'working' })}
+              href={routes.compare({ from: versionLabel(first), to: 'working' })}
               variant="secondary"
               size="sm"
             >

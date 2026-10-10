@@ -250,6 +250,9 @@ describe('MoxfieldDeckSource', () => {
     const { source } = setup();
     const snapshot = buildSnapshot({ zones: { mainboard: ['Island'] } });
     expect(source.exportForRestore(snapshot)).toEqual(moxfieldRestoreExport(snapshot));
+    expect(source.exportForRestore(snapshot, 'own-deck')).toEqual(
+      moxfieldRestoreExport(snapshot, 'own-deck'),
+    );
     expect(source.primerToMarkdown('[[Sol Ring]]')).toBe(moxfieldPrimerToMarkdown('[[Sol Ring]]'));
   });
 });

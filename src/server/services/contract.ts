@@ -1,13 +1,17 @@
 /**
  * The application service API consumed by the UI layer (server components, server
- * actions, route handlers). The UI depends only on this interface and the DTOs in
+ * actions, route handlers). The UI depends only on these interfaces and the DTOs in
  * `./types`, so it can be tested against fakes and the implementation can evolve.
  *
- * An instance is bound to one workspace (ADR 0007's owner scope): the UI obtains it with
- * `servicesFor(user)` from `@/server/access`. Every deck id is resolved within that
- * workspace; a deck of another workspace behaves exactly like a deck that does not
- * exist (`null`, `[]` or a `not-found` error, never `forbidden`), so ids do not reveal
- * whether something exists.
+ * - {@link DeckServices}: the owner scope (ADR 0007), bound to one workspace. The UI
+ *   obtains it with `servicesFor(user)` from `@/server/access`. Every deck id is resolved
+ *   within that workspace; a deck of another workspace behaves exactly like a deck that
+ *   does not exist (`null`, `[]` or a `not-found` error, never `forbidden`), so ids do not
+ *   reveal whether something exists.
+ * - {@link ShareLinkServices}: the owner's share links, bound to the workspace and the
+ *   asking session (`shareLinkServicesFor(user)`).
+ * - {@link SharedDeckServices}: the viewer scope, bound to the one deck a share link
+ *   grants (`sharedDeckServices(token)`); read-only by type.
  */
 import type { IngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
 
@@ -18,10 +22,18 @@ import type {
   CommitNoteDTO,
   CommitOutcome,
   CompareDTO,
+  CreatedShareLinkDTO,
   DeckOverviewDTO,
   DeckSummaryDTO,
   FetchOutcome,
   RestoreDTO,
+  ShareInfoDTO,
+  SharedCardHistoryDTO,
+  SharedCompareDTO,
+  SharedOverviewDTO,
+  SharedRestoreDTO,
+  SharedVersionDetailDTO,
+  ShareLinkDTO,
   TagCountDTO,
   VersionDetailDTO,
   VersionListItemDTO,
@@ -125,4 +137,87 @@ export interface DeckServices {
    * user use `getSetupInfo()` from `@/server/access`.)
    */
   getSetupInfo(): SetupInfoDTO;
+}
+
+/**
+ * The owner's read-only share links of their decks (ADR 0007), bound to the signed-in
+ * user's workspace and the session asking (a link records the bookmarklet key that
+ * session descends from, so revoking a stolen key can revoke the links made with it).
+ * A deck or link of another workspace behaves like one that does not exist.
+ */
+export interface ShareLinkServices {
+  /**
+   * Creates a read-only link to one of the workspace's decks, for git-moxfield at `appUrl`
+   * (its public base URL). The link's token exists in plaintext only inside the returned
+   * `url`: show it once, to the owner, and never log or store it.
+   * @throws {ServiceError} `invalid-input` for an invalid label (1–60 characters; see
+   * `MAX_SHARE_LINK_LABEL_LENGTH`) or a non-boolean `includeNotes`; `not-found` for a deck
+   * that is not the workspace's; `forbidden` when the asking session has ended meanwhile.
+   * @throws {TypeError} when `appUrl` is not an absolute http(s) URL (nothing is stored).
+   */
+  createShareLink(
+    deckId: string,
+    input: { label: string; includeNotes: boolean },
+    appUrl: string,
+  ): Promise<CreatedShareLinkDTO>;
+  /** The deck's links that are not revoked, newest first; `[]` for a deck that is not the workspace's. */
+  listShareLinks(deckId: string): Promise<ShareLinkDTO[]>;
+  /**
+   * Revokes one of the deck's links: viewing through it ends at once. Idempotent.
+   * @returns whether a link was revoked (`false` when it was already revoked or is unknown).
+   */
+  revokeShareLink(deckId: string, linkId: string): Promise<boolean>;
+}
+
+/**
+ * The viewer scope (ADR 0007): one deck's committed history, read-only, for anyone
+ * holding a share link (signed in or not).
+ *
+ * - **Read-only by type:** there are no write methods (no refresh, commit, tags, notes or
+ *   untrack), so a viewer page cannot call one by mistake.
+ * - **One deck:** every method reads the link's deck; no method takes a deck id, so
+ *   nothing from the client can name another deck. Commit id prefixes and card names
+ *   resolve within the deck only.
+ * - **Committed history only:** no uncommitted Moxfield state, status or fetch errors
+ *   anywhere; the deck's name, format and commanders come from its latest version;
+ *   `compare` refuses `working`; card history never has a working-state point.
+ * - **Notes** (private annotations on versions) only when the link includes them.
+ * - **Revocation is immediate:** once the link is revoked, the deck untracked or its owner
+ *   disabled, every method answers as for a missing deck (`null`, `[]`), also on an
+ *   instance obtained before.
+ */
+export interface SharedDeckServices {
+  /**
+   * Whether the link still grants access (not revoked, deck tracked, owner enabled):
+   * once it does not, every other method answers as for a missing deck. Tells a link that
+   * stopped working from a version or card the deck does not have.
+   */
+  isAvailable(): Promise<boolean>;
+  /** The deck (committed facts) and its newest versions, or `null`. */
+  getOverview(): Promise<SharedOverviewDTO | null>;
+  /** Every version, newest first; with `tag`, only those carrying it. */
+  listVersions(options?: { tag?: string }): Promise<VersionListItemDTO[]>;
+  /** One version (`notes` empty unless the link includes notes), or `null`. */
+  getVersion(sequence: number): Promise<SharedVersionDetailDTO | null>;
+  /**
+   * Compares two committed states. References as {@link VersionRef}, except `working`,
+   * which (like any unknown reference) gives `null`.
+   */
+  compare(from: VersionRef, to: VersionRef): Promise<SharedCompareDTO | null>;
+  /** Cards of the deck's versions matching `query` (never cards only in the working state). */
+  searchCards(query: string, limit?: number): Promise<CardSearchResultDTO[]>;
+  /** `card` is a card key or name. The history covers committed versions only. */
+  cardHistory(card: string): Promise<SharedCardHistoryDTO | null>;
+  /** Paste-ready restore text of a version, or `null`. */
+  restoreExport(sequence: number): Promise<SharedRestoreDTO | null>;
+  /** Every tag used in the deck's versions, with counts. */
+  listTags(): Promise<TagCountDTO[]>;
+  /** Converts a deck's primer markup to portable markdown via its DeckSource (pure). */
+  primerToMarkdown(source: string, primer: string): string;
+}
+
+/** What `sharedDeckServices(token)` grants: the viewer services and what the link is. */
+export interface SharedDeckAccess {
+  services: SharedDeckServices;
+  share: ShareInfoDTO;
 }

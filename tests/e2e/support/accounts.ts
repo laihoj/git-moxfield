@@ -238,7 +238,8 @@ export function signedInDevices(page: Page): Locator {
 
 /** The rows of Account › Bookmarklets. */
 export function bookmarkletRows(page: Page): Locator {
-  return rowsOf(page.getByRole('list', { name: 'Bookmarklets' }));
+  // Exact: the Account page also lists "Share links of revoked bookmarklets".
+  return rowsOf(page.getByRole('list', { name: 'Bookmarklets', exact: true }));
 }
 
 /** The row of a person on the admin page. */

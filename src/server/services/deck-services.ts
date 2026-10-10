@@ -15,15 +15,11 @@
  */
 import 'server-only';
 
-import { allCards, cardZoneIndex, commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
-import { cardKey } from '@/core/card-key';
-import { diffSnapshots, renamedKeys, suggestCommitMessage } from '@/core/diff';
+import { commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
+import { diffSnapshots, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
 import { commitId } from '@/core/hash';
-import { deriveCardHistory, traceCardKeys } from '@/core/history/card-history';
-import type { CardVersionPoint, ZoneQuantity } from '@/core/history/types';
-import type { CanonicalSnapshot, CardFacts, CardKey, NormalizedDeck } from '@/core/model';
-import { primerLineDiff } from '@/core/primer/primer-diff';
+import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
 import {
   DeckSourceError,
   isDeckSourceError,
@@ -53,15 +49,14 @@ import type { DeckServices, SetupInfoDTO, TagOutcome, TrackDeckOutcome, VersionR
 import {
   deckStatus,
   diffCardKeys,
-  toCatalogRecord,
   toCommitNoteDTO,
   toFetchErrorDTO,
   toObservationDTO,
-  toVersionListItemDTO,
   toVersionRefDTO,
-  zoneQuantities,
 } from './dto';
 import { ServiceError } from './errors';
+import { DeckHistory, type ResolvedSide } from './history';
+import { requireRecord, requireSnapshot } from './invariants';
 import type { KeyedMutex } from './mutex';
 import { parseVersionRef } from './refs';
 import { settle } from './settle';
@@ -73,7 +68,6 @@ import type {
   CommitNoteDTO,
   CommitOutcome,
   CompareDTO,
-  CompareSideDTO,
   DeckOverviewDTO,
   DeckSummaryDTO,
   FetchErrorDTO,
@@ -96,14 +90,8 @@ export const FREE_TEXT_NOTE_KIND = 'note';
 /** Number of versions in {@link DeckOverviewDTO.recentVersions}. */
 export const RECENT_VERSION_COUNT = 8;
 
-/** Upper bound for {@link DeckServices.searchCards} results. */
-export const MAX_CARD_SEARCH_LIMIT = 100;
-
 /** Suggested message for a deck's first version. */
 const INITIAL_VERSION_MESSAGE = 'Initial version';
-
-/** Longest card search query considered; card names are far shorter. */
-const MAX_SEARCH_QUERY_LENGTH = 200;
 
 /**
  * The source that browser captures and manual pastes come from. The capture protocol
@@ -145,12 +133,6 @@ interface DeckState {
   diff: DeckDiff | null;
 }
 
-/** A resolved side of a comparison; `snapshot` is `null` for the empty deck. */
-interface ResolvedSide {
-  side: CompareSideDTO;
-  snapshot: CanonicalSnapshot | null;
-}
-
 /** Creates the service layer over already-constructed dependencies. */
 export function createDeckServices(deps: DeckServicesDependencies): DeckServices {
   return new DefaultDeckServices(deps);
@@ -163,6 +145,8 @@ class DefaultDeckServices implements DeckServices {
   private readonly now: () => Date;
   private readonly logger: Logger;
   private readonly locks: KeyedMutex;
+  /** The committed-history views, shared with the viewer scope. */
+  private readonly history: DeckHistory;
 
   constructor(deps: DeckServicesDependencies) {
     this.repos = deps.repos;
@@ -171,6 +155,7 @@ class DefaultDeckServices implements DeckServices {
     this.now = deps.now;
     this.logger = deps.logger;
     this.locks = deps.locks;
+    this.history = new DeckHistory(deps.repos, deps.sources);
   }
 
   // -------------------------------------------------------------------------
@@ -228,9 +213,9 @@ class DefaultDeckServices implements DeckServices {
         ...this.summarize(state),
         diff,
         warnings: working?.warnings ?? [],
-        recentVersions: this.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
+        recentVersions: this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
         serverFetch,
-        catalog: this.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
+        catalog: this.history.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
         autoRefreshSuggested: this.autoRefreshSuggested(deck, working, serverFetch),
         suggestedMessage,
       };
@@ -511,58 +496,15 @@ class DefaultDeckServices implements DeckServices {
   // -------------------------------------------------------------------------
 
   listVersions(deckId: string, options: { tag?: string } = {}): Promise<VersionListItemDTO[]> {
-    return settle(() => {
-      const all = this.repos.commits.listForDeck(deckId);
-      const tag = options.tag?.trim() ?? '';
-      if (tag === '') return this.versionItems(all, all);
-      const tagged = new Set(this.repos.tags.commitsWithTag(deckId, tag).map((commit) => commit.id));
-      return this.versionItems(
-        all,
-        all.filter((commit) => tagged.has(commit.id)),
-      );
-    });
+    return settle(() => this.history.listVersions(deckId, options.tag));
   }
 
   getVersion(deckId: string, sequence: number): Promise<VersionDetailDTO | null> {
     return settle(() => {
       const deck = this.repos.decks.getById(deckId);
-      const commit = deck ? this.repos.commits.getBySequence(deckId, sequence) : null;
-      if (!deck || !commit) return null;
-
-      const parent =
-        commit.parentId === null
-          ? null
-          : requireRecord(this.repos.commits.getById(commit.parentId), `Commit ${commit.parentId}`);
-      const snapshots = this.repos.snapshots.getMany(
-        parent ? [commit.snapshotHash, parent.snapshotHash] : [commit.snapshotHash],
-      );
-      const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
-      const parentSnapshot = parent ? requireSnapshot(snapshots, parent.snapshotHash) : null;
-      const diff = diffSnapshots(parentSnapshot ?? emptySnapshot(snapshot.deck), snapshot);
-      const primerDiff = primerLineDiff(parentSnapshot ? parentSnapshot.primer : '', snapshot.primer);
-
-      const lineage = this.repos.commits.lineage(deckId);
-      const position = lineage.findIndex((entry) => entry.id === commit.id);
-      const next = position === -1 ? undefined : lineage[position + 1];
-
-      return {
-        deck: this.summarize(this.loadState(deck)),
-        version: toVersionListItemDTO({
-          commit,
-          parent,
-          snapshot,
-          diff,
-          tags: this.repos.tags.listForCommit(commit.id),
-        }),
-        snapshot,
-        sourceMetadata: commit.sourceMetadata,
-        diff,
-        primerDiff,
-        notes: this.repos.notes.listForCommit(commit.id).map(toCommitNoteDTO),
-        catalog: this.catalogFor([...allCards(snapshot).map((card) => card.key), ...diffCardKeys(diff)]),
-        previous: parent ? toVersionRefDTO(parent) : null,
-        next: next ? toVersionRefDTO(next) : null,
-      };
+      const detail = deck ? this.history.versionDetail(deckId, sequence) : null;
+      if (!deck || !detail) return null;
+      return { deck: this.summarize(this.loadState(deck)), ...detail };
     });
   }
 
@@ -574,22 +516,9 @@ class DefaultDeckServices implements DeckServices {
       const fromSide = this.resolveRef(state, from);
       const toSide = this.resolveRef(state, to);
       if (!fromSide || !toSide) return null;
-
-      // The empty side borrows the other side's deck info, so comparing against the
-      // empty deck does not report the deck name, format and tags as changes.
-      const fromSnapshot = fromSide.snapshot ?? emptySnapshot(toSide.snapshot?.deck);
-      const toSnapshot = toSide.snapshot ?? emptySnapshot(fromSide.snapshot?.deck);
-      const diff = diffSnapshots(fromSnapshot, toSnapshot);
-
       return {
         deck: this.summarize(state),
-        from: fromSide.side,
-        to: toSide.side,
-        diff,
-        primerDiff: primerLineDiff(fromSnapshot.primer, toSnapshot.primer),
-        primers: { from: fromSnapshot.primer, to: toSnapshot.primer },
-        catalog: this.catalogFor(diffCardKeys(diff)),
-        versions: this.repos.commits.listForDeck(deckId).map(toVersionRefDTO),
+        ...this.history.comparison(deckId, fromSide, toSide),
         hasWorking: state.working !== null,
       };
     });
@@ -606,27 +535,7 @@ class DefaultDeckServices implements DeckServices {
   ): Promise<CardSearchResultDTO[]> {
     return settle(() => {
       if (!this.repos.decks.getById(deckId)) return [];
-      const boundedLimit = Number.isFinite(limit)
-        ? Math.min(MAX_CARD_SEARCH_LIMIT, Math.max(1, Math.floor(limit)))
-        : DEFAULT_CARD_SEARCH_LIMIT;
-      const hits = this.repos.cardIndex.searchCardsInDeck(
-        deckId,
-        query.slice(0, MAX_SEARCH_QUERY_LENGTH),
-        boundedLimit,
-      );
-      if (hits.length === 0) return [];
-
-      const head = this.repos.commits.head(deckId);
-      const headIndex = head ? cardZoneIndex(this.requireStoredSnapshot(head.snapshotHash)) : null;
-      const catalog = this.repos.catalog.getMany(hits.map((hit) => hit.key));
-      return hits.map((hit) => ({
-        key: hit.key,
-        name: hit.name,
-        headZones: zoneQuantities(headIndex?.get(hit.key)),
-        versionsPresent: hit.versionsPresent,
-        lastSeenSequence: hit.lastSeenSequence,
-        facts: catalog.get(hit.key) ?? null,
-      }));
+      return this.history.searchCards(deckId, query, limit, true);
     });
   }
 
@@ -637,89 +546,19 @@ class DefaultDeckServices implements DeckServices {
   ): Promise<CardHistoryDTO | null> {
     return settle(() => {
       const deck = this.repos.decks.getById(deckId);
-      // Keys are fixed points of `cardKey`, so this accepts both keys and names.
-      const key = cardKey(card);
-      if (!deck || key === '') return null;
-      const source = this.sources.require(deck.source);
-
-      // One point per version, oldest first, then the working state when included.
-      const lineage = this.repos.commits.lineage(deckId);
+      if (!deck) return null;
       const working = options.includeWorking === false ? null : this.repos.observations.latestForDeck(deckId);
-      const points: CardVersionPoint[] = lineage.map((commit) => ({
-        commitId: commit.id,
-        sequence: commit.sequence,
-        at: commit.createdAt,
-        message: commit.message,
-        zones: [],
-      }));
-      if (working) {
-        points.push({
-          commitId: null,
-          sequence: null,
-          at: working.fetchedAt,
-          message: `Current ${source.displayName} deck`,
-          zones: [],
-        });
-      }
-      const hashes = [
-        ...lineage.map((commit) => commit.snapshotHash),
-        ...(working ? [working.snapshotHash] : []),
-      ];
-      const snapshots = new Map<number, CanonicalSnapshot>();
-      const snapshotAt = (index: number): CanonicalSnapshot => {
-        let snapshot = snapshots.get(index);
-        if (!snapshot) {
-          snapshot = this.requireStoredSnapshot(requireRecord(hashes[index], `Snapshot of point ${index}`));
-          snapshots.set(index, snapshot);
-        }
-        return snapshot;
-      };
-      // Committed zones come from the snapshot_cards index, one query per key; full
-      // snapshots are loaded only where the card may have been renamed.
-      const indexedZones = new Map<CardKey, Map<string, ZoneQuantity[]>>();
-      let workingIndex: ReturnType<typeof cardZoneIndex> | undefined;
-      const zonesAt = (pointKey: CardKey, index: number): ZoneQuantity[] => {
-        const commit = lineage[index];
-        if (!commit) return zoneQuantities((workingIndex ??= cardZoneIndex(snapshotAt(index))).get(pointKey));
-        let byCommit = indexedZones.get(pointKey);
-        if (!byCommit) {
-          const rows = this.repos.cardIndex.versionsContainingCard(deckId, pointKey);
-          byCommit = new Map(rows.map((entry) => [entry.commitId, entry.zones]));
-          indexedZones.set(pointKey, byCommit);
-        }
-        return byCommit.get(commit.id) ?? [];
-      };
-
-      // Follow the card across renames the diff reconciles, so either name gives one history.
-      const keys = traceCardKeys({
-        key,
-        length: points.length,
-        contains: (pointKey, index) => zonesAt(pointKey, index).length > 0,
-        renames: (index) => renamedKeys(snapshotAt(index - 1), snapshotAt(index)),
-      });
-      points.forEach((point, index) => {
-        const pointKey = keys[index] ?? key;
-        point.zones = zonesAt(pointKey, index);
-        const previousKey = keys[index - 1];
-        if (previousKey !== undefined && previousKey !== pointKey) {
-          point.renamedFrom = {
-            key: previousKey,
-            name: cardName(snapshotAt(index - 1), previousKey) ?? previousKey,
-          };
-        }
-      });
-      const newest = points.findLastIndex((point) => point.zones.length > 0);
-      if (newest === -1) return null;
-
-      const historyKey = keys.at(-1) ?? key;
-      const facts = this.repos.catalog.getMany([historyKey]).get(historyKey) ?? null;
-      const name = cardName(snapshotAt(newest), keys[newest] ?? key);
-
-      return {
-        deck: this.summarize(this.loadState(deck)),
-        history: deriveCardHistory({ key: historyKey, name: name ?? facts?.name ?? historyKey, points }),
-        facts,
-      };
+      const found = this.history.cardHistory(
+        deckId,
+        card,
+        working && {
+          fetchedAt: working.fetchedAt,
+          snapshotHash: working.snapshotHash,
+          label: `Current ${this.sources.require(deck.source).displayName} deck`,
+        },
+      );
+      if (!found) return null;
+      return { deck: this.summarize(this.loadState(deck)), ...found };
     });
   }
 
@@ -730,13 +569,12 @@ class DefaultDeckServices implements DeckServices {
   restoreExport(deckId: string, sequence: number): Promise<RestoreDTO | null> {
     return settle(() => {
       const deck = this.repos.decks.getById(deckId);
-      const commit = deck ? this.repos.commits.getBySequence(deckId, sequence) : null;
-      if (!deck || !commit) return null;
-      const snapshot = this.requireStoredSnapshot(commit.snapshotHash);
+      const restore = deck ? this.history.restoreExport(deck, sequence, 'source-deck') : null;
+      if (!deck || !restore) return null;
       return {
         deck: this.summarize(this.loadState(deck)),
-        version: toVersionRefDTO(commit),
-        export: this.sources.require(deck.source).exportForRestore(snapshot),
+        version: toVersionRefDTO(restore.commit),
+        export: restore.export,
       };
     });
   }
@@ -764,9 +602,7 @@ class DefaultDeckServices implements DeckServices {
   }
 
   listTags(deckId: string): Promise<TagCountDTO[]> {
-    return settle(() =>
-      this.repos.tags.listForDeck(deckId).map((tag) => ({ name: tag.name, count: tag.count })),
-    );
+    return settle(() => this.history.listTags(deckId));
   }
 
   setNote(deckId: string, sequence: number, text: string): Promise<CommitNoteDTO | null> {
@@ -805,10 +641,6 @@ class DefaultDeckServices implements DeckServices {
     const deck = this.repos.decks.getById(deckId);
     if (!deck) throw new ServiceError('not-found', 'This deck is not tracked (it may have been removed).');
     return deck;
-  }
-
-  private requireStoredSnapshot(hash: string): CanonicalSnapshot {
-    return requireRecord(this.repos.snapshots.get(hash), `Snapshot ${hash}`);
   }
 
   /** The first source that accepts the input, or the first source's rejection reason. */
@@ -1014,73 +846,19 @@ class DefaultDeckServices implements DeckServices {
   }
 
   /**
-   * List items for `selected` (a subset of `all`, the deck's commits), each with its
-   * stats relative to its parent. Snapshots are loaded in one batch.
+   * Resolves a version reference of `compare`: `working` is the deck's latest
+   * observation, everything else is committed history (see {@link DeckHistory.resolveCommitted}).
    */
-  private versionItems(
-    all: readonly CommitRecord[],
-    selected: readonly CommitRecord[],
-  ): VersionListItemDTO[] {
-    if (selected.length === 0) return [];
-    const byId = new Map(all.map((commit) => [commit.id, commit]));
-    const parents = selected.map((commit) =>
-      commit.parentId === null ? null : requireRecord(byId.get(commit.parentId), `Commit ${commit.parentId}`),
-    );
-    const snapshots = this.repos.snapshots.getMany(
-      [...selected, ...parents].flatMap((commit) => (commit ? [commit.snapshotHash] : [])),
-    );
-    const tags = this.repos.tags.listForCommits(selected.map((commit) => commit.id));
-    return selected.map((commit, index) => {
-      const parent = parents[index] ?? null;
-      const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
-      const before = parent ? requireSnapshot(snapshots, parent.snapshotHash) : emptySnapshot(snapshot.deck);
-      return toVersionListItemDTO({
-        commit,
-        parent,
-        snapshot,
-        diff: diffSnapshots(before, snapshot),
-        tags: tags.get(commit.id) ?? [],
-      });
-    });
-  }
-
   private resolveRef(state: DeckState, ref: VersionRef): ResolvedSide | null {
     const parsed = parseVersionRef(ref);
     if (!parsed) return null;
-    const deckId = state.deck.id;
-    let commit: CommitRecord | null;
-    switch (parsed.kind) {
-      case 'empty':
-        return { side: { kind: 'empty' }, snapshot: null };
-      case 'working':
-        return state.working && state.workingSnapshot
-          ? {
-              side: { kind: 'working', observation: toObservationDTO(state.working) },
-              snapshot: state.workingSnapshot,
-            }
-          : null;
-      case 'head':
-        commit = state.head;
-        break;
-      case 'sequence':
-        commit = this.repos.commits.getBySequence(deckId, parsed.sequence);
-        if (!commit && parsed.fallbackPrefix !== null) {
-          commit = this.repos.commits.findByIdPrefix(deckId, parsed.fallbackPrefix);
+    if (parsed.kind !== 'working') return this.history.resolveCommitted(state.deck.id, parsed, state.head);
+    return state.working && state.workingSnapshot
+      ? {
+          side: { kind: 'working', observation: toObservationDTO(state.working) },
+          snapshot: state.workingSnapshot,
         }
-        break;
-      case 'commit-prefix':
-        commit = this.repos.commits.findByIdPrefix(deckId, parsed.prefix);
-        break;
-    }
-    if (!commit) return null;
-    return {
-      side: { kind: 'version', version: toVersionRefDTO(commit) },
-      snapshot: this.requireStoredSnapshot(commit.snapshotHash),
-    };
-  }
-
-  private catalogFor(keys: Iterable<CardKey>): Record<CardKey, CardFacts> {
-    return toCatalogRecord(this.repos.catalog.getMany(keys));
+      : null;
   }
 
   /** Seconds until the per-deck refresh cooldown ends (0 when not cooling down). */
@@ -1163,15 +941,6 @@ function versionNotFound(sequence: number): string {
   return `Version v${sequence} does not exist.`;
 }
 
-function requireRecord<T>(value: T | null | undefined, what: string): T {
-  if (value === null || value === undefined) throw new Error(`${what} is missing from the database`);
-  return value;
-}
-
-function requireSnapshot(snapshots: ReadonlyMap<string, CanonicalSnapshot>, hash: string): CanonicalSnapshot {
-  return requireRecord(snapshots.get(hash), `Snapshot ${hash}`);
-}
-
 /** NFC, LF line endings, surrounding whitespace trimmed. */
 function normalizeMultilineText(text: string): string {
   return text.normalize('NFC').replace(/\r\n?/g, '\n').trim();
@@ -1181,9 +950,4 @@ function codePointLength(text: string): number {
   let length = 0;
   for (const _ of text) length++;
   return length;
-}
-
-/** Display name of a card in a snapshot (first zone that has it), if present. */
-function cardName(snapshot: CanonicalSnapshot, key: CardKey): string | undefined {
-  return allCards(snapshot).find((card) => card.key === key)?.name;
 }

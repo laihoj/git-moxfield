@@ -53,7 +53,7 @@ export function RenameForm({ displayName, maxLength }: RenameFormProps) {
               Saved.
             </>
           ) : (
-            'Shown in the header, and to admins when they manage accounts.'
+            'Shown in the header, on your share links, and to admins when they manage accounts.'
           )}
         </p>
       ) : (

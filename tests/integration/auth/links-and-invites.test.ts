@@ -13,9 +13,17 @@ import {
   SYSTEM_ACTOR,
 } from '@/server/auth/service';
 import { hashToken } from '@/server/auth/tokens';
+import type { SessionUser } from '@/server/auth/types';
 import { countRows } from '@tests/support/db';
 import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
-import { blueFarmSpec, BLUE_FARM_URL, createServiceHarness, defined } from '@tests/support/services';
+import {
+  blueFarmSpec,
+  BLUE_FARM_URL,
+  createServiceHarness,
+  defined,
+  type ServiceHarness,
+} from '@tests/support/services';
+import { APP_URL, openShared, sharedHistory, shareLinksOf, tokenOfShareUrl } from '@tests/support/sharing';
 
 describe('device links', () => {
   it('sign another device in once, within 15 minutes', async () => {
@@ -147,6 +155,80 @@ describe('recovery links', () => {
       recovered.session.id,
     ]);
     expect(await harness.auth.resolveSession(admin.session.token)).not.toBeNull();
+  });
+
+  describe('and share links', () => {
+    async function share(harness: ServiceHarness, user: SessionUser, deckId: string, label: string) {
+      const created = await shareLinksOf(harness, user).createShareLink(
+        deckId,
+        { label, includeNotes: true },
+        APP_URL,
+      );
+      return tokenOfShareUrl(created.url);
+    }
+
+    async function works(harness: ServiceHarness, token: string): Promise<boolean> {
+      return (await openShared(harness, token)) !== null;
+    }
+
+    it('revoke every link to the person’s decks, however it was made, and nobody else’s', async () => {
+      const harness = createServiceHarness();
+      const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
+      const mikko = await sharedHistory(harness, 'Mikko');
+      const anna = await sharedHistory(harness, 'Anna');
+      // A thief with Mikko's stolen laptop key shares the deck, notes included; Mikko had
+      // shared it himself too, in the browser his invite signed in (made through no key).
+      const key = keyOfBookmarklet(
+        (await harness.auth.createBookmarkletKey(mikko.owner.user, 'Laptop', APP_URL)).bookmarklets.popup,
+      );
+      const thief = defined(await harness.auth.signInWithKey(key, 'Thief browser'));
+      const links = {
+        thiefs: await share(harness, thief.user, mikko.deckId, 'For Mikko'),
+        own: await share(harness, mikko.owner.user, mikko.deckId, 'Playgroup'),
+        annas: await share(harness, anna.owner.user, anna.deckId, 'Anna’s'),
+      };
+      const recovery = tokenOfPath(
+        (await harness.auth.createRecoveryLink(admin.user, mikko.owner.user.id)).path,
+      );
+
+      const recovered = defined(await harness.auth.consumeLoginLink(recovery, 'New laptop'));
+      expect(await works(harness, links.thiefs)).toBe(false);
+      expect(await works(harness, links.own)).toBe(false);
+      expect(await shareLinksOf(harness, recovered.user).listShareLinks(mikko.deckId)).toEqual([]);
+      // Nothing is left for the revoked laptop key either.
+      expect(await harness.auth.listRevokedKeyShareLinks(recovered.user)).toEqual([]);
+      expect(await works(harness, links.annas)).toBe(true);
+      // Links made once recovered work as usual.
+      const fresh = await share(harness, recovered.user, mikko.deckId, 'New link');
+      expect(await works(harness, fresh)).toBe(true);
+
+      expect(harness.logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'Recovery link used: other sessions ended, keys and share links revoked',
+          context: expect.objectContaining({ userId: mikko.owner.user.id, revokedShareLinks: 2 }) as unknown,
+        }),
+      );
+      const logged = JSON.stringify(harness.logger.entries);
+      for (const token of [...Object.values(links), fresh]) expect(logged).not.toContain(token);
+    });
+
+    it('also end the links made in an earlier recovery’s session (an admin who used the link)', async () => {
+      const harness = createServiceHarness();
+      const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
+      const mikko = await sharedHistory(harness, 'Mikko');
+      const used = tokenOfPath((await harness.auth.createRecoveryLink(admin.user, mikko.owner.user.id)).path);
+      const asMikko = defined(await harness.auth.consumeLoginLink(used, 'Admin laptop'));
+      const adminsLink = await share(harness, asMikko.user, mikko.deckId, 'Playgroup');
+      expect(await works(harness, adminsLink)).toBe(true);
+
+      // Signed out everywhere, Mikko gets back in with a recovery link of his own.
+      const own = tokenOfPath(
+        (await harness.auth.createRecoveryLink(SYSTEM_ACTOR, mikko.owner.user.id)).path,
+      );
+      defined(await harness.auth.consumeLoginLink(own, 'Mikko’s laptop'));
+      expect(await harness.auth.resolveSession(asMikko.session.token)).toBeNull();
+      expect(await works(harness, adminsLink)).toBe(false);
+    });
   });
 
   it('leave a record the person sees, which signing the recovered browser out does not erase', async () => {

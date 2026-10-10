@@ -14,6 +14,9 @@
  *   hash of what they hold) and shared by all workspaces.
  * - **Accounts** (workspaces, users, credentials, sessions, login links, invites) and
  *   settings are installation-wide; the bound workspace does not affect them.
+ * - **Share links** are both: the owner creates, lists and revokes them for decks of the
+ *   bound workspace only, while resolving a link's token is installation-wide (the token
+ *   is its own authorization; see `./share-links`).
  *
  * Use {@link Repositories.transaction} to make several repository calls atomic, e.g.
  * "verify HEAD, insert commit, move the branch head" when committing.
@@ -36,6 +39,7 @@ import { createObservationRepository, type ObservationRepository } from './obser
 import { createRawBlobRepository, type RawBlobRepository } from './raw-blobs';
 import { createSessionRepository, type SessionRepository } from './sessions';
 import { createSettingsRepository, type SettingsRepository } from './settings';
+import { createShareLinkRepository, type ShareLinkRepository } from './share-links';
 import { createSnapshotRepository, type SnapshotRepository } from './snapshots';
 import { createVersionTagRepository, type VersionTagRepository } from './tags';
 import { createUserRepository, type UserRepository } from './users';
@@ -59,6 +63,7 @@ export interface Repositories {
   readonly sessions: SessionRepository;
   readonly loginLinks: LoginLinkRepository;
   readonly invites: InviteRepository;
+  readonly shareLinks: ShareLinkRepository;
   /**
    * Runs `fn` atomically with repositories bound to one transaction: if `fn` throws,
    * every write it made is rolled back. Nested calls use savepoints. `fn` must be
@@ -111,6 +116,7 @@ function bind(ctx: RepositoryContext): Repositories {
     sessions: createSessionRepository(ctx),
     loginLinks: createLoginLinkRepository(ctx),
     invites: createInviteRepository(ctx),
+    shareLinks: createShareLinkRepository(ctx),
     transaction: (fn) => withTransaction(ctx, (tx) => fn(bind(tx))),
   };
 }
@@ -164,3 +170,4 @@ export type {
   UnusedLinkFilter,
 } from './login-links';
 export type { InviteRecord, InviteRepository, NewInvite } from './invites';
+export type { ActiveShareLink, NewShareLink, ShareLinkRecord, ShareLinkRepository } from './share-links';

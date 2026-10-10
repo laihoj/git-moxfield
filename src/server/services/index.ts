@@ -1,11 +1,14 @@
 /**
- * The application service layer. {@link createServices} builds {@link DeckServices} bound
- * to one workspace from explicit dependencies.
+ * The application service layer, built from explicit dependencies:
  *
- * Request-handling code (pages, server actions, route handlers) never calls it: it gets
- * services bound to the signed-in user's workspace from `servicesFor(user)` in
- * `@/server/access`, the one place that turns a request's identity into data access.
- * Tests and operator scripts call it directly.
+ * - {@link createServices}: {@link DeckServices} bound to one workspace (owner scope);
+ * - {@link createShareLinkServices}: the owner's share links, bound to a signed-in user;
+ * - {@link openSharedDeck}: the viewer scope of a share link token.
+ *
+ * Request-handling code (pages, server actions, route handlers) never calls these: it
+ * gets services from `@/server/access` (`servicesFor(user)`, `shareLinkServicesFor(user)`,
+ * `sharedDeckServices(token)`), the one place that turns who is asking into data access.
+ * Tests and operator scripts call them directly.
  */
 import 'server-only';
 
@@ -23,14 +26,21 @@ export type * from './contract';
 export type * from './types';
 export {
   FREE_TEXT_NOTE_KIND,
-  MAX_CARD_SEARCH_LIMIT,
   MAX_COMMIT_MESSAGE_LENGTH,
   MAX_NOTE_LENGTH,
   RECENT_VERSION_COUNT,
 } from './deck-services';
+export { MAX_CARD_SEARCH_LIMIT } from './history';
 export { ServiceError, isServiceError, type ServiceErrorCode } from './errors';
 export { KeyedMutex } from './mutex';
 export { setupInfo } from './setup-info';
+export { createShareLinkServices, type ShareLinkServicesDependencies } from './share-links';
+export {
+  openSharedDeck,
+  SHARE_VIEW_RECORDING_INTERVAL_MS,
+  type SharedDeckDependencies,
+} from './shared-deck-access';
+export { DeckConfinementError } from './confined-history';
 
 export interface ServiceDependencies {
   db: Db;

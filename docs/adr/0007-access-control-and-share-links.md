@@ -22,7 +22,12 @@ scope, and the UI can only reach data through services bound to that scope:
   `SharedDeckServices` interface bound to exactly one deck. It has no write methods at
   all, so read-only is enforced by types as well as at runtime. It shows committed
   history only (no uncommitted Moxfield state, no refresh), and private notes only if
-  the link was created with "include notes".
+  the link was created with "include notes". It never says where the deck lives on
+  Moxfield (no link to it, no Moxfield id, no source metadata): that URL opens the live
+  deck, uncommitted changes included, is the only key to an unlisted deck, and would
+  outlive a revoked link. Viewers restore a version into a deck of their own. The
+  banner names the owner ("Shared by …", their display name), which the Share page
+  tells the owner.
 - No other route to the database: pages, server actions and route handlers obtain
   services exclusively through these two functions. Server actions re-resolve the
   session on every call; nothing trusts ids from the client without the scope check.
@@ -32,14 +37,22 @@ scope, and the UI can only reach data through services bound to that scope:
 - Created by the deck owner per deck, labelled, revocable, several per deck.
 - URL: `/s/<token>` with the same views as the owner (history, versions, compare, card
   history, restore text) under that prefix.
-- Revoking a link, or untracking the deck, ends access immediately.
+- Revoking a link, untracking the deck, or recovering the owner's account (ADR 0006)
+  ends access immediately; disabling the owner suspends it. A page that was open at the
+  time shows the dead-link page on its next navigation, never the deck's frame.
+- A link records the bookmarklet key its creating session descends from, so revoking a
+  stolen key can revoke the links made through it: when the key is revoked, or later
+  (the Account page lists revoked bookmarklets whose links still work).
 - Links are bearer secrets: anyone with the link can view. `Referrer-Policy:
-no-referrer` keeps them out of Referer headers; tokens are never logged.
+no-referrer` keeps them out of Referer headers; tokens are never logged, not even in
+  the dev server's request log (`src/server/request-log-filter.ts`).
 
 **Admins** manage users and invites but have no implicit access to anyone's decks.
 Their only path to a user's data is a recovery link (ADR 0006), which signs in as the
-user, signs out their other devices, revokes their bookmarklets and is listed on the
-user's Account page, so it cannot be used without the user seeing it.
+user, signs out their other devices, revokes their bookmarklets and share links and is
+listed on the user's Account page, so it cannot be used without the user seeing it. A
+share link made in a recovery session dies at the user's next recovery, which is how
+they get back in.
 
 **Card facts** (type line, mana cost, image id) come from untrusted captures, so the
 card catalog is scoped to the workspace like deck data: one workspace's capture never

@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
 import type { CanonicalCard, CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { zoneLabel, type ZoneId } from '@/core/zones';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
@@ -66,14 +66,15 @@ export function groupByType(
 export interface DeckListProps {
   snapshot: CanonicalSnapshot;
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  /** The deck pages card names link within (the owner's or a share link's). */
+  scope: DeckScope;
 }
 
 /**
  * The full deck of a version, by zone. The command zone is listed flat; other zones
  * are grouped by card type in Moxfield's order, in two columns on wide screens.
  */
-export function DeckList({ snapshot, catalog, deckId }: DeckListProps) {
+export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
   const zones = snapshotZones(snapshot);
   if (zones.length === 0) return <p className="text-sm text-muted">This version has no cards.</p>;
   return (
@@ -94,7 +95,7 @@ export function DeckList({ snapshot, catalog, deckId }: DeckListProps) {
               <span className="font-medium text-subtle tabular">{zoneCount(snapshot, zone)}</span>
             </h3>
             {FLAT_ZONES.has(zone) ? (
-              <CardRows cards={cards} catalog={catalog} deckId={deckId} />
+              <CardRows cards={cards} catalog={catalog} scope={scope} />
             ) : (
               <div className="gap-x-8 md:columns-2">
                 {groupByType(cards, catalog).map((group) => (
@@ -103,7 +104,7 @@ export function DeckList({ snapshot, catalog, deckId }: DeckListProps) {
                       {TYPE_PLURALS[group.type] ?? group.type}
                       <span className="font-medium text-subtle tabular">{group.count}</span>
                     </h4>
-                    <CardRows cards={group.cards} catalog={catalog} deckId={deckId} />
+                    <CardRows cards={group.cards} catalog={catalog} scope={scope} />
                   </div>
                 ))}
               </div>
@@ -118,12 +119,13 @@ export function DeckList({ snapshot, catalog, deckId }: DeckListProps) {
 function CardRows({
   cards,
   catalog,
-  deckId,
+  scope,
 }: {
   cards: readonly CanonicalCard[];
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  scope: DeckScope;
 }) {
+  const routes = deckRoutes(scope);
   return (
     <ul>
       {cards.map((card) => {
@@ -134,7 +136,7 @@ function CardRows({
             <CardName
               name={card.name}
               scryfallId={facts?.scryfallId}
-              href={routes.card(deckId, card.key)}
+              href={routes.card(card.key)}
               className="min-w-0 flex-1 text-fg"
             />
             {facts !== undefined && <ManaCost cost={facts.manaCost} />}

@@ -57,7 +57,7 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
       <Field
         label="Your name"
         htmlFor={nameId}
-        hint="Shown to the people you invite. You can change it later."
+        hint="Shown to the people you invite and on your share links. You can change it later."
         error={nameError}
       >
         <Input

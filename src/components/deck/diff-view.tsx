@@ -19,7 +19,7 @@ import { Disclosure } from '@/components/ui/disclosure';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { MINUS_SIGN, pluralize } from '@/lib/format';
 import { formatLabel } from '@/lib/presentation';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { DiffRow } from './diff-row';
@@ -31,7 +31,8 @@ const COSMETIC_KINDS: ReadonlySet<DiffSection['kind']> = new Set(['printings', '
 export interface DiffViewProps {
   diff: DeckDiff;
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  /** The deck pages card names link within (the owner's or a share link's). */
+  scope: DeckScope;
   /**
    * The "before" side is the empty deck (first version): show counts per zone and a
    * collapsed card list instead of one `+` row per card.
@@ -47,14 +48,7 @@ export interface DiffViewProps {
  * Semantic diff, in the order of docs/ux.md: Commanders, zones, Moved, Deck info,
  * Primer, then collapsed cosmetic sections (Printings, Card tags, Renamed).
  */
-export function DiffView({
-  diff,
-  catalog,
-  deckId,
-  initial = false,
-  primerHref,
-  emptyMessage,
-}: DiffViewProps) {
+export function DiffView({ diff, catalog, scope, initial = false, primerHref, emptyMessage }: DiffViewProps) {
   if (diff.isEmpty) {
     return (
       <p className="flex items-center gap-2 py-2 text-sm text-muted">
@@ -64,7 +58,7 @@ export function DiffView({
     );
   }
   if (initial)
-    return <InitialVersionView diff={diff} catalog={catalog} deckId={deckId} primerHref={primerHref} />;
+    return <InitialVersionView diff={diff} catalog={catalog} scope={scope} primerHref={primerHref} />;
 
   const sections = groupDiffForDisplay(diff);
   const strategic = sections.filter((section) => !COSMETIC_KINDS.has(section.kind));
@@ -73,7 +67,7 @@ export function DiffView({
   return (
     <div className="flex flex-col gap-5">
       {strategic.map((section) => (
-        <ChangeSection key={section.id} section={section} catalog={catalog} deckId={deckId} />
+        <ChangeSection key={section.id} section={section} catalog={catalog} scope={scope} />
       ))}
       {diff.deck.length > 0 && <DeckInfoSection changes={diff.deck} />}
       <PrimerSection diff={diff} primerHref={primerHref} />
@@ -87,7 +81,7 @@ export function DiffView({
             >
               <ul className="divide-y divide-border">
                 {section.changes.map((change) => (
-                  <DiffRow key={changeKey(change)} change={change} catalog={catalog} deckId={deckId} />
+                  <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
                 ))}
               </ul>
             </Disclosure>
@@ -123,11 +117,11 @@ function changeKey(change: DiffSection['changes'][number]): string {
 function ChangeSection({
   section,
   catalog,
-  deckId,
+  scope,
 }: {
   section: DiffSection;
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  scope: DeckScope;
 }) {
   const headingId = `diff-${section.id.replace(/[^a-z0-9-]/gi, '-')}`;
   return (
@@ -141,7 +135,7 @@ function ChangeSection({
       </Overline>
       <ul className="divide-y divide-border">
         {section.changes.map((change) => (
-          <DiffRow key={changeKey(change)} change={change} catalog={catalog} deckId={deckId} />
+          <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
         ))}
       </ul>
     </section>
@@ -258,14 +252,15 @@ function PrimerSection({ diff, primerHref }: { diff: DeckDiff; primerHref: Route
 function InitialVersionView({
   diff,
   catalog,
-  deckId,
+  scope,
   primerHref,
 }: {
   diff: DeckDiff;
   catalog: Record<CardKey, CardFacts>;
-  deckId: string;
+  scope: DeckScope;
   primerHref: Route | undefined;
 }) {
+  const routes = deckRoutes(scope);
   const byZone = new Map<ZoneId, AddedChange[]>();
   for (const change of diff.changes) {
     if (change.type !== 'added') continue;
@@ -321,7 +316,7 @@ function InitialVersionView({
                       <CardName
                         name={change.name}
                         scryfallId={facts?.scryfallId}
-                        href={routes.card(deckId, change.key)}
+                        href={routes.card(change.key)}
                         className="min-w-0 flex-1 text-fg"
                       />
                       {facts !== undefined && <ManaCost cost={facts.manaCost} />}

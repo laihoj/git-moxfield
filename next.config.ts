@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 
 import { PROXY_BODY_BUFFER_LIMIT } from './src/server/proxy-body-limit';
+import { UNLOGGED_REQUEST_PATTERNS } from './src/server/request-log-filter';
 
 /**
  * Security headers. The app renders untrusted Moxfield content (card names, primer
@@ -31,6 +32,11 @@ const nextConfig: NextConfig = {
   // The floating dev indicator covers the fixed mobile navigation; build and runtime
   // errors are still surfaced in development.
   devIndicators: false,
+  logging: {
+    // The dev server logs every request URL in full; link tokens travel in URLs and must
+    // never reach a log (share, device and recovery links, invites; see the module).
+    incomingRequests: { ignore: [...UNLOGGED_REQUEST_PATTERNS] },
+  },
   experimental: {
     // `src/proxy.ts` makes Next buffer request bodies; captured decks are posted as JSON
     // strings inside JSON (escaping can double them) or form-encoded (up to triple), so

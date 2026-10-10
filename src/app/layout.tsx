@@ -1,15 +1,9 @@
 import type { Metadata, Viewport } from 'next';
-import Link from 'next/link';
 import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 
-import { BrandMark } from '@/components/app/brand-mark';
-import { MainNav } from '@/components/app/main-nav';
-import { UserMenu } from '@/components/app/user-menu';
 import { Toaster } from '@/components/ui/toaster';
-import { getCurrentUser } from '@/server/auth/current-user';
 
-import packageJson from '../../package.json';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -31,14 +25,14 @@ export const viewport: Viewport = {
 };
 
 /**
- * Every page: header (navigation and the user menu when signed in, only the brand when
- * signed out), main content and footer.
+ * The document of every page. The page frame (header, main content, footer) belongs to
+ * the two kinds of pages below it: the app (`(app)/layout.tsx`, which looks up who is
+ * signed in) and the read-only share link pages (`s/[token]/layout.tsx`, which never do).
  */
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  // Every page depends on who is signed in. Stop prerendering here, before the session
-  // lookup opens the database: a build must never open, migrate or write to it.
+  // Every page depends on the request (a session, a share link). Stop prerendering here,
+  // before anything opens the database: a build must never open, migrate or write to it.
   await connection();
-  const user = await getCurrentUser();
   return (
     <html lang="en">
       <body className="flex min-h-dvh flex-col">
@@ -48,40 +42,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         >
           Skip to content
         </a>
-        <Toaster>
-          {/* Above the page's own positioned elements, so the user menu's panel overlaps them. */}
-          <header className="relative z-40 border-b border-border bg-surface/85 pt-[env(safe-area-inset-top)] backdrop-blur-md">
-            <div className="page-gutter mx-auto flex h-14 w-full max-w-[1080px] items-center justify-between gap-4">
-              <Link
-                href="/"
-                className="-ml-1 flex items-center gap-2 rounded-lg p-1 text-[0.9375rem] font-semibold tracking-tight text-fg"
-              >
-                <BrandMark />
-                git-moxfield
-              </Link>
-              {user !== null && (
-                <div className="flex items-center gap-1 sm:gap-2">
-                  <MainNav />
-                  <UserMenu displayName={user.displayName} isAdmin={user.role === 'admin'} />
-                </div>
-              )}
-            </div>
-          </header>
-          <main
-            id="main"
-            className="page-gutter mx-auto w-full max-w-[1080px] flex-1 pt-6 pb-10 md:pt-8 md:pb-16"
-          >
-            {children}
-          </main>
-          <footer className="border-t border-border">
-            <div className="page-gutter mx-auto flex w-full max-w-[1080px] flex-wrap items-center justify-between gap-x-4 gap-y-1 py-5 text-xs text-subtle">
-              <p>
-                git-moxfield <span className="tabular">v{packageJson.version}</span>
-              </p>
-              <p>Not affiliated with Moxfield. Nothing is ever written to your Moxfield decks.</p>
-            </div>
-          </footer>
-        </Toaster>
+        <Toaster>{children}</Toaster>
       </body>
     </html>
   );

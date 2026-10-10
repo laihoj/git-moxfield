@@ -141,6 +141,14 @@ export interface RestorePrimer {
   target: string;
 }
 
+/**
+ * The deck a restore export is pasted into: the deck the snapshot was captured from (its
+ * owner restoring a version), or a deck of the reader's own, which they open or create
+ * themselves (someone a deck was shared with, ADR 0007, who must never be sent to the
+ * owner's deck).
+ */
+export type RestoreTarget = 'source-deck' | 'own-deck';
+
 export interface RestoreExport {
   source: string;
   /** Per-zone sections in canonical zone order. Empty zones included when the target must be cleared. */
@@ -215,8 +223,11 @@ export interface DeckSource {
    */
   normalizeDeck(raw: RawSourcePayload): NormalizedDeck;
 
-  /** Generates text the user can paste into the source site to restore a snapshot. Pure. */
-  exportForRestore(snapshot: CanonicalSnapshot): RestoreExport;
+  /**
+   * Generates text the user can paste into the source site to restore a snapshot into
+   * `target` (default `source-deck`). Pure.
+   */
+  exportForRestore(snapshot: CanonicalSnapshot, target?: RestoreTarget): RestoreExport;
 
   /**
    * Converts source-flavored primer markup (e.g. Moxfield's `===panel:` directives and

@@ -81,6 +81,24 @@ describe('RestorePanel', () => {
   });
 });
 
+describe('RestorePanel without a deck to open', () => {
+  it('links to no Moxfield deck (a share link viewer restores into a deck of their own)', () => {
+    renderWithProviders(
+      <RestorePanel
+        restore={moxfieldRestoreExport(snapshot(), 'own-deck')}
+        downloadHref="/s/gmv_x/versions/3/restore.txt"
+      />,
+    );
+    const steps = screen.getByRole('region', { name: 'Steps' });
+    expect(within(steps).getAllByRole('listitem')[0]).toHaveTextContent(
+      'Open a deck of your own on Moxfield (or create one)',
+    );
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '/s/gmv_x/versions/3/restore.txt',
+    ]);
+  });
+});
+
 describe('RestorePanel primer', () => {
   function renderPrimer(primer: string | null) {
     return renderWithProviders(

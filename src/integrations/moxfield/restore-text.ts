@@ -15,7 +15,7 @@ import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from '@/core/model';
 import { isKnownZone, sortZones, zoneLabel, type KnownZone, type ZoneId } from '@/core/zones';
 
-import type { RestoreExport, RestoreSection } from '../deck-source';
+import type { RestoreExport, RestoreSection, RestoreTarget } from '../deck-source';
 
 import { MOXFIELD_SOURCE_ID } from './constants';
 
@@ -131,8 +131,19 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-function buildInstructions(snapshot: CanonicalSnapshot, sections: readonly RestoreSection[]): string[] {
-  const steps = ['Open the deck on Moxfield and reload the page, so you edit its latest state.'];
+/** The first step: open the deck to restore into, freshly loaded. */
+const OPEN_DECK_STEP: Record<RestoreTarget, string> = {
+  'source-deck': 'Open the deck on Moxfield and reload the page, so you edit its latest state.',
+  'own-deck':
+    'Open a deck of your own on Moxfield (or create one) and reload its page, so you edit its latest state.',
+};
+
+function buildInstructions(
+  snapshot: CanonicalSnapshot,
+  sections: readonly RestoreSection[],
+  target: RestoreTarget,
+): string[] {
+  const steps = [OPEN_DECK_STEP[target]];
 
   const commanders = zoneCards(snapshot, 'commanders');
   if (commanders.length > 0) {
@@ -275,6 +286,9 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
   return limitations;
 }
 
+/** Where a primer is edited on Moxfield (the deck page's Primer tab, `/decks/{id}/primer`). */
+const PRIMER_TARGET = 'Deck page › Primer › Edit';
+
 /**
  * Builds the Moxfield restore export for a snapshot. Pure and deterministic.
  *
@@ -282,11 +296,14 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
  * present (empty text and `cardCount: 0` mean "clear this tab"), other zones only when
  * they have cards. `combined` is the Main Deck plus a `SIDEBOARD:` block for Moxfield's
  * "Create New Deck › Paste in List" form, or `null` when there is no mainboard.
+ *
+ * `target` only changes the first step: open the deck the snapshot was captured from
+ * (`source-deck`, the default), or a deck of the reader's own (`own-deck`).
  */
-/** Where a primer is edited on Moxfield (the deck page's Primer tab, `/decks/{id}/primer`). */
-const PRIMER_TARGET = 'Deck page › Primer › Edit';
-
-export function moxfieldRestoreExport(snapshot: CanonicalSnapshot): RestoreExport {
+export function moxfieldRestoreExport(
+  snapshot: CanonicalSnapshot,
+  target: RestoreTarget = 'source-deck',
+): RestoreExport {
   const sections = buildSections(snapshot);
   const main = zoneText(snapshot, 'mainboard');
   const side = zoneText(snapshot, 'sideboard');
@@ -304,7 +321,7 @@ export function moxfieldRestoreExport(snapshot: CanonicalSnapshot): RestoreExpor
     // Moxfield's primer editor reproduces it exactly (directives and [[Card]] links).
     primer: snapshot.primer === null ? null : { text: snapshot.primer, target: PRIMER_TARGET },
     combined,
-    instructions: buildInstructions(snapshot, sections),
+    instructions: buildInstructions(snapshot, sections, target),
     limitations: buildLimitations(snapshot, combined !== null),
   };
 }

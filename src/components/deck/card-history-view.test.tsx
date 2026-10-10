@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveCardHistory } from '@/core/history/card-history';
 import type { CardHistoryEntry, CardVersionPoint, ZoneQuantity } from '@/core/history/types';
 import { facts, metaItemTexts, renderWithProviders } from '@/components/test-utils';
+import type { DeckScope } from '@/lib/routes';
 
 import { CardHistoryView, historySummary, transitionLabel } from './card-history-view';
 
@@ -21,6 +22,9 @@ function point(
     zones,
   };
 }
+
+const OWNER: DeckScope = { kind: 'owner', deckId: 'deck-1' };
+const SHARED = { kind: 'shared', token: `gmv_${'A'.repeat(43)}` } as const;
 
 const MAIN = (quantity = 1): ZoneQuantity => ({ zone: 'mainboard', quantity });
 const CONSIDERING: ZoneQuantity = { zone: 'considering', quantity: 1 };
@@ -113,7 +117,7 @@ describe('CardHistoryView', () => {
     const history = dressDownHistory();
     renderWithProviders(
       <CardHistoryView
-        deckId="deck-1"
+        scope={OWNER}
         history={history}
         facts={facts('dress down', 'Dress Down', '{1}{U}', 'Enchantment')}
         showAll={false}
@@ -149,7 +153,7 @@ describe('CardHistoryView', () => {
       name: 'Sol Ring',
       points: [point(1, [MAIN()]), point(2, [MAIN()]), point(3, [MAIN()]), point(null, [MAIN()])],
     });
-    renderWithProviders(<CardHistoryView deckId="deck-1" history={history} facts={null} showAll={false} />);
+    renderWithProviders(<CardHistoryView scope={OWNER} history={history} facts={null} showAll={false} />);
     const timeline = screen.getByRole('list', { name: 'Card timeline' });
     expect(timeline).toHaveTextContent('v1–now');
     expect(timeline).toHaveTextContent('3 versions');
@@ -166,7 +170,7 @@ describe('CardHistoryView', () => {
         point(null, [MAIN()]),
       ],
     });
-    renderWithProviders(<CardHistoryView deckId="deck-1" history={history} facts={null} showAll={false} />);
+    renderWithProviders(<CardHistoryView scope={OWNER} history={history} facts={null} showAll={false} />);
 
     const items = [...screen.getByRole('list', { name: 'Card timeline' }).querySelectorAll(':scope > li')];
     expect(items.map((item) => item.textContent)).toEqual([
@@ -178,12 +182,30 @@ describe('CardHistoryView', () => {
   });
 
   it('lists every version when asked to', () => {
-    renderWithProviders(
-      <CardHistoryView deckId="deck-1" history={dressDownHistory()} facts={null} showAll />,
-    );
+    renderWithProviders(<CardHistoryView scope={OWNER} history={dressDownHistory()} facts={null} showAll />);
     expect(screen.getByRole('link', { name: 'Current' })).toHaveAttribute('href', '/decks/deck-1');
     expect(screen.getByRole('link', { name: 'v2' })).toBeInTheDocument();
     expect(screen.getAllByText('No change')).toHaveLength(2);
     expect(screen.getByRole('link', { name: 'Every version' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('shows viewers of a share link the committed versions, linked within the link’s pages', () => {
+    const history = deriveCardHistory({
+      key: 'dress down',
+      name: 'Dress Down',
+      points: [point(1, [MAIN()]), point(2, [CONSIDERING]), point(3, [MAIN()])],
+    });
+    renderWithProviders(<CardHistoryView scope={SHARED} history={history} facts={null} showAll />);
+    expect(screen.getByText('In the latest version:').parentElement).toHaveTextContent('Mainboard');
+    expect(screen.queryByRole('link', { name: 'Current' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'v2' })).toHaveAttribute('href', `/s/${SHARED.token}/versions/2`);
+    expect(screen.getByRole('link', { name: 'Changes' })).toHaveAttribute(
+      'href',
+      `/s/${SHARED.token}/cards/dress%20down`,
+    );
+    expect(screen.getByRole('link', { name: 'Every version' })).toHaveAttribute(
+      'href',
+      `/s/${SHARED.token}/cards/dress%20down?all=1`,
+    );
   });
 });

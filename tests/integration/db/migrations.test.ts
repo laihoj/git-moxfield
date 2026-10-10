@@ -252,6 +252,61 @@ describe('database migrations', () => {
       }
     });
 
+    it('records the key a share link descends from, keeping existing links (0006, 0007)', () => {
+      const journalPath = join(migrations, 'meta', '_journal.json');
+      const full = readFileSync(journalPath, 'utf8');
+      const journal = JSON.parse(full) as { entries: { tag: string }[] };
+      const at = journal.entries.findIndex((entry) => entry.tag === '0006_share_links');
+      expect(at).toBeGreaterThan(0);
+      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, at) }));
+      const fresh = join(dir, 'before-0006.db');
+      const old = openDatabase(fresh, { migrationsFolder: migrations });
+      const owner = createRepositories(old).users.create({ displayName: 'Mikko', role: 'member' });
+      const deck = createTestDeck(createRepositories(old, { workspaceId: owner.workspaceId }));
+      old.$client
+        .prepare(
+          `INSERT INTO share_links (id, deck_id, token_hash, label, include_notes, created_by_user_id, created_at)
+           VALUES ('link-1', ?, ?, 'For Pekka', 1, ?, '2026-10-01T00:00:00.000Z')`,
+        )
+        .run(deck.id, 'a'.repeat(64), owner.id);
+      old.$client.close();
+
+      writeFileSync(journalPath, full);
+      const db = openDatabase(fresh, { migrationsFolder: migrations });
+      try {
+        const link = createRepositories(db).shareLinks.findActive('a'.repeat(64));
+        expect(link?.link).toMatchObject({
+          id: 'link-1',
+          label: 'For Pekka',
+          includeNotes: true,
+          credentialId: null,
+        });
+        const keyReference = (
+          db.$client.pragma('foreign_key_list(share_links)') as {
+            table: string;
+            from: string;
+            on_delete: string;
+          }[]
+        ).find((reference) => reference.from === 'credential_id');
+        expect(keyReference).toMatchObject({ table: 'credentials', on_delete: 'SET NULL' });
+        const indexes = (db.$client.pragma('index_list(share_links)') as { name: string }[]).map(
+          (i) => i.name,
+        );
+        expect(indexes).toEqual(
+          expect.arrayContaining([
+            'share_links_credential_idx',
+            'share_links_deck_idx',
+            'share_links_token_hash_unique',
+          ]),
+        );
+        expect(sqliteNames(db, 'table')).not.toContain('__new_share_links');
+        expect(sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+        expect(db.$client.pragma('foreign_key_check')).toEqual([]);
+      } finally {
+        db.$client.close();
+      }
+    });
+
     it('opens an up-to-date database unchanged', () => {
       const db = reopen();
       try {

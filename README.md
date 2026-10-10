@@ -370,6 +370,9 @@ All optional. See [`.env.example`](.env.example).
 - Every user signs in (ADR 0006): bookmarklet keys, sessions and one-time links are
   stored hashed. The capture endpoints only accept same-origin JSON from a signed-in
   browser or with a bookmarklet key, or a form POST carrying a bookmarklet key.
+- Link tokens travel in URLs (device, recovery and invite links; share links, ADR
+  0007). The dev server logs every request URL, except those carrying a token
+  (`src/server/request-log-filter.ts`); production servers log no requests.
 - Requests are only answered when addressed to an IP address, `localhost`, the host of
   `PUBLIC_APP_URL` or a name in `ALLOWED_HOSTS` (others get `421 Unknown host`). This
   stops DNS-rebinding attacks, in which a web page re-points its own domain name to

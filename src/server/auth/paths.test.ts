@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { invitePath, loginLinkPath, safeRedirectPath, signInPath } from './paths';
+import { invitePath, loginLinkPath, safeRedirectPath, sharedDeckPath, signInPath } from './paths';
 
 describe('safeRedirectPath', () => {
   it.each([
@@ -64,5 +64,6 @@ describe('account paths', () => {
   it('puts link tokens into the path', () => {
     expect(loginLinkPath('gml_x')).toBe('/signin/gml_x');
     expect(invitePath('gmi_x')).toBe('/invite/gmi_x');
+    expect(sharedDeckPath('gmv_x')).toBe('/s/gmv_x');
   });
 });

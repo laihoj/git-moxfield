@@ -412,7 +412,11 @@ export const invites = sqliteTable('invites', {
   revokedAt: text('revoked_at'),
 });
 
-/** Read-only links to one deck's history (ADR 0007). */
+/**
+ * Read-only links to one deck's committed history (ADR 0007). Anyone holding the token
+ * can view while the link is not revoked, the deck is tracked and its owner is not
+ * disabled. Removed with the deck (untracking ends every link at once).
+ */
 export const shareLinks = sqliteTable(
   'share_links',
   {
@@ -425,9 +429,16 @@ export const shareLinks = sqliteTable(
     /** Whether viewers see the owner's private version notes. */
     includeNotes: integer('include_notes', { mode: 'boolean' }).notNull().default(false),
     createdByUserId: text('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * The bookmarklet key the creating session descends from (see `sessions.credential_id`),
+     * when there is one. Revoking a stolen key can then find, and revoke with it, the links
+     * made in the browsers it signed in. `null` for links made in a browser signed in otherwise.
+     */
+    credentialId: text('credential_id').references(() => credentials.id, { onDelete: 'set null' }),
     createdAt: text('created_at').notNull(),
+    /** Last view through the link, recorded at most hourly. */
     lastViewedAt: text('last_viewed_at'),
     revokedAt: text('revoked_at'),
   },
-  (t) => [index('share_links_deck_idx').on(t.deckId)],
+  (t) => [index('share_links_deck_idx').on(t.deckId), index('share_links_credential_idx').on(t.credentialId)],
 );

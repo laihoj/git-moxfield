@@ -3,9 +3,10 @@
  * asks an admin, who makes a one-time recovery link for them on the admin page. The link
  * signs them in once; their decks and history are untouched, and they make a new
  * bookmarklet. Whoever opens a recovery link is signed in as its person, so using one
- * signs out every other browser of theirs and revokes their bookmarklets (a lost or
- * stolen device is cut off), and their Account page keeps a record of whose link it was.
- * Admins see the links that can still be used and can withdraw them.
+ * signs out every other browser of theirs and revokes their bookmarklets and share links
+ * (a lost or stolen device is cut off, with the access handed out from it), and their
+ * Account page keeps a record of whose link it was. Admins see the links that can still
+ * be used and can withdraw them.
  */
 import {
   bookmarkletRows,
@@ -24,6 +25,7 @@ import { APP_URL } from './support/constants';
 import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { BLUE_FARM_PUBLIC_ID, mockMoxfield } from './support/mock';
+import { createShareLink, expectLinkNotWorking } from './support/share';
 
 test('a recovery link lets someone back in after they revoked every bookmarklet', async ({
   page,
@@ -67,7 +69,7 @@ test('a recovery link lets someone back in after they revoked every bookmarklet'
     await expect(row).toContainText('0 bookmarklets');
     await row.getByRole('button', { name: `Create a recovery link for ${user.displayName}` }).click();
     await expect(row).toContainText(
-      `Send this only to ${user.displayName}: whoever opens it signs in as them, and their other devices and bookmarklets are signed out.`,
+      `Send this only to ${user.displayName}: whoever opens it signs in as them, their other devices are signed out, and their bookmarklets and share links stop working.`,
     );
     recoveryUrl = await readOneTimeLink(row, '/signin/gml_');
     await expectNoHorizontalOverflow(admin);
@@ -95,7 +97,7 @@ test('a recovery link lets someone back in after they revoked every bookmarklet'
 
     await expect(newBrowser).toHaveURL('/setup?welcome=recovery');
     await expect(newBrowser.getByRole('region', { name: `Welcome back, ${user.displayName}` })).toContainText(
-      'Every other device was signed out and your old bookmarklets were revoked',
+      'Every other device was signed out, and your old bookmarklets and share links were revoked',
     );
   });
 
@@ -137,13 +139,23 @@ test('a recovery link signs the lost devices out, and an admin can withdraw one 
   context,
   newContext,
   consoleErrors,
-}) => {
-  // The browser reports the refused capture's status in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 403/);
+}, testInfo) => {
+  // The browser reports the refused capture's and the dead share link's status in the console.
+  consoleErrors.allow(/Failed to load resource: the server responded with a status of 40[34]/);
   const { user, bookmarklets } = await signIn(context, {
     displayName: uniqueName('Robbed'),
     bookmarkletLabel: 'Stolen laptop',
   });
+  // Whoever has the stolen laptop shares a deck with themselves, notes included.
+  const deck = await createBlueFarmCopy(testInfo, 'Robbed Farm');
+  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
+  await commitVersion(page, { sequence: 1, message: 'Before the theft' });
+  await expect(page.getByText('Committed v1')).toBeVisible();
+  const thiefsLink = await createShareLink(page, deckId, { label: 'Backup', includeNotes: true });
+  const thief = await (await newContext()).newPage();
+  await thief.goto(thiefsLink.path);
+  await expect(thief.getByRole('heading', { level: 1, name: 'Robbed Farm' })).toBeVisible();
+
   const adminContext = await newContext();
   await signIn(adminContext, { role: 'admin' });
   const admin = await adminContext.newPage();
@@ -187,6 +199,11 @@ test('a recovery link signs the lost devices out, and an admin can withdraw one 
     await expect(newLaptop.getByRole('list', { name: 'Recovery links used' })).toContainText(
       'Recovery link from',
     );
+
+    // Share links made before the recovery stop working: the stolen laptop's is gone.
+    await expectLinkNotWorking(thief, thiefsLink.path);
+    await newLaptop.goto(`/decks/${deckId}/share`);
+    await expect(newLaptop.getByText('No links yet')).toBeVisible();
   });
 
   await test.step('the stolen bookmarklet no longer works', async () => {

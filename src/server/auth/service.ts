@@ -16,14 +16,16 @@
  * {@link SYSTEM_ACTOR}, the command line. Admins manage accounts, not decks: no admin
  * method reaches anyone's decks. The one way an admin can act as someone else is a
  * recovery link, which signs in as that person; consuming one signs every other device
- * of theirs out and revokes their bookmarklets, and the person sees on their account
- * page whose link it was, so it cannot be used quietly.
+ * of theirs out and revokes their bookmarklets and share links, and the person sees on
+ * their account page whose link it was, so it cannot be used quietly.
  *
  * Revocation reaches everything derived: a session made through a device link descends
  * from the bookmarklet key of the session that made the link, so revoking a key ends
- * those sessions and unused links too; signing out everywhere, being disabled or
- * recovered withdraws unused links; disabling an admin withdraws the invites and links
- * they made (and links made by an admin who is no longer an active admin never work).
+ * those sessions and unused links too (and, when the owner asks, the share links made
+ * in them, also later on for a key revoked before); signing out everywhere, being
+ * disabled or recovered withdraws unused links; being recovered revokes every share
+ * link to the person's decks; disabling an admin withdraws the invites and links they
+ * made (and links made by an admin who is no longer an active admin never work).
  *
  * Every multi-step change (accepting an invite, consuming a link, claiming, revoking)
  * runs in one `IMMEDIATE` transaction, so one-time things stay one-time across
@@ -74,6 +76,7 @@ import type {
   LoginLinkStatusDTO,
   RecoveryLinkDTO,
   RecoveryUseDTO,
+  RevokedKeyShareLinksDTO,
   SessionDTO,
   SessionUser,
   SignIn,
@@ -205,10 +208,32 @@ export interface AuthService {
    * browsers it signed in, and those signed in with a device link made on one of them)
    * and withdraws the unused device links made there, except the session making the
    * request. With `includeDerived`, does the same for the keys made through it
-   * ({@link BookmarkletKeyDTO.derived}); otherwise those keep working.
+   * ({@link BookmarkletKeyDTO.derived}); otherwise those keep working. With
+   * `includeShareLinks`, also revokes the share links made in those browsers (of the key,
+   * and of the keys made through it when `includeDerived` is set; see
+   * {@link BookmarkletKeyDTO.shareLinkCount}); otherwise they keep working.
    * @returns whether an active key was revoked.
    */
-  revokeKey(user: SessionUser, keyId: string, options?: { includeDerived?: boolean }): Promise<boolean>;
+  revokeKey(
+    user: SessionUser,
+    keyId: string,
+    options?: { includeDerived?: boolean; includeShareLinks?: boolean },
+  ): Promise<boolean>;
+  /**
+   * The user's revoked keys through which share links that still work were made (see
+   * {@link BookmarkletKeyDTO.shareLinkCount}), most recently revoked first: read access
+   * that outlived its key because the key was revoked without its share links (the
+   * owner's choice, or a link made after the owner looked).
+   */
+  listRevokedKeyShareLinks(user: SessionUser): Promise<RevokedKeyShareLinksDTO[]>;
+  /**
+   * Revokes the share links made in browsers one of the user's own keys signed in
+   * (directly, or through a device link made on one of them), whether or not the key is
+   * revoked: what `revokeKey` with `includeShareLinks` revokes, also later on. The key
+   * itself, and links made through keys made through it, are not touched.
+   * @returns how many links were revoked (0 for another user's or an unknown key).
+   */
+  revokeKeyShareLinks(user: SessionUser, keyId: string): Promise<number>;
 
   // --- One-time sign-in links -----------------------------------------------------
 
@@ -246,8 +271,10 @@ export interface AuthService {
    *
    * A recovery link is for someone who lost every way in, and it signs in as them
    * whoever opens it: consuming one ends every other session of the user, revokes all of
-   * their bookmarklet keys and withdraws their unused links, so a lost or stolen device
-   * is cut off and an admin's misuse cannot go unnoticed.
+   * their bookmarklet keys, withdraws their unused links and revokes every share link to
+   * their decks (ADR 0007), so a lost or stolen device is cut off, read access handed out
+   * from it ends too, and an admin's misuse cannot go unnoticed or outlast the person's
+   * own recovery.
    */
   consumeLoginLink(token: unknown, userAgent: string | null): Promise<SignIn | null>;
 
@@ -562,7 +589,7 @@ class DefaultAuthService implements AuthService {
           madeFromKeyId: record.createdByCredentialId,
         });
         const all = tx.credentials.listForUser(user.id, { includeRevoked: true });
-        return { key: toKeyDTO(record, all), bookmarklets };
+        return { key: toKeyDTO(record, all, shareLinkCounts(tx, user.id, all)), bookmarklets };
       });
     });
   }
@@ -570,11 +597,16 @@ class DefaultAuthService implements AuthService {
   listKeys(user: SessionUser): Promise<BookmarkletKeyDTO[]> {
     return settle(() => {
       const all = this.repos.credentials.listForUser(user.id, { includeRevoked: true });
-      return all.filter((key) => key.revokedAt === null).map((key) => toKeyDTO(key, all));
+      const links = shareLinkCounts(this.repos, user.id, all);
+      return all.filter((key) => key.revokedAt === null).map((key) => toKeyDTO(key, all, links));
     });
   }
 
-  revokeKey(user: SessionUser, keyId: string, options: { includeDerived?: boolean } = {}): Promise<boolean> {
+  revokeKey(
+    user: SessionUser,
+    keyId: string,
+    options: { includeDerived?: boolean; includeShareLinks?: boolean } = {},
+  ): Promise<boolean> {
     return settle(() =>
       this.repos.transaction((tx) => {
         const at = this.now().toISOString();
@@ -583,10 +615,11 @@ class DefaultAuthService implements AuthService {
             ? descendantKeyIds(tx.credentials.listForUser(user.id, { includeRevoked: true }), keyId)
             : [];
         if (!tx.credentials.revoke(user.id, keyId, at)) return false;
+        const keys = [keyId, ...derived];
         let derivedKeys = 0;
         let sessions = 0;
         let deviceLinks = 0;
-        for (const id of [keyId, ...derived]) {
+        for (const id of keys) {
           if (id !== keyId && tx.credentials.revoke(user.id, id, at)) derivedKeys += 1;
           sessions += tx.sessions.revokeAllForUser(user.id, at, {
             credentialId: id,
@@ -594,14 +627,54 @@ class DefaultAuthService implements AuthService {
           });
           deviceLinks += tx.loginLinks.revokeUnused({ userId: user.id, credentialId: id }, at);
         }
+        const shareLinks =
+          options.includeShareLinks === true ? tx.shareLinks.revokeByCredential(user.id, keys, at) : 0;
         this.logger.info('Bookmarklet key revoked', {
           userId: user.id,
           keyId,
           derivedKeys,
           endedSessions: sessions,
           deviceLinks,
+          shareLinks,
         });
         return true;
+      }),
+    );
+  }
+
+  listRevokedKeyShareLinks(user: SessionUser): Promise<RevokedKeyShareLinksDTO[]> {
+    return settle(() => {
+      const revoked = this.repos.credentials
+        .listForUser(user.id, { includeRevoked: true })
+        .filter((key): key is CredentialRecord & { revokedAt: string } => key.revokedAt !== null);
+      const links = shareLinkCounts(this.repos, user.id, revoked);
+      return revoked
+        .flatMap((key) => {
+          const shareLinkCount = links.get(key.id) ?? 0;
+          return shareLinkCount === 0
+            ? []
+            : [{ id: key.id, label: key.label, revokedAt: key.revokedAt, shareLinkCount }];
+        })
+        .sort((a, b) => b.revokedAt.localeCompare(a.revokedAt));
+    });
+  }
+
+  revokeKeyShareLinks(user: SessionUser, keyId: string): Promise<number> {
+    return settle(() =>
+      this.repos.transaction((tx) => {
+        const own = tx.credentials
+          .listForUser(user.id, { includeRevoked: true })
+          .some((key) => key.id === keyId);
+        if (!own) return 0;
+        const shareLinks = tx.shareLinks.revokeByCredential(user.id, [keyId], this.now().toISOString());
+        if (shareLinks > 0) {
+          this.logger.info('Share links of a bookmarklet key revoked', {
+            userId: user.id,
+            keyId,
+            shareLinks,
+          });
+        }
+        return shareLinks;
       }),
     );
   }
@@ -746,16 +819,22 @@ class DefaultAuthService implements AuthService {
         const { link, user } = consumed;
         if (link.purpose === 'recovery') {
           // Recovery is for someone who lost every way in: whatever else still signs in as
-          // them (a lost or stolen device, an old bookmarklet) stops working now.
+          // them (a lost or stolen device, an old bookmarklet) stops working now, and so
+          // does every share link to their decks (ADR 0007). Whoever held a lost device,
+          // or an earlier recovery link, could have made those, and nothing tells them
+          // apart from the person's own: the read access they grant would outlive the
+          // recovery, unnoticed.
           const endedSessions = tx.sessions.revokeAllForUser(user.id, at);
           const revokedKeys = tx.credentials.revokeAllForUser(user.id, at);
           const revokedLinks = tx.loginLinks.revokeUnused({ userId: user.id }, at);
-          this.logger.info('Recovery link used: other sessions ended, keys revoked', {
+          const revokedShareLinks = tx.shareLinks.revokeAllForWorkspace(user.workspaceId, at);
+          this.logger.info('Recovery link used: other sessions ended, keys and share links revoked', {
             userId: user.id,
             createdBy: link.createdByUserId ?? 'command line',
             endedSessions,
             revokedKeys,
             revokedLinks,
+            revokedShareLinks,
           });
         }
         const signIn = this.issueSession(tx, user, {
@@ -1232,12 +1311,18 @@ function toSessionUser(user: UserRecord, sessionId: string): SessionUser {
 
 /**
  * A key as listed to its owner. `all`: every key of the owner, revoked ones included, to
- * name what the key was made from and what was made through it.
+ * name what the key was made from and what was made through it. `shareLinks`: the
+ * owner's share links that are not revoked, counted by the key they descend from.
  */
-function toKeyDTO(record: CredentialRecord, all: readonly CredentialRecord[]): BookmarkletKeyDTO {
+function toKeyDTO(
+  record: CredentialRecord,
+  all: readonly CredentialRecord[],
+  shareLinks: ReadonlyMap<string, number>,
+): BookmarkletKeyDTO {
   const byId = new Map(all.map((key) => [key.id, key]));
   const parent = record.createdByCredentialId === null ? undefined : byId.get(record.createdByCredentialId);
-  const derived = descendantKeyIds(all, record.id)
+  const descendants = descendantKeyIds(all, record.id);
+  const derived = descendants
     .map((id) => byId.get(id))
     .filter((key): key is CredentialRecord => key?.revokedAt === null);
   return {
@@ -1247,7 +1332,27 @@ function toKeyDTO(record: CredentialRecord, all: readonly CredentialRecord[]): B
     lastUsedAt: record.lastUsedAt,
     madeFrom: parent === undefined ? null : keyRef(parent),
     derived: derived.map(keyRef),
+    shareLinkCount: shareLinks.get(record.id) ?? 0,
+    // Every descendant, as `revokeKey` with `includeDerived` reaches revoked ones too.
+    derivedShareLinkCount: descendants.reduce((sum, id) => sum + (shareLinks.get(id) ?? 0), 0),
   };
+}
+
+/** The user's share links that are not revoked, counted by the key their creating session descends from. */
+function shareLinkCounts(
+  repos: Repositories,
+  userId: string,
+  keys: readonly CredentialRecord[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  const links = repos.shareLinks.listByCredential(
+    userId,
+    keys.map((key) => key.id),
+  );
+  for (const link of links) {
+    if (link.credentialId !== null) counts.set(link.credentialId, (counts.get(link.credentialId) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function keyRef(key: CredentialRecord): KeyRefDTO {

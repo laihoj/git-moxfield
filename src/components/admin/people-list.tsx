@@ -171,8 +171,8 @@ function PersonRow({
               meta="works once"
             >
               Send this only to <span className="font-medium">{person.displayName}</span>: whoever opens it
-              signs in as them, and their other devices and bookmarklets are signed out. It works once; this
-              is the only time it’s shown.
+              signs in as them, their other devices are signed out, and their bookmarklets and share links
+              stop working. It works once; this is the only time it’s shown.
             </OneTimeLink>
             {/* IconButton positions itself (relative, for its touch target), so a wrapper places it. */}
             <div className="absolute top-2.5 right-2.5">

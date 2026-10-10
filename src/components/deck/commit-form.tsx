@@ -11,7 +11,7 @@ import { Card } from '@/components/ui/card';
 import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
 import { useToast } from '@/components/ui/toaster';
 import { versionLabel } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { ownerDeckRoutes } from '@/lib/routes';
 
 import { TagInput } from './tag-input';
 
@@ -87,7 +87,7 @@ export function CommitForm({
           description: result.message,
           action: {
             label: `View ${versionLabel(result.sequence)}`,
-            href: routes.version(deckId, result.sequence),
+            href: ownerDeckRoutes(deckId).version(result.sequence),
           },
         });
       }

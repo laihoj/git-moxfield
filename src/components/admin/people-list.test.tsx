@@ -69,7 +69,7 @@ describe('PeopleList', () => {
     expect(createRecoveryLinkAction).toHaveBeenCalledWith('mikko');
     expect(await screen.findByText(url)).toBeInTheDocument();
     expect(row('Mikko')).toHaveTextContent(
-      'Send this only to Mikko: whoever opens it signs in as them, and their other devices and bookmarklets are signed out.',
+      'Send this only to Mikko: whoever opens it signs in as them, their other devices are signed out, and their bookmarklets and share links stop working.',
     );
 
     await user.click(screen.getByRole('button', { name: 'Hide recovery link' }));

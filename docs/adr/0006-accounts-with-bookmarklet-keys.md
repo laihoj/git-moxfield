@@ -64,9 +64,10 @@ device links.
   newest per user works): for a user who lost every key and every signed-in device.
   History is untouched; the user creates new keys. Whoever opens a recovery link is
   signed in as that user, so consuming one ends every other session of the user,
-  revokes all their keys and withdraws their unused links (a lost or stolen device is
-  cut off, and misuse cannot go unnoticed), and the user's Account page permanently
-  lists which admin's link was used and when. Admins see the recovery links that can
+  revokes all their keys, withdraws their unused links and revokes every share link to
+  their decks (ADR 0007; a lost or stolen device is cut off along with the read access
+  handed out from it, and misuse cannot go unnoticed), and the user's Account page
+  permanently lists which admin's link was used and when. Admins see the recovery links that can
   still be used and can withdraw them; an admin cannot make one for themselves.
 - **Claim** (first run): while the instance has no users, a setup code is generated
   once, stored, and printed to the server log on every start. Entering it at `/claim`
@@ -92,8 +93,9 @@ only while the admin who made it is an active admin. `member` is everyone else.
 - The first same-tab capture in a browser takes one confirmation click; later ones in
   the same signed-in browser do not.
 - Admins are trusted with accounts, not decks: a recovery link lets an admin sign in as
-  someone, but only loudly (their other devices and bookmarklets stop working, and
-  their Account page names the admin).
+  someone, but only loudly (their other devices, bookmarklets and share links stop
+  working, and their Account page names the admin).
+- After a recovery, the user shares their decks again with new links.
 - Losing every key and device does not lose data: an admin issues a recovery link.
 - The installation-wide capture token is replaced by per-user keys; bookmarklets
   created before this change stop working and must be recreated.

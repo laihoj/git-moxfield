@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   cleanUserAgent,
   MAX_DISPLAY_NAME_LENGTH,
+  MAX_SHARE_LINK_LABEL_LENGTH,
   MAX_USER_AGENT_LENGTH,
   validateDisplayName,
   validateInviteNote,
   validateKeyLabel,
+  validateShareLinkLabel,
 } from './validation';
 
 describe('validateDisplayName', () => {
@@ -41,6 +43,18 @@ describe('validateKeyLabel and validateInviteNote', () => {
     expect(validateInviteNote('')).toEqual({ ok: true, value: '' });
     expect(validateInviteNote('for Mikko')).toEqual({ ok: true, value: 'for Mikko' });
     expect(validateInviteNote('x'.repeat(201)).ok).toBe(false);
+  });
+});
+
+describe('validateShareLinkLabel', () => {
+  it('requires 1–60 visible characters, normalized', () => {
+    expect(validateShareLinkLabel('  For\n Pekka ')).toEqual({ ok: true, value: 'For Pekka' });
+    const longest = 'x'.repeat(MAX_SHARE_LINK_LABEL_LENGTH);
+    expect(validateShareLinkLabel(longest)).toEqual({ ok: true, value: longest });
+    expect(validateShareLinkLabel('')).toEqual({ ok: false, message: 'Name the link, e.g. “For Mikko”.' });
+    expect(validateShareLinkLabel(`${longest}x`).ok).toBe(false);
+    expect(validateShareLinkLabel('For\u202ePekka').ok).toBe(false);
+    expect(validateShareLinkLabel(undefined).ok).toBe(false);
   });
 });
 

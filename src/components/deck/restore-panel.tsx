@@ -14,8 +14,11 @@ import { zoneTextClass } from './zone-badge';
 
 export interface RestorePanelProps {
   restore: RestoreExport;
-  /** Deck URL on Moxfield. */
-  deckUrl: string;
+  /**
+   * The deck on Moxfield to restore into, for its owner. Without it (a share link viewer,
+   * who restores into a deck of their own) there is no link to a deck.
+   */
+  deckUrl?: string;
   /** URL of the plain-text download of every section. */
   downloadHref: string;
 }
@@ -43,14 +46,16 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
             Steps
           </h2>
           <div className="flex flex-wrap gap-2">
-            <ExternalButtonLink
-              href={deckUrl}
-              size="sm"
-              variant="primary"
-              trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
-            >
-              Open deck in Moxfield
-            </ExternalButtonLink>
+            {deckUrl !== undefined && (
+              <ExternalButtonLink
+                href={deckUrl}
+                size="sm"
+                variant="primary"
+                trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
+              >
+                Open deck in Moxfield
+              </ExternalButtonLink>
+            )}
             <a href={downloadHref} download className={buttonClasses({ size: 'sm', variant: 'secondary' })}>
               <Download aria-hidden="true" className="size-4" />
               Download .txt
@@ -62,7 +67,7 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
             <li key={index} className="flex gap-3 text-sm leading-6 text-fg">
               <span
                 aria-hidden="true"
-                className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent tabular"
+                className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent tabular select-none"
               >
                 {index + 1}
               </span>

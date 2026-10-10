@@ -3,7 +3,7 @@
  * version pages describe the same thing with the same words (docs/ux.md).
  */
 import type { DeckSourceErrorCode, IngestMethod } from '@/integrations/deck-source';
-import type { DeckStatus, DeckSummaryDTO, VersionRefDTO } from '@/server/services/types';
+import type { DeckStatus, DeckSummaryDTO, SharedDeckDTO, VersionRefDTO } from '@/server/services/types';
 
 import { versionLabel } from './format';
 
@@ -49,6 +49,20 @@ export function isUnnamedDeck(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' |
 /** The deck's name for titles and labels: `New Moxfield deck` until its name is known. */
 export function deckTitle(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' | 'status'>): string {
   return isUnnamedDeck(deck) ? UNNAMED_DECK_TITLE : deck.name;
+}
+
+/** Title shown for a shared deck whose latest version has no name. */
+export const UNTITLED_DECK_TITLE = 'Untitled deck';
+
+/**
+ * A shared deck's name for titles and labels: its latest version's, `New Moxfield deck`
+ * before the first version and `Untitled deck` for a version without a name. Viewers see
+ * committed facts only, and never where the deck lives on Moxfield, so its Moxfield id
+ * never stands in for a name.
+ */
+export function sharedDeckTitle(deck: Pick<SharedDeckDTO, 'name' | 'head'>): string {
+  if (deck.head === null) return UNNAMED_DECK_TITLE;
+  return deck.name.trim() === '' ? UNTITLED_DECK_TITLE : deck.name;
 }
 
 /** How a deck state reached git-moxfield, as shown on version pages. */

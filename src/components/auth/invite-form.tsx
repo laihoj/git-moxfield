@@ -33,7 +33,7 @@ export function InviteForm({ token, maxNameLength }: InviteFormProps) {
       <Field
         label="Your name"
         htmlFor={nameId}
-        hint="How you appear in git-moxfield. You can change it later."
+        hint="How you appear in git-moxfield and on your share links. You can change it later."
         error={nameError}
       >
         <Input

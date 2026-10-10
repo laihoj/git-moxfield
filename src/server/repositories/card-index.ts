@@ -26,7 +26,7 @@ export interface CardVersionZones {
 
 export interface CardSearchHit {
   key: CardKey;
-  /** Most recent display name (from the working state when the card is in it). */
+  /** Most recent display name (from the working state when it is searched and holds the card). */
   name: string;
   /** Number of versions containing the card in any zone. */
   versionsPresent: number;
@@ -46,14 +46,21 @@ export interface CardIndexRepository {
    */
   versionsContainingCard(deckId: string, key: CardKey): CardVersionZones[];
   /**
-   * Finds cards that appear in any version of the deck or in its working state.
+   * Finds cards that appear in any version of the deck or, unless `includeWorking` is
+   * `false`, in its working state (the latest observation). Committed history only, with
+   * `includeWorking: false`: no card, name or flag then comes from the working state.
    * Matching ignores case, diacritics and punctuation (see {@link foldForSearch}).
    * Ranking: exact match, then prefix, then word prefix, then substring, then all
    * query words anywhere; ties sorted by card key. An empty query matches nothing.
    *
    * @throws {RepositoryError} `invalid-input` when `limit` is not a positive integer.
    */
-  searchCardsInDeck(deckId: string, query: string, limit?: number): CardSearchHit[];
+  searchCardsInDeck(
+    deckId: string,
+    query: string,
+    limit?: number,
+    options?: { includeWorking?: boolean },
+  ): CardSearchHit[];
 }
 
 export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepository {
@@ -92,7 +99,7 @@ export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepo
       return versions;
     },
 
-    searchCardsInDeck(deckId, query, limit = DEFAULT_CARD_SEARCH_LIMIT) {
+    searchCardsInDeck(deckId, query, limit = DEFAULT_CARD_SEARCH_LIMIT, options = {}) {
       if (!Number.isInteger(limit) || limit < 1) {
         throw new RepositoryError('invalid-input', `Search limit must be a positive integer, got ${limit}`);
       }
@@ -109,7 +116,8 @@ export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepo
           inWorkingState: false,
         });
       }
-      for (const row of workingCards(ctx, deckId)) {
+      const working = options.includeWorking === false ? [] : workingCards(ctx, deckId);
+      for (const row of working) {
         const known = candidates.get(row.key);
         if (known) {
           known.name = row.name;

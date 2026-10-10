@@ -10,7 +10,7 @@ import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { SegmentedLinks } from '@/components/ui/tabs';
 import { formatTimes, joinList, pluralize, versionLabel, versionRangeLabel } from '@/lib/format';
-import { routes } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
@@ -109,7 +109,8 @@ export function historySummary(history: CardHistory): string[] {
 }
 
 export interface CardHistoryViewProps {
-  deckId: string;
+  /** The deck pages the timeline links within (the owner's or a share link's). */
+  scope: DeckScope;
   history: CardHistory;
   facts: CardFacts | null;
   /** Show every version instead of compressed runs. */
@@ -121,7 +122,8 @@ export interface CardHistoryViewProps {
  * zones, a summary sentence, and a timeline (newest first) of runs where the card's
  * state did not change, labeled with the transition that started each run.
  */
-export function CardHistoryView({ deckId, history, facts, showAll }: CardHistoryViewProps) {
+export function CardHistoryView({ scope, history, facts, showAll }: CardHistoryViewProps) {
+  const routes = deckRoutes(scope);
   const current = history.summary.currentZones;
   const hasWorking = history.entries.at(-1)?.sequence === null;
   return (
@@ -174,8 +176,8 @@ export function CardHistoryView({ deckId, history, facts, showAll }: CardHistory
             label="Timeline detail"
             activeId={showAll ? 'all' : 'changes'}
             items={[
-              { id: 'changes', label: 'Changes', href: routes.card(deckId, history.key) },
-              { id: 'all', label: 'Every version', href: routes.card(deckId, history.key, { all: true }) },
+              { id: 'changes', label: 'Changes', href: routes.card(history.key) },
+              { id: 'all', label: 'Every version', href: routes.card(history.key, { all: true }) },
             ]}
           />
         </div>
@@ -187,7 +189,7 @@ export function CardHistoryView({ deckId, history, facts, showAll }: CardHistory
                   .map((entry) => (
                     <TimelineItem
                       key={entry.commitId ?? 'working'}
-                      deckId={deckId}
+                      scope={scope}
                       entry={entry}
                       range={entry.sequence === null ? 'Current' : versionLabel(entry.sequence)}
                       zones={entry.zones}
@@ -198,7 +200,7 @@ export function CardHistoryView({ deckId, history, facts, showAll }: CardHistory
                   .map((run) => (
                     <TimelineItem
                       key={run.first.commitId ?? 'working'}
-                      deckId={deckId}
+                      scope={scope}
                       entry={run.first}
                       range={runRange(run)}
                       zones={run.zones}
@@ -225,18 +227,20 @@ function runRange(run: CardHistoryRun): string {
   return versionRangeLabel(first, last);
 }
 
-function entryHref(deckId: string, entry: CardHistoryEntry): Route {
-  return entry.sequence === null ? routes.deck(deckId) : routes.version(deckId, entry.sequence);
+/** A version's page; the current Moxfield state (owners only) is the deck's Status page. */
+function entryHref(scope: DeckScope, entry: CardHistoryEntry): Route {
+  const routes = deckRoutes(scope);
+  return entry.sequence === null ? routes.overview() : routes.version(entry.sequence);
 }
 
 function TimelineItem({
-  deckId,
+  scope,
   entry,
   range,
   zones,
   length,
 }: {
-  deckId: string;
+  scope: DeckScope;
   entry: CardHistoryEntry;
   range: string;
   zones: readonly ZoneQuantity[];
@@ -264,7 +268,7 @@ function TimelineItem({
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <Link
-            href={entryHref(deckId, entry)}
+            href={entryHref(scope, entry)}
             className="text-sm font-semibold text-fg tabular hover:text-accent hover:underline"
           >
             {range}

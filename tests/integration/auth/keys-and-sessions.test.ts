@@ -7,9 +7,11 @@ import { describe, expect, it } from 'vitest';
 
 import { HANDOFF_LIFETIME_MS, SESSION_LIFETIME_MS } from '@/server/auth/service';
 import { hashToken } from '@/server/auth/tokens';
+import type { SessionUser } from '@/server/auth/types';
 import { countRows } from '@tests/support/db';
 import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
-import { createServiceHarness, defined, type ServiceHarness } from '@tests/support/services';
+import { createServiceHarness, defined, trackDeck, type ServiceHarness } from '@tests/support/services';
+import { openShared, shareLinksOf, tokenOfShareUrl } from '@tests/support/sharing';
 
 const APP_URL = 'https://decks.example.com';
 const DAY_S = 86_400;
@@ -37,6 +39,8 @@ describe('bookmarklet keys', () => {
       lastUsedAt: null,
       madeFrom: null,
       derived: [],
+      shareLinkCount: 0,
+      derivedShareLinkCount: 0,
     });
     expect(keyOfBookmarklet(created.bookmarklets.sameTab)).toBe(key);
     expect(decodeURIComponent(created.bookmarklets.popup)).toContain(`"app":"${APP_URL}"`);
@@ -466,6 +470,139 @@ describe('what a key signed in, and what was made there', () => {
     expect(await harness.auth.revokeKey(thiefPhone.user, stolen.id)).toBe(true);
     expect(await harness.auth.resolveSession(thiefPhone.session.token)).not.toBeNull();
     expect(await harness.auth.resolveSession(thief.session.token)).toBeNull();
+  });
+
+  describe('share links made in those browsers', () => {
+    /** The stolen-key scenario, with a deck to share and links made in every browser involved. */
+    async function withShareLinks(harness: ServiceHarness) {
+      const scenario = await stolenKeyScenario(harness);
+      const services = harness.servicesForWorkspace(scenario.owner.user.workspaceId);
+      const deckId = await trackDeck({ ...harness, services });
+      const viaMinted = defined(await harness.auth.signInWithKey(scenario.mintedKey, 'Thief tablet'));
+      const share = async (user: SessionUser, label: string) =>
+        tokenOfShareUrl(
+          (await shareLinksOf(harness, user).createShareLink(deckId, { label, includeNotes: true }, APP_URL))
+            .url,
+        );
+      return {
+        ...scenario,
+        deckId,
+        links: {
+          own: await share(scenario.owner.user, 'Own'),
+          thief: await share(scenario.thief.user, 'Thief'),
+          thiefPhone: await share(scenario.thiefPhone.user, 'Thief phone'),
+          viaMinted: await share(viaMinted.user, 'Via minted'),
+        },
+      };
+    }
+
+    async function working(harness: ServiceHarness, token: string): Promise<boolean> {
+      return (await openShared(harness, token)) !== null;
+    }
+
+    it('are counted on the key their browser descends from, and on the key it was made through', async () => {
+      const harness = createServiceHarness();
+      const { owner } = await withShareLinks(harness);
+      const keys = await harness.auth.listKeys(owner.user);
+      expect(keys.map((key) => [key.label, key.shareLinkCount, key.derivedShareLinkCount])).toEqual([
+        ['Innocent label', 1, 0],
+        // The thief's browser and the phone signed in with its device link.
+        ['Laptop Chrome', 2, 1],
+      ]);
+    });
+
+    it('keep working when the key is revoked without them: they may be the owner’s own', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, links } = await withShareLinks(harness);
+      expect(await harness.auth.revokeKey(owner.user, stolen.id)).toBe(true);
+      for (const token of Object.values(links)) expect(await working(harness, token)).toBe(true);
+    });
+
+    it('are revoked with the key when asked, and with the keys made through it too', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, links } = await withShareLinks(harness);
+      expect(await harness.auth.revokeKey(owner.user, stolen.id, { includeShareLinks: true })).toBe(true);
+      expect(await working(harness, links.thief)).toBe(false);
+      expect(await working(harness, links.thiefPhone)).toBe(false);
+      expect(await working(harness, links.viaMinted)).toBe(true);
+      expect(await working(harness, links.own)).toBe(true);
+    });
+
+    it('reach the keys made through it when both options are chosen', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, links } = await withShareLinks(harness);
+      expect(
+        await harness.auth.revokeKey(owner.user, stolen.id, {
+          includeDerived: true,
+          includeShareLinks: true,
+        }),
+      ).toBe(true);
+      expect(await working(harness, links.thief)).toBe(false);
+      expect(await working(harness, links.thiefPhone)).toBe(false);
+      expect(await working(harness, links.viaMinted)).toBe(false);
+      expect(await working(harness, links.own)).toBe(true);
+      expect(JSON.stringify(harness.logger.entries)).not.toContain(links.thief);
+    });
+
+    it('are not touched when the key cannot be revoked (another user’s or already revoked)', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, links } = await withShareLinks(harness);
+      const stranger = await signUp(harness.auth, 'Stranger');
+      expect(await harness.auth.revokeKey(stranger.user, stolen.id, { includeShareLinks: true })).toBe(false);
+      expect(await working(harness, links.thief)).toBe(true);
+      expect(await harness.auth.revokeKey(owner.user, stolen.id)).toBe(true);
+      // `revokeKey` revokes keys; a revoked key's links are revoked with `revokeKeyShareLinks`.
+      expect(await harness.auth.revokeKey(owner.user, stolen.id, { includeShareLinks: true })).toBe(false);
+      expect(await working(harness, links.thief)).toBe(true);
+    });
+
+    it('stay listed, and revocable, after the key was revoked without them', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, minted, links } = await withShareLinks(harness);
+      expect(await harness.auth.listRevokedKeyShareLinks(owner.user)).toEqual([]);
+      harness.clock.advance(60);
+      expect(await harness.auth.revokeKey(owner.user, stolen.id, { includeDerived: true })).toBe(true);
+      const revokedAt = harness.clock.iso();
+      expect(await harness.auth.listKeys(owner.user)).toEqual([]);
+      // Each key with the links made in the browsers it signed in itself.
+      expect(await harness.auth.listRevokedKeyShareLinks(owner.user)).toEqual([
+        { id: minted.key.id, label: 'Innocent label', revokedAt, shareLinkCount: 1 },
+        { id: stolen.id, label: 'Laptop Chrome', revokedAt, shareLinkCount: 2 },
+      ]);
+
+      const stranger = await signUp(harness.auth, 'Stranger');
+      expect(await harness.auth.revokeKeyShareLinks(stranger.user, stolen.id)).toBe(0);
+      expect(await harness.auth.revokeKeyShareLinks(owner.user, 'no-such-key')).toBe(0);
+      expect(await working(harness, links.thief)).toBe(true);
+
+      expect(await harness.auth.revokeKeyShareLinks(owner.user, stolen.id)).toBe(2);
+      expect(await working(harness, links.thief)).toBe(false);
+      expect(await working(harness, links.thiefPhone)).toBe(false);
+      expect(await working(harness, links.viaMinted)).toBe(true);
+      expect(await working(harness, links.own)).toBe(true);
+      expect(await harness.auth.revokeKeyShareLinks(owner.user, stolen.id)).toBe(0);
+      expect((await harness.auth.listRevokedKeyShareLinks(owner.user)).map((key) => key.label)).toEqual([
+        'Innocent label',
+      ]);
+      expect(harness.logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'Share links of a bookmarklet key revoked',
+          context: { userId: owner.user.id, keyId: stolen.id, shareLinks: 2 },
+        }),
+      );
+      expect(JSON.stringify(harness.logger.entries)).not.toContain(links.thief);
+    });
+
+    it('of an active key are revoked the same way, leaving the key working', async () => {
+      const harness = createServiceHarness();
+      const { owner, stolen, thief, links } = await withShareLinks(harness);
+      expect(await harness.auth.revokeKeyShareLinks(owner.user, stolen.id)).toBe(2);
+      expect(await working(harness, links.thief)).toBe(false);
+      expect(await harness.auth.resolveSession(thief.session.token)).not.toBeNull();
+      expect((await harness.auth.listKeys(owner.user)).find((key) => key.id === stolen.id)).toMatchObject({
+        shareLinkCount: 0,
+      });
+    });
   });
 
   it('makes nothing for a session that has ended meanwhile', async () => {

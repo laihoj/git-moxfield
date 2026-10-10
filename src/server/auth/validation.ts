@@ -1,6 +1,6 @@
 /**
  * Validation of the short texts people type into the account system: display names,
- * bookmarklet key labels and invite notes. Input is normalized (NFC, runs of whitespace
+ * bookmarklet key labels, invite notes and share link labels. Input is normalized (NFC, runs of whitespace
  * collapsed, trimmed) and then accepted or rejected as a whole, never silently altered
  * beyond that, so people see exactly what is stored. Control and invisible formatting
  * characters (e.g. bidirectional overrides, zero-width joiners) are rejected: names are
@@ -11,6 +11,7 @@ import 'server-only';
 export const MAX_DISPLAY_NAME_LENGTH = 40;
 export const MAX_KEY_LABEL_LENGTH = 60;
 export const MAX_INVITE_NOTE_LENGTH = 200;
+export const MAX_SHARE_LINK_LABEL_LENGTH = 60;
 
 /** Longest User-Agent kept with a session (enough to recognize a browser and device). */
 export const MAX_USER_AGENT_LENGTH = 256;
@@ -67,6 +68,16 @@ export function validateKeyLabel(input: unknown): TextValidation {
 /** An invite's note for admins ("for Mikko"): optional, up to {@link MAX_INVITE_NOTE_LENGTH} characters. */
 export function validateInviteNote(input: unknown): TextValidation {
   return validate(input, { what: 'Notes', max: MAX_INVITE_NOTE_LENGTH, required: false, emptyMessage: '' });
+}
+
+/** A share link's label ("For Mikko"): 1–{@link MAX_SHARE_LINK_LABEL_LENGTH} characters. */
+export function validateShareLinkLabel(input: unknown): TextValidation {
+  return validate(input, {
+    what: 'Labels',
+    max: MAX_SHARE_LINK_LABEL_LENGTH,
+    required: true,
+    emptyMessage: 'Name the link, e.g. “For Mikko”.',
+  });
 }
 
 /**

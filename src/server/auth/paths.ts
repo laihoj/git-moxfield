@@ -9,10 +9,13 @@
  *   /invite/<gmi_token>   invite (accepted by a POST, never on GET)
  *   /claim                first-run claim with the setup code
  *   /api/auth/handoff     finishes a sign-in started by a cross-site bookmarklet post
+ *   /s/<gmv_token>/…      a deck shared with a read-only link (ADR 0007), and its pages
  *
- * Link tokens travel in the path. They are one-time and short-lived, and the app sends
- * `Referrer-Policy: no-referrer`, so they do not leak through Referer headers. Pages must
- * never consume a link on GET: chat apps and mail scanners fetch links to preview them.
+ * Link tokens travel in the path. Sign-in links are one-time and short-lived; share
+ * links last until revoked. The app sends `Referrer-Policy: no-referrer`, so they do not
+ * leak through Referer headers, and the dev server does not log requests to these paths
+ * (`../request-log-filter.ts`). Pages must never consume a link on GET: chat apps and
+ * mail scanners fetch links to preview them.
  *
  * Dependency-free and pure (no secrets): the proxy uses it too.
  */
@@ -31,9 +34,23 @@ export function loginLinkPath(token: string): string {
   return `${SIGN_IN_PATH}/${token}`;
 }
 
+/** Prefix of invites (see {@link invitePath}). */
+export const INVITE_PATH = '/invite';
+
 /** Path of an invite (`token` is a `gmi_` token). */
 export function invitePath(token: string): string {
-  return `/invite/${token}`;
+  return `${INVITE_PATH}/${token}`;
+}
+
+/** Prefix of the pages of decks shared with a read-only link. */
+export const SHARED_DECK_PATH = '/s';
+
+/**
+ * Path of a deck shared with a read-only link (`token` is a `gmv_` token); the deck's
+ * pages for viewers live below it (`/s/<token>/history`, …).
+ */
+export function sharedDeckPath(token: string): string {
+  return `${SHARED_DECK_PATH}/${token}`;
 }
 
 /** The page that asks before a bookmarklet signs this browser in, continuing to `next` afterwards. */
