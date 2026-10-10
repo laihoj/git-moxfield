@@ -21,8 +21,8 @@ import { decks, shareLinks, users } from '@/server/db/schema';
 
 import {
   batches,
+  deckInWorkspace,
   distinct,
-  inWorkspace,
   isUniqueViolation,
   referencing,
   write,
@@ -211,13 +211,7 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
       return ctx.db
         .select(recordColumns)
         .from(shareLinks)
-        .where(
-          and(
-            eq(shareLinks.deckId, deckId),
-            isNull(shareLinks.revokedAt),
-            inWorkspace(ctx, shareLinks.deckId),
-          ),
-        )
+        .where(and(eq(shareLinks.deckId, deckId), isNull(shareLinks.revokedAt), deckInWorkspace(ctx, deckId)))
         .orderBy(desc(shareLinks.createdAt), desc(sql`${shareLinks}.rowid`))
         .all();
     },
@@ -232,7 +226,7 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
               eq(shareLinks.id, id),
               eq(shareLinks.deckId, deckId),
               isNull(shareLinks.revokedAt),
-              inWorkspace(ctx, shareLinks.deckId),
+              deckInWorkspace(ctx, deckId),
             ),
           ),
       );

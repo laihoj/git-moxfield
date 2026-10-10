@@ -4,20 +4,27 @@
  * pasted Moxfield JSON, which is untrusted, so a capture only ever writes, and a page
  * only ever reads, the facts of its own workspace. Reference data that is not versioned;
  * within a workspace the latest write wins.
+ *
+ * Every capture upserts the facts of every card of the deck, but card facts rarely change,
+ * so the upsert only rewrites a row whose facts differ: Turso bills every row written, and
+ * rewriting them all made the catalog most of a capture's writes (a deck of 103 distinct
+ * cards: 103 of 111 rows when the deck had not changed). `updated_at` is when the facts last
+ * changed.
  */
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { getTableColumns, or, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import type { CardFacts, CardKey } from '@/core/model';
 import { cardCatalog } from '@/server/db/schema';
 
 import { decodeStringArray, encodeJson } from './codec';
-import { batches, distinct, writeAll, type RepositoryContext } from './context';
+import { batches, distinct, valuesTable, writeAll, type RepositoryContext } from './context';
 
 export interface CatalogRepository {
   /**
    * Inserts or replaces the workspace's facts atomically (one batch). When the input
-   * contains the same key more than once, the last entry wins.
+   * contains the same key more than once, the last entry wins. Rows whose facts are
+   * unchanged are not written (their `updated_at` stays).
    */
   upsertMany(facts: readonly CardFacts[]): Promise<void>;
   /** The workspace's facts for the given keys; unknown keys are absent from the result. */
@@ -53,16 +60,11 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
             .onConflictDoUpdate({
               target: [cardCatalog.workspaceId, cardCatalog.key],
               set: {
-                name: excluded(cardCatalog.name),
-                typeLine: excluded(cardCatalog.typeLine),
-                primaryType: excluded(cardCatalog.primaryType),
-                manaCost: excluded(cardCatalog.manaCost),
-                cmc: excluded(cardCatalog.cmc),
-                colorIdentityJson: excluded(cardCatalog.colorIdentityJson),
-                layout: excluded(cardCatalog.layout),
-                scryfallId: excluded(cardCatalog.scryfallId),
+                ...Object.fromEntries(FACT_COLUMNS.map(([field, column]) => [field, excluded(column)])),
                 updatedAt: excluded(cardCatalog.updatedAt),
               },
+              // Only rows whose facts changed (`IS NOT`: NULL-safe, for `scryfall_id`).
+              setWhere: or(...FACT_COLUMNS.map(([, column]) => sql`${column} IS NOT ${excluded(column)}`)),
             });
         return [upsert(first), ...rest.map(upsert)] as const;
       });
@@ -70,13 +72,10 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
 
     async getMany(keys) {
       const result = new Map<CardKey, CardFacts>();
+      // One row read per card (a version page asks for every card of the deck).
       const pages = await Promise.all(
         batches(distinct(keys)).map((batch) =>
-          ctx.db
-            .select()
-            .from(cardCatalog)
-            .where(and(eq(cardCatalog.workspaceId, ctx.workspaceId), inArray(cardCatalog.key, batch)))
-            .all(),
+          ctx.db.all<CatalogRow>(catalogLookupQuery(ctx.workspaceId, batch)),
         ),
       );
       for (const rows of pages) {
@@ -99,6 +98,41 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
     },
   };
 }
+
+/** A `card_catalog` row as {@link catalogLookupQuery} reads it. */
+interface CatalogRow {
+  key: string;
+  name: string;
+  typeLine: string;
+  primaryType: string;
+  manaCost: string;
+  cmc: number;
+  colorIdentityJson: string;
+  layout: string;
+  scryfallId: string | null;
+}
+
+/**
+ * The workspace's facts for `keys` (distinct, at most `BATCH_SIZE`), one primary-key probe
+ * per key (see `valuesTable`).
+ *
+ * @internal exported for the query-plan tests.
+ */
+export function catalogLookupQuery(workspaceId: string, keys: readonly string[]): SQL {
+  return sql`
+    SELECT c.key AS "key", c.name AS "name", c.type_line AS "typeLine",
+      c.primary_type AS "primaryType", c.mana_cost AS "manaCost", c.cmc AS "cmc",
+      c.color_identity_json AS "colorIdentityJson", c.layout AS "layout",
+      c.scryfall_id AS "scryfallId"
+    FROM ${valuesTable(keys)} AS wanted
+    CROSS JOIN card_catalog AS c
+    WHERE c.workspace_id = ${workspaceId} AND c.key = wanted.column1`;
+}
+
+/** The columns holding a card's facts: every column but the workspace, the key and `updated_at`. */
+const FACT_COLUMNS: readonly (readonly [string, SQLiteColumn])[] = Object.entries(
+  getTableColumns(cardCatalog),
+).filter(([field]) => field !== 'workspaceId' && field !== 'key' && field !== 'updatedAt');
 
 /** The value an upsert tried to insert into `column` (SQLite's `excluded` pseudo-table). */
 function excluded(column: SQLiteColumn): SQL {

@@ -51,4 +51,25 @@ describe('pnpm db:migrate on a remote database', () => {
       handle.close();
     }
   });
+
+  it('names TURSO_AUTH_TOKEN when the server refuses the credentials', async (context) => {
+    const { url, authToken } = remoteTarget();
+    if (authToken === undefined) context.skip('the server under test asks for no token');
+    const attempt = async (token: string | undefined) => {
+      const err: string[] = [];
+      const code = await runMigrateCommand({
+        config: parseConfig({ TURSO_DATABASE_URL: url, TURSO_AUTH_TOKEN: token }),
+        env: { NETLIFY: 'true' },
+        io: { out: () => undefined, err: (line) => err.push(line) },
+      });
+      expect(code).toBe(1);
+      return err.join('\n');
+    };
+    expect(await attempt(undefined)).toMatch(
+      /Server returned HTTP status 401\. The database needs a token, and TURSO_AUTH_TOKEN is not set\./,
+    );
+    const refused = await attempt('eyJhbGciOiJFZERTQSJ9.e30.not-a-signature');
+    expect(refused).toMatch(/Server returned HTTP status 401\. The database refused TURSO_AUTH_TOKEN/);
+    expect(refused).not.toContain('not-a-signature');
+  });
 });

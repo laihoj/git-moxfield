@@ -2,8 +2,12 @@
  * Helpers for the remote libSQL suite (see `vitest.remote.config.ts`).
  */
 import { createClient as createHttpClient, type Client } from '@libsql/client/http';
+import { drizzle } from 'drizzle-orm/libsql/http';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from '@/server/db/libsql';
+import { createLibsqlDatabase, type LibsqlDatabase, type LibsqlDb } from '@/server/db/libsql';
+import * as schema from '@/server/db/schema';
+import { guardClient } from '@/server/db/transaction';
+import { WriteLock } from '@/server/db/write-lock';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -47,6 +51,22 @@ export function rawRemoteClient(): Client {
   return createHttpClient({ url, authToken });
 }
 
+/**
+ * The server under test as another serverless function instance sees it: a client of its
+ * own with a write lock of its own, so that this process's write lock does not order its
+ * writes against the others' (only the server does).
+ */
+export function openInstance(): LibsqlDb {
+  const { url, authToken } = remoteTarget();
+  const client = guardClient(createHttpClient({ url, authToken }), {
+    lock: new WriteLock('another instance'),
+    lockTimeoutMs: 15_000,
+    serializeRootOperations: false,
+    recycleAfterBusy: false,
+  });
+  return drizzle({ client, schema });
+}
+
 /** Opens the server under test with `createLibsqlDatabase`. */
 export function openRemote(): Promise<LibsqlDatabase> {
   const { url, authToken } = remoteTarget();
@@ -73,4 +93,61 @@ export async function wipeRemoteDatabase(): Promise<void> {
   } finally {
     client.close();
   }
+}
+
+/** Rows read and written as the server reports them per statement. */
+export interface Usage {
+  rowsRead: number;
+  rowsWritten: number;
+}
+
+interface StatementResult {
+  rows_read?: number;
+  rows_written?: number;
+}
+
+interface PipelineResponse {
+  results?: {
+    type: string;
+    response?: { type: string; result?: StatementResult & { step_results?: (StatementResult | null)[] } };
+  }[];
+}
+
+/**
+ * The server under test, opened like `createLibsqlDatabase` does but with a `fetch` that
+ * adds up the rows each statement read and wrote (Hrana reports them per statement; Turso
+ * bills them) in `usage`.
+ */
+export function openMetered(usage: Usage): LibsqlDb {
+  const { url, authToken } = remoteTarget();
+  const meteredFetch = async (input: Request): Promise<Response> => {
+    const response = await fetch(input);
+    const body = (await response.clone().json()) as PipelineResponse;
+    for (const item of body.results ?? []) {
+      const result = item.response?.result;
+      for (const step of [result, ...(result?.step_results ?? [])]) {
+        usage.rowsRead += step?.rows_read ?? 0;
+        usage.rowsWritten += step?.rows_written ?? 0;
+      }
+    }
+    return response;
+  };
+  const client = guardClient(createHttpClient({ url, authToken, fetch: meteredFetch }), {
+    lock: new WriteLock('metered remote database'),
+    lockTimeoutMs: 15_000,
+    serializeRootOperations: false,
+    recycleAfterBusy: false,
+  });
+  return drizzle({ client, schema });
+}
+
+/** The rows `operation` read and wrote, as `usage` (fed by {@link openMetered}) counts them. */
+export async function measure<T>(usage: Usage, operation: () => Promise<T>): Promise<{ value: T } & Usage> {
+  const before = { ...usage };
+  const value = await operation();
+  return {
+    value,
+    rowsRead: usage.rowsRead - before.rowsRead,
+    rowsWritten: usage.rowsWritten - before.rowsWritten,
+  };
 }

@@ -15,7 +15,7 @@
 import { relative } from 'node:path';
 
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
-import { getConfig } from '@/server/config';
+import { getConfig, type AppConfig } from '@/server/config';
 import {
   defaultExportDirectory,
   exportDeckToGit,
@@ -54,8 +54,11 @@ async function printTrackedDecks(repos: Repositories): Promise<void> {
   for (const deck of decks) console.error(describeDeck(deck));
 }
 
-async function run(reference: string, outDirArgument: string | undefined): Promise<number> {
-  const config = getConfig();
+async function run(
+  config: AppConfig,
+  reference: string,
+  outDirArgument: string | undefined,
+): Promise<number> {
   if (isMissingDatabaseFile(config)) {
     console.error(
       `No git-moxfield database: the ${describeConfiguredDatabase(config)} does not exist. ` +
@@ -125,11 +128,18 @@ async function main(argv: readonly string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
+  let config: AppConfig;
   try {
     loadEnvFiles();
-    return await run(reference, outDir);
+    config = getConfig();
   } catch (error) {
-    console.error(`Export failed: ${describeFailure(error)}`);
+    console.error(describeFailure(error));
+    return 1;
+  }
+  try {
+    return await run(config, reference, outDir);
+  } catch (error) {
+    console.error(`Export failed: ${describeFailure(error, config)}`);
     return 1;
   }
 }

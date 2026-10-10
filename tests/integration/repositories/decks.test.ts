@@ -198,7 +198,7 @@ describe('decks repository', () => {
     expect(await repos.decks.getById(deck.id)).toBeNull();
     expect(await repos.commits.getById(v1.id)).toBeNull();
     expect(await repos.commits.getById(v2.id)).toBeNull();
-    expect(await repos.observations.latestForDeck(deck.id)).toBeNull();
+    expect(await repos.observations.latestWithSnapshot(deck.id)).toBeNull();
     expect(await repos.branches.list(deck.id)).toEqual([]);
     expect(await countRows(db, 'version_tags')).toBe(0);
     expect(await countRows(db, 'commit_notes')).toBe(0);

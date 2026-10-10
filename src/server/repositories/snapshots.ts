@@ -2,7 +2,7 @@
  * Content-addressed store of canonical snapshots plus the derived `snapshot_cards`
  * index used by card history and search.
  */
-import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
+import { and, eq, inArray, notExists, sql, type SQL } from 'drizzle-orm';
 
 import { canonicalizeSnapshot, stableStringify } from '@/core/canonical';
 import { snapshotHash } from '@/core/hash';
@@ -14,6 +14,7 @@ import {
   assertStorableSize,
   batches,
   distinct,
+  valuesTable,
   writeAll,
   type LibsqlExecutor,
   type RepositoryContext,
@@ -76,15 +77,31 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
 
     async getMany(hashes) {
       const result = new Map<string, CanonicalSnapshot>();
+      // One row read per snapshot (a version list loads two per version).
       const pages = await Promise.all(
         batches(distinct(hashes)).map((batch) =>
-          ctx.db.select().from(snapshots).where(inArray(snapshots.hash, batch)).all(),
+          ctx.db.all<typeof snapshots.$inferSelect>(snapshotLookupQuery(batch)),
         ),
       );
       for (const row of pages.flat()) result.set(row.hash, decodeSnapshot(row));
       return result;
     },
   };
+}
+
+/**
+ * The snapshots with the given hashes (distinct, at most `BATCH_SIZE`), one primary-key
+ * probe per hash (see `valuesTable`).
+ *
+ * @internal exported for the query-plan tests.
+ */
+export function snapshotLookupQuery(hashes: readonly string[]): SQL {
+  return sql`
+    SELECT s.hash AS "hash", s.schema_version AS "schemaVersion",
+      s.canonical_json AS "canonicalJson", s.created_at AS "createdAt"
+    FROM ${valuesTable(hashes)} AS wanted
+    CROSS JOIN snapshots AS s
+    WHERE s.hash = wanted.column1`;
 }
 
 /** The `snapshot_cards` rows (card index) of a snapshot stored under `hash`. */

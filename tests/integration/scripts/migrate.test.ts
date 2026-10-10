@@ -16,7 +16,7 @@ import { createLibsqlDatabase } from '@/server/db/libsql';
 import { bundledMigrations, checkMigrationState } from '@/server/db/migration-state';
 import { workspaces } from '@/server/db/schema';
 import type { PlatformEnv } from '@/server/platform';
-import { tempDir } from '@tests/support/libsql';
+import { refusingUrl, startHranaStub, tempDir } from '@tests/support/libsql';
 
 import { runMigrateCommand } from '../../../scripts/migrate';
 
@@ -174,5 +174,69 @@ describe('pnpm db:migrate', () => {
       expect.stringMatching(/^Could not open the remote database 127\.0\.0\.1:9: /),
     ]);
     expect(result.err.join('\n')).not.toContain('url-secret');
+  });
+
+  describe('names the variables to fix when the remote database cannot be used', () => {
+    const TOKEN = 'eyJhbGciOiJFZERTQSJ9.token-secret';
+
+    /** `pnpm db:migrate` against a server that answers every request with `status`. */
+    async function refusedWith(status: number, env: Record<string, string> = {}) {
+      const server = await startHranaStub({ status });
+      try {
+        const result = await migrate({ TURSO_DATABASE_URL: server.url, ...env });
+        expect(server.requests()).toBeGreaterThan(0);
+        expect(result.code).toBe(1);
+        expect(result.out).toEqual([]);
+        expect(result.err).toHaveLength(1);
+        expect(result.err.join('\n')).not.toContain('token-secret');
+        return result.err[0] ?? '';
+      } finally {
+        await server.close();
+      }
+    }
+
+    it('says that TURSO_AUTH_TOKEN is not set when the server asks for a token (401)', async () => {
+      const message = await refusedWith(401);
+      expect(message).toMatch(
+        /^Could not open the remote database 127\.0\.0\.1:\d+: Server returned HTTP status 401\. /,
+      );
+      expect(message).toContain('TURSO_AUTH_TOKEN is not set');
+      expect(message).toContain('turso db tokens create <database>');
+    });
+
+    it('says that the server refused TURSO_AUTH_TOKEN (401), for which database', async () => {
+      const message = await refusedWith(401, { TURSO_AUTH_TOKEN: TOKEN });
+      expect(message).toContain('The database refused TURSO_AUTH_TOKEN');
+      expect(message).toContain('TURSO_DATABASE_URL');
+      expect(message).not.toContain('is not set');
+    });
+
+    it('asks for a token that may write (403)', async () => {
+      const message = await refusedWith(403, { TURSO_AUTH_TOKEN: TOKEN });
+      expect(message).toContain('Server returned HTTP status 403. TURSO_AUTH_TOKEN is not allowed');
+      expect(message).toContain('read-only');
+    });
+
+    it('asks to check TURSO_DATABASE_URL when no database answers there (404)', async () => {
+      const message = await refusedWith(404, { TURSO_AUTH_TOKEN: TOKEN });
+      expect(message).toContain('No database answers at TURSO_DATABASE_URL');
+      expect(message).toContain('turso db show <database> --url');
+    });
+
+    it('asks to check TURSO_DATABASE_URL and the network when the host cannot be reached', async () => {
+      const result = await migrate({ TURSO_DATABASE_URL: await refusingUrl(), TURSO_AUTH_TOKEN: TOKEN });
+      expect(result.code).toBe(1);
+      expect(result.err).toEqual([
+        expect.stringMatching(
+          /^Could not open the remote database 127\.0\.0\.1:\d+: connect ECONNREFUSED .*\. The host TURSO_DATABASE_URL names could not be reached\. Check the URL/,
+        ),
+      ]);
+      expect(result.err.join('\n')).not.toContain('token-secret');
+    });
+
+    it('gives no such hint for other failures', async () => {
+      const message = await refusedWith(500, { TURSO_AUTH_TOKEN: TOKEN });
+      expect(message).toMatch(/Server returned HTTP status 500$/);
+    });
   });
 });

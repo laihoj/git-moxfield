@@ -20,6 +20,7 @@ import type { SharedDeckServices, VersionRef } from './contract';
 import { RECENT_VERSION_COUNT } from './deck-services';
 import { toVersionRefDTO } from './dto';
 import { DeckHistory, type CommittedVersionRef, type HistoryRepositories } from './history';
+import { unlessDeckVanished } from './invariants';
 import { parseVersionRef } from './refs';
 import type {
   CardSearchResultDTO,
@@ -71,83 +72,97 @@ class DefaultSharedDeckServices implements SharedDeckServices {
     return (await this.deck()) !== null;
   }
 
-  async getOverview(): Promise<SharedOverviewDTO | null> {
-    const deck = await this.deck();
-    if (!deck) return null;
-    const [commits, head] = await Promise.all([
-      this.repos.commits.listForDeck(deck.id),
-      this.repos.commits.head(deck.id),
-    ]);
-    const [summary, recentVersions] = await Promise.all([
-      this.summarize(deck, head, commits.length),
-      this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
-    ]);
-    return { ...summary, recentVersions };
+  getOverview(): Promise<SharedOverviewDTO | null> {
+    return this.whileShared(null, async () => {
+      const deck = await this.deck();
+      if (!deck) return null;
+      const [commits, head] = await Promise.all([
+        this.repos.commits.listForDeck(deck.id),
+        this.repos.commits.head(deck.id),
+      ]);
+      const [summary, recentVersions] = await Promise.all([
+        this.summarize(deck, head, commits.length),
+        this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
+      ]);
+      return { ...summary, recentVersions };
+    });
   }
 
-  async listVersions(options: { tag?: string } = {}): Promise<VersionListItemDTO[]> {
-    return (await this.deck()) ? this.history.listVersions(this.deckId, options.tag) : [];
+  listVersions(options: { tag?: string } = {}): Promise<VersionListItemDTO[]> {
+    return this.whileShared([], async () =>
+      (await this.deck()) ? this.history.listVersions(this.deckId, options.tag) : [],
+    );
   }
 
-  async getVersion(sequence: number): Promise<SharedVersionDetailDTO | null> {
-    const deck = await this.deck();
-    if (!deck || !isSequence(sequence)) return null;
-    const [detail, summary] = await Promise.all([
-      this.history.versionDetail(deck.id, sequence),
-      this.summarizeAtHead(deck),
-    ]);
-    if (!detail) return null;
-    // The source metadata names the deck on Moxfield: never for viewers (see `summarize`).
-    const { sourceMetadata: _sourceMetadata, ...committed } = detail;
-    return { ...committed, deck: summary, notes: this.includeNotes ? detail.notes : [] };
+  getVersion(sequence: number): Promise<SharedVersionDetailDTO | null> {
+    return this.whileShared(null, async () => {
+      const deck = await this.deck();
+      if (!deck || !isSequence(sequence)) return null;
+      const [detail, summary] = await Promise.all([
+        this.history.versionDetail(deck.id, sequence),
+        this.summarizeAtHead(deck),
+      ]);
+      if (!detail) return null;
+      // The source metadata names the deck on Moxfield: never for viewers (see `summarize`).
+      const { sourceMetadata: _sourceMetadata, ...committed } = detail;
+      return { ...committed, deck: summary, notes: this.includeNotes ? detail.notes : [] };
+    });
   }
 
-  async compare(from: VersionRef, to: VersionRef): Promise<SharedCompareDTO | null> {
-    const fromRef = committedRef(from);
-    const toRef = committedRef(to);
-    const deck = fromRef && toRef ? await this.deck() : null;
-    if (!deck || !fromRef || !toRef) return null;
-    const [head, versionCount] = await Promise.all([
-      this.repos.commits.head(deck.id),
-      this.repos.commits.count(deck.id),
-    ]);
-    const [fromSide, toSide] = await Promise.all([
-      this.history.resolveCommitted(deck.id, fromRef, head),
-      this.history.resolveCommitted(deck.id, toRef, head),
-    ]);
-    if (!fromSide || !toSide) return null;
-    const [comparison, summary] = await Promise.all([
-      this.history.comparison(deck.id, fromSide, toSide),
-      this.summarize(deck, head, versionCount),
-    ]);
-    return { ...comparison, deck: summary, hasWorking: false };
+  compare(from: VersionRef, to: VersionRef): Promise<SharedCompareDTO | null> {
+    return this.whileShared(null, async () => {
+      const fromRef = committedRef(from);
+      const toRef = committedRef(to);
+      const deck = fromRef && toRef ? await this.deck() : null;
+      if (!deck || !fromRef || !toRef) return null;
+      const [head, versionCount] = await Promise.all([
+        this.repos.commits.head(deck.id),
+        this.repos.commits.count(deck.id),
+      ]);
+      const [fromSide, toSide] = await Promise.all([
+        this.history.resolveCommitted(deck.id, fromRef, head),
+        this.history.resolveCommitted(deck.id, toRef, head),
+      ]);
+      if (!fromSide || !toSide) return null;
+      const [comparison, summary] = await Promise.all([
+        this.history.comparison(deck.id, fromSide, toSide),
+        this.summarize(deck, head, versionCount),
+      ]);
+      return { ...comparison, deck: summary, hasWorking: false };
+    });
   }
 
-  async searchCards(query: string, limit = DEFAULT_CARD_SEARCH_LIMIT): Promise<CardSearchResultDTO[]> {
-    return (await this.deck()) ? this.history.searchCards(this.deckId, query, limit, false) : [];
+  searchCards(query: string, limit = DEFAULT_CARD_SEARCH_LIMIT): Promise<CardSearchResultDTO[]> {
+    return this.whileShared([], async () =>
+      (await this.deck()) ? this.history.searchCards(this.deckId, query, limit, false) : [],
+    );
   }
 
-  async cardHistory(card: string): Promise<SharedCardHistoryDTO | null> {
-    const deck = await this.deck();
-    if (!deck) return null;
-    const [found, summary] = await Promise.all([
-      this.history.cardHistory(deck.id, card, null),
-      this.summarizeAtHead(deck),
-    ]);
-    if (!found) return null;
-    return { ...found, deck: summary };
+  cardHistory(card: string): Promise<SharedCardHistoryDTO | null> {
+    return this.whileShared(null, async () => {
+      const deck = await this.deck();
+      if (!deck) return null;
+      const [found, summary] = await Promise.all([
+        this.history.cardHistory(deck.id, card, null),
+        this.summarizeAtHead(deck),
+      ]);
+      if (!found) return null;
+      return { ...found, deck: summary };
+    });
   }
 
-  async restoreExport(sequence: number): Promise<SharedRestoreDTO | null> {
-    const deck = await this.deck();
-    if (!deck || !isSequence(sequence)) return null;
-    // Viewers restore into a deck of their own: they never get the owner's (see `summarize`).
-    const [restore, summary] = await Promise.all([
-      this.history.restoreExport(deck, sequence, 'own-deck'),
-      this.summarizeAtHead(deck),
-    ]);
-    if (!restore) return null;
-    return { deck: summary, version: toVersionRefDTO(restore.commit), export: restore.export };
+  restoreExport(sequence: number): Promise<SharedRestoreDTO | null> {
+    return this.whileShared(null, async () => {
+      const deck = await this.deck();
+      if (!deck || !isSequence(sequence)) return null;
+      // Viewers restore into a deck of their own: they never get the owner's (see `summarize`).
+      const [restore, summary] = await Promise.all([
+        this.history.restoreExport(deck, sequence, 'own-deck'),
+        this.summarizeAtHead(deck),
+      ]);
+      if (!restore) return null;
+      return { deck: summary, version: toVersionRefDTO(restore.commit), export: restore.export };
+    });
   }
 
   async listTags(): Promise<TagCountDTO[]> {
@@ -161,6 +176,15 @@ class DefaultSharedDeckServices implements SharedDeckServices {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * Runs `read`; when the deck is untracked (or the link revoked) while it runs, answers
+   * `whenGone`, as for a link that grants nothing, instead of failing on what went with the
+   * deck (see `unlessDeckVanished`).
+   */
+  private whileShared<T>(whenGone: T, read: () => Promise<T>): Promise<T> {
+    return unlessDeckVanished(read, async () => (await this.deck()) !== null, whenGone);
+  }
 
   /**
    * The shared deck while the link grants access to it; `null` otherwise. The link check

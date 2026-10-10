@@ -91,7 +91,7 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
   try {
     handle = await createLibsqlDatabase({ url: config.database.url, authToken: config.database.authToken });
   } catch (error) {
-    io.err(`Could not open the ${description}: ${describeFailure(error)}`);
+    io.err(`Could not open the ${description}: ${describeFailure(error, config)}`);
     return 1;
   }
   try {
@@ -111,7 +111,7 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
     io.out(`Up to date: all ${plural(state.expected, 'migration')} applied.`);
     return 0;
   } catch (error) {
-    io.err(`Migrating the ${description} failed: ${describeFailure(error)}`);
+    io.err(`Migrating the ${description} failed: ${describeFailure(error, config)}`);
     return 1;
   } finally {
     handle.close();

@@ -221,7 +221,9 @@ async function main(): Promise<number> {
   try {
     database = await openConfiguredDatabase(config);
   } catch (error) {
-    console.error(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error)}`);
+    console.error(
+      `Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`,
+    );
     return 1;
   }
   try {

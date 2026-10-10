@@ -150,8 +150,18 @@ export {
 export type { BranchKind, BranchRecord, BranchRepository, SetHeadOptions } from './branches';
 export type { SnapshotRepository } from './snapshots';
 export type { RawBlob, RawBlobInfo, RawBlobInput, RawBlobRepository } from './raw-blobs';
-export type { NewObservation, ObservationRecord, ObservationRepository } from './observations';
-export { MIN_COMMIT_ID_PREFIX_LENGTH, type CommitRecord, type CommitRepository } from './commits';
+export type {
+  NewObservation,
+  ObservationRecord,
+  ObservationRepository,
+  ObservationWithSnapshot,
+} from './observations';
+export {
+  MIN_COMMIT_ID_PREFIX_LENGTH,
+  type CommitRecord,
+  type CommitRepository,
+  type CommitWithSnapshot,
+} from './commits';
 export {
   DEFAULT_CARD_SEARCH_LIMIT,
   foldForSearch,

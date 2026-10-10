@@ -8,9 +8,9 @@
  * {@link withTransaction} for read-check-write units, {@link writeAll} for write sets that
  * need no reads in between (one `db.batch()`), {@link write} for a single statement.
  */
-import { eq, inArray, type SQL } from 'drizzle-orm';
+import { and, eq, exists, inArray, sql, type SQL } from 'drizzle-orm';
 import type { BatchItem, BatchResponse } from 'drizzle-orm/batch';
-import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
+import { alias, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import type { LibsqlDb, LibsqlExecutor } from '@/server/db/libsql';
 import * as schema from '@/server/db/schema';
@@ -112,25 +112,76 @@ export async function writeAll<T extends WriteSet>(
 }
 
 /**
- * Restricts a query on a deck-owned table to the context's workspace:
- * `deckIdColumn IN (SELECT id FROM decks WHERE workspace_id = ?)`.
+ * Workspace scoping. Every repository query that reaches deck data through a
+ * caller-supplied id (deck, branch, commit, observation) is restricted to decks of the
+ * context's workspace, so an id that belongs to another workspace behaves exactly like an
+ * id that does not exist: reads return nothing, writes fail with `not-found`.
+ * Content-addressed stores (snapshots, raw blobs) are shared by all workspaces and are only
+ * reachable through hashes that these scoped queries return; their content is derived from
+ * its own hash, so no workspace can change what another reads. The card catalog is keyed
+ * by card name, not content, so it is scoped to the workspace like deck data.
  *
- * Every repository query that reaches deck data through a caller-supplied id (deck,
- * branch, commit, observation) includes this condition, so an id that belongs to another
- * workspace behaves exactly like an id that does not exist: reads return nothing, writes
- * fail with `not-found`. Content-addressed stores (snapshots, raw blobs) are shared by
- * all workspaces and are only reachable through hashes that these scoped queries return;
- * their content is derived from its own hash, so no workspace can change what another
- * reads. The card catalog is keyed by card name, not content, so it is scoped to the
- * workspace like deck data.
+ * Turso bills every row a query reads, so the form of the restriction follows the query:
+ *
+ * - {@link deckInWorkspace} for one deck or one row: a probe of the owning deck by its
+ *   primary key, one row read.
+ * - {@link commitInWorkspace} for rows that hang off one commit (tags, notes): two rows.
+ * - {@link inWorkspace} only for queries over the whole workspace: it reads every deck of
+ *   the workspace, so it would make every per-deck query cost as many rows as the
+ *   workspace has decks (and a deck list cost decks × decks).
  */
-export function inWorkspace(ctx: RepositoryContext, deckIdColumn: SQLiteColumn): SQL {
+export function inWorkspace(
+  ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
+  deckIdColumn: SQLiteColumn,
+): SQL {
   return inArray(
     deckIdColumn,
     ctx.db
       .select({ id: schema.decks.id })
       .from(schema.decks)
       .where(eq(schema.decks.workspaceId, ctx.workspaceId)),
+  );
+}
+
+/**
+ * Restricts a query to rows of decks of the context's workspace (see {@link inWorkspace}
+ * for the rules): `EXISTS (SELECT 1 FROM decks AS owner_deck WHERE owner_deck.id = <deck>
+ * AND owner_deck.workspace_id = ?)`.
+ *
+ * - `deck` a deck id (a query about one deck): the subquery does not depend on the row,
+ *   so SQLite runs it once per statement, one row read.
+ * - `deck` a column (a lookup by a row's own id): it runs once per candidate row, a
+ *   primary-key probe each.
+ */
+export function deckInWorkspace(
+  ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
+  deck: string | SQLiteColumn,
+): SQL {
+  const owner = alias(schema.decks, 'owner_deck');
+  return exists(
+    ctx.db
+      .select({ one: sql`1` })
+      .from(owner)
+      .where(and(eq(owner.id, deck), eq(owner.workspaceId, ctx.workspaceId))),
+  );
+}
+
+/**
+ * Restricts a query to rows of commits of decks of the context's workspace, like
+ * {@link deckInWorkspace} (`commit` a commit id or a column): two rows read per probe.
+ */
+export function commitInWorkspace(
+  ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
+  commit: string | SQLiteColumn,
+): SQL {
+  const ownerCommit = alias(schema.commits, 'owner_commit');
+  const ownerDeck = alias(schema.decks, 'owner_deck');
+  return exists(
+    ctx.db
+      .select({ one: sql`1` })
+      .from(ownerCommit)
+      .innerJoin(ownerDeck, eq(ownerDeck.id, ownerCommit.deckId))
+      .where(and(eq(ownerCommit.id, commit), eq(ownerDeck.workspaceId, ctx.workspaceId))),
   );
 }
 
@@ -169,6 +220,23 @@ export function batches<T>(items: readonly T[], size = BATCH_SIZE): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size));
   return result;
+}
+
+/**
+ * `(VALUES (?), (?), ...)`: a one-column table of `values` (its column is `column1`), for
+ * looking rows up by many keys: `FROM ${valuesTable(keys)} AS wanted CROSS JOIN t WHERE
+ * t.key = wanted.column1`.
+ *
+ * Remote libSQL counts the rows of the temporary table SQLite builds for `key IN (?, ?,
+ * ...)` as rows read, twice: such a lookup reads three rows per key (308 rows for the 103
+ * cards of a deck, measured on sqld 0.24.32), this join one (103). `CROSS JOIN` keeps the
+ * values the outer loop. Pass distinct values, at most {@link BATCH_SIZE} of them.
+ */
+export function valuesTable(values: readonly string[]): SQL {
+  return sql`(VALUES ${sql.join(
+    values.map((value) => sql`(${value})`),
+    sql`, `,
+  )})`;
 }
 
 /** Distinct values in first-seen order. */

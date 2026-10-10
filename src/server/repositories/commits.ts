@@ -5,13 +5,20 @@
 import { and, count, desc, eq, getTableColumns, gte, lt, max } from 'drizzle-orm';
 
 import { commitId } from '@/core/hash';
-import type { SourceDeckMetadata } from '@/core/model';
+import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
-import { branches, commits, decks } from '@/server/db/schema';
+import { branches, commits, decks, snapshots } from '@/server/db/schema';
 
 import { corruptData, decodeIngestMethod, decodeSourceMetadata, encodeJson } from './codec';
-import { inWorkspace, referencing, withTransaction, type RepositoryContext } from './context';
+import {
+  deckInWorkspace,
+  inWorkspace,
+  referencing,
+  withTransaction,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
+import { decodeSnapshot } from './snapshots';
 
 export interface CommitRecord {
   /** SHA-256 of the serialized commit object (`commitId` in `@/core/hash`). */
@@ -33,6 +40,12 @@ export interface CommitRecord {
   sourceVersion: number | null;
   sourceUpdatedAt: string | null;
   sourceMetadata: SourceDeckMetadata;
+}
+
+/** A commit and the snapshot it records, read in one statement. */
+export interface CommitWithSnapshot {
+  commit: CommitRecord;
+  snapshot: CanonicalSnapshot;
 }
 
 /** Shortest commit id prefix accepted by {@link CommitRepository.findByIdPrefix}. */
@@ -63,6 +76,13 @@ export interface CommitRepository {
   /** The commit the deck's HEAD branch points at, or `null` before the first version. */
   head(deckId: string): Promise<CommitRecord | null>;
   /**
+   * {@link head} with its snapshot, in one statement: one round trip, and one state of the
+   * database (a commit's snapshot exists as long as the commit, which a concurrent untrack
+   * deletes with its deck).
+   * @throws {RepositoryError} `corrupt-data` or `unsupported-version` for an unreadable row.
+   */
+  headWithSnapshot(deckId: string): Promise<CommitWithSnapshot | null>;
+  /**
    * The chain of versions ending at `fromCommitId` (default: HEAD), oldest first,
    * following parent pointers. Empty when the deck has no versions or `fromCommitId`
    * is not a commit of the deck.
@@ -78,8 +98,8 @@ export interface CommitRepository {
 }
 
 export function createCommitRepository(ctx: RepositoryContext): CommitRepository {
-  /** Commits of decks in the context's workspace. */
-  const owned = () => inWorkspace(ctx, commits.deckId);
+  /** Commits of `deck` (a deck id, or the row's own deck) if it is in the context's workspace. */
+  const owned = (deck: string | typeof commits.deckId) => deckInWorkspace(ctx, deck);
 
   return {
     async insert(commit) {
@@ -173,7 +193,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select()
         .from(commits)
-        .where(and(eq(commits.id, id), owned()))
+        .where(and(eq(commits.id, id), owned(commits.deckId)))
         .get();
       return row ? toCommitRecord(row) : null;
     },
@@ -182,7 +202,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select()
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), eq(commits.sequence, sequence), owned()))
+        .where(and(eq(commits.deckId, deckId), eq(commits.sequence, sequence), owned(deckId)))
         .get();
       return row ? toCommitRecord(row) : null;
     },
@@ -200,7 +220,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
             eq(commits.deckId, deckId),
             gte(commits.id, normalized),
             lt(commits.id, `${normalized}g`),
-            owned(),
+            owned(deckId),
           ),
         )
         .limit(2)
@@ -219,12 +239,29 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return row ? toCommitRecord(row) : null;
     },
 
+    async headWithSnapshot(deckId) {
+      const row = await ctx.db
+        .select({ commit: commits, snapshot: snapshots })
+        .from(decks)
+        .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
+        .innerJoin(commits, eq(commits.id, branches.headCommitId))
+        .leftJoin(snapshots, eq(snapshots.hash, commits.snapshotHash))
+        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .get();
+      if (!row) return null;
+      const commit = toCommitRecord(row.commit);
+      if (row.snapshot === null) {
+        throw corruptData(`Commit ${commit.id}`, `its snapshot ${commit.snapshotHash} is missing`);
+      }
+      return { commit, snapshot: decodeSnapshot(row.snapshot) };
+    },
+
     async lineage(deckId, fromCommitId) {
       const [rows, headId] = await Promise.all([
         ctx.db
           .select()
           .from(commits)
-          .where(and(eq(commits.deckId, deckId), owned()))
+          .where(and(eq(commits.deckId, deckId), owned(deckId)))
           .all(),
         fromCommitId === undefined ? headCommitId(ctx, deckId) : Promise.resolve(fromCommitId),
       ]);
@@ -247,7 +284,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const rows = await ctx.db
         .select()
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), owned()))
+        .where(and(eq(commits.deckId, deckId), owned(deckId)))
         .orderBy(desc(commits.sequence))
         .all();
       return rows.map(toCommitRecord);
@@ -257,7 +294,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select({ n: count() })
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), owned()))
+        .where(and(eq(commits.deckId, deckId), owned(deckId)))
         .get();
       return row?.n ?? 0;
     },
@@ -266,7 +303,8 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const rows = await ctx.db
         .select({ deckId: commits.deckId, n: count() })
         .from(commits)
-        .where(owned())
+        // The whole workspace: its decks once, rather than a probe per commit.
+        .where(inWorkspace(ctx, commits.deckId))
         .groupBy(commits.deckId)
         .all();
       return new Map(rows.map((row) => [row.deckId, row.n]));
@@ -276,7 +314,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select({ value: max(commits.sequence) })
         .from(commits)
-        .where(and(eq(commits.deckId, deckId), owned()))
+        .where(and(eq(commits.deckId, deckId), owned(deckId)))
         .get();
       return row?.value ?? null;
     },

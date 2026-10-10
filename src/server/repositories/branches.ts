@@ -6,7 +6,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 
 import { branches, commits, decks } from '@/server/db/schema';
 
-import { inWorkspace, withTransaction, type RepositoryContext } from './context';
+import { deckInWorkspace, withTransaction, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export type BranchKind = (typeof branches.$inferSelect)['kind'];
@@ -49,15 +49,15 @@ export interface BranchRepository {
 }
 
 export function createBranchRepository(ctx: RepositoryContext): BranchRepository {
-  /** Branches of decks in the context's workspace. */
-  const owned = () => inWorkspace(ctx, branches.deckId);
+  /** Branches of `deck` (a deck id, or the row's own deck) if it is in the context's workspace. */
+  const owned = (deck: string | typeof branches.deckId) => deckInWorkspace(ctx, deck);
 
   return {
     async getMain(deckId) {
       const row = await ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.deckId, deckId), eq(branches.kind, 'main'), owned()))
+        .where(and(eq(branches.deckId, deckId), eq(branches.kind, 'main'), owned(deckId)))
         .get();
       return row ?? null;
     },
@@ -66,7 +66,7 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       const row = await ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.deckId, deckId), eq(branches.name, name), owned()))
+        .where(and(eq(branches.deckId, deckId), eq(branches.name, name), owned(deckId)))
         .get();
       return row ?? null;
     },
@@ -75,7 +75,7 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       const row = await ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.id, id), owned()))
+        .where(and(eq(branches.id, id), owned(branches.deckId)))
         .get();
       return row ?? null;
     },
@@ -84,7 +84,7 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       return ctx.db
         .select()
         .from(branches)
-        .where(and(eq(branches.deckId, deckId), owned()))
+        .where(and(eq(branches.deckId, deckId), owned(deckId)))
         .orderBy(sql`${branches.kind} <> 'main'`, asc(branches.name))
         .all();
     },
@@ -95,7 +95,7 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
         const branch = await db
           .select()
           .from(branches)
-          .where(and(eq(branches.id, branchId), inWorkspace(tx, branches.deckId)))
+          .where(and(eq(branches.id, branchId), deckInWorkspace(tx, branches.deckId)))
           .get();
         if (!branch) throw new RepositoryError('not-found', `Branch ${branchId} does not exist`);
         const commit = await db

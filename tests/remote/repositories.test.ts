@@ -4,17 +4,13 @@
  * result codes remotely), atomic batches, single-use guarantees, and what card history and
  * card search cost in rows read (Turso bills every row a query reads).
  */
-import { createClient as createHttpClient } from '@libsql/client/http';
 import { sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/libsql/http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
-import type { LibsqlDatabase, LibsqlDb } from '@/server/db/libsql';
+import type { LibsqlDatabase } from '@/server/db/libsql';
 import { applyMigrations, MigrationStateError } from '@/server/db/migration-state';
 import * as schema from '@/server/db/schema';
-import { guardClient } from '@/server/db/transaction';
-import { WriteLock } from '@/server/db/write-lock';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import { buildSnapshot } from '@tests/support/builders';
 import {
@@ -27,53 +23,7 @@ import {
   steppingClock,
 } from '@tests/support/db';
 
-import { openRemote, remoteTarget, wipeRemoteDatabase } from './support';
-
-/** Rows read and written as the server reports them per statement. */
-interface Usage {
-  rowsRead: number;
-  rowsWritten: number;
-}
-
-interface StatementResult {
-  rows_read?: number;
-  rows_written?: number;
-}
-
-interface PipelineResponse {
-  results?: {
-    type: string;
-    response?: { type: string; result?: StatementResult & { step_results?: (StatementResult | null)[] } };
-  }[];
-}
-
-/**
- * The server under test, opened like `createLibsqlDatabase` does but with a `fetch` that
- * adds up the rows each statement read and wrote (Hrana reports them per statement).
- */
-function openMetered(usage: Usage): LibsqlDb {
-  const { url, authToken } = remoteTarget();
-  const meteredFetch = async (input: Request): Promise<Response> => {
-    const response = await fetch(input);
-    const body = (await response.clone().json()) as PipelineResponse;
-    for (const item of body.results ?? []) {
-      const result = item.response?.result;
-      for (const step of [result, ...(result?.step_results ?? [])]) {
-        usage.rowsRead += step?.rows_read ?? 0;
-        usage.rowsWritten += step?.rows_written ?? 0;
-      }
-    }
-    return response;
-  };
-  const client = guardClient(createHttpClient({ url, authToken, fetch: meteredFetch }), {
-    lock: new WriteLock('metered remote database'),
-    lockTimeoutMs: 15_000,
-    serializeRootOperations: false,
-    recycleAfterBusy: false,
-  });
-  const db: LibsqlDb = drizzle({ client, schema });
-  return db;
-}
+import { openMetered, openRemote, remoteTarget, wipeRemoteDatabase, type Usage } from './support';
 
 let handle: LibsqlDatabase;
 

@@ -1,8 +1,10 @@
+import type { InValue } from '@libsql/client';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import type { IngestWarning } from '@/core/model';
 import type { NewObservation } from '@/server/repositories';
+import { latestWithSnapshotQuery } from '@/server/repositories/observations';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   commitTestSnapshot,
@@ -51,13 +53,19 @@ describe('observations repository', () => {
     expect(inserted).toEqual({ id: expect.any(String) as string, ...input });
     expect(await repos.observations.getById(inserted.id)).toEqual(inserted);
     expect(await repos.observations.getById('missing')).toBeNull();
+    expect(await repos.observations.getWithSnapshot(inserted.id)).toEqual({
+      observation: inserted,
+      snapshot: buildSnapshot(baseDeckSpec()),
+    });
+    expect(await repos.observations.getWithSnapshot('missing')).toBeNull();
   });
 
   it('treats the most recently fetched observation as the working state', async () => {
     const { repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);
     const other = await createTestDeck(repos);
-    expect(await repos.observations.latestForDeck(deck.id)).toBeNull();
+    const latest = async () => (await repos.observations.latestWithSnapshot(deck.id))?.observation.id;
+    expect(await repos.observations.latestWithSnapshot(deck.id)).toBeNull();
 
     const late = await observeTestSnapshot(repos, deck, buildSnapshot({ primer: 'late' }), {
       fetchedAt: '2026-04-02T00:00:00.000Z',
@@ -69,13 +77,30 @@ describe('observations repository', () => {
     await observeTestSnapshot(repos, other, buildSnapshot({ primer: 'other deck' }), {
       fetchedAt: '2026-05-01T00:00:00.000Z',
     });
-    expect((await repos.observations.latestForDeck(deck.id))?.id).toBe(late.id);
+    expect(await latest()).toBe(late.id);
+    expect(await repos.observations.latestWithSnapshot(deck.id)).toEqual({
+      observation: late,
+      snapshot: buildSnapshot({ primer: 'late' }),
+    });
 
     // Same timestamp: the later insert wins.
     const tie = await observeTestSnapshot(repos, deck, buildSnapshot({ primer: 'tie' }), {
       fetchedAt: '2026-04-02T00:00:00.000Z',
     });
-    expect((await repos.observations.latestForDeck(deck.id))?.id).toBe(tie.id);
+    expect(await latest()).toBe(tie.id);
+    expect((await repos.observations.latestWithSnapshot(deck.id))?.snapshot.primer).toBe('tie\n');
+  });
+
+  it("reads only the working state's snapshot, without sorting", async () => {
+    const { db } = await createTestRepositories();
+    const { sql: text, params } = latestWithSnapshotQuery({ db, workspaceId: 'workspace' }, 'deck').toSQL();
+    const plan = await db.$client.execute({ sql: `EXPLAIN QUERY PLAN ${text}`, args: params as InValue[] });
+    expect(plan.rows.map((row) => row.detail)).toEqual([
+      'SEARCH observations USING INDEX observations_deck_fetched_idx (deck_id=?)',
+      'SCALAR SUBQUERY 1',
+      'SEARCH owner_deck USING INDEX sqlite_autoindex_decks_1 (id=?)',
+      'SEARCH snapshots USING INDEX sqlite_autoindex_snapshots_1 (hash=?) LEFT-JOIN',
+    ]);
   });
 
   it('reports dangling references as not found', async () => {
@@ -121,7 +146,8 @@ describe('observations repository', () => {
     await db.run(
       sql`UPDATE observations SET source_metadata_json = '{}', ingest_method = 'carrier-pigeon' WHERE id = ${observation.id}`,
     );
-    await expectRepositoryError(() => repos.observations.latestForDeck(deck.id), 'corrupt-data');
+    await expectRepositoryError(() => repos.observations.latestWithSnapshot(deck.id), 'corrupt-data');
+    await expectRepositoryError(() => repos.observations.getWithSnapshot(observation.id), 'corrupt-data');
   });
 
   it('prunes superseded observations with the snapshots and raw blobs only they referenced', async () => {

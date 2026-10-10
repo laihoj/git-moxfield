@@ -284,6 +284,7 @@ export const cardCatalog = sqliteTable(
     colorIdentityJson: text('color_identity_json').notNull(),
     layout: text('layout').notNull(),
     scryfallId: text('scryfall_id'),
+    /** When the facts last changed (an upsert of the same facts writes nothing). */
     updatedAt: text('updated_at')
       .notNull()
       .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

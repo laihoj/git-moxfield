@@ -106,6 +106,11 @@ export interface HranaStubOptions {
   foreignKeys?: 0 | 1;
   /** Statements that return no rows (default: every statement returns one row). */
   empty?: RegExp;
+  /**
+   * Answers every request with this HTTP status and no result instead (e.g. 401, as a
+   * server does that refuses the token).
+   */
+  status?: number;
 }
 
 interface PipelineRequest {
@@ -137,11 +142,17 @@ function integerResult(column: string, value: number | undefined): unknown {
  * A minimal libSQL server (Hrana 2 over HTTP, JSON) that answers every statement with one
  * integer row: `PRAGMA foreign_keys` with `foreignKeys`, statements matching `empty` with
  * no rows, anything else with 1. Enough to open a remote database without a real server.
+ * With `status`, it answers every request with that HTTP status instead.
  */
 export async function startHranaStub(options: HranaStubOptions = {}): Promise<HranaStub> {
   let requests = 0;
   const statements: string[] = [];
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    if (options.status !== undefined) {
+      requests++;
+      response.writeHead(options.status).end();
+      return;
+    }
     if (request.method !== 'POST' || request.url !== '/v2/pipeline') {
       response.writeHead(404).end();
       return;
@@ -183,6 +194,19 @@ export async function startHranaStub(options: HranaStubOptions = {}): Promise<Hr
         });
       }),
   };
+}
+
+/** A loopback URL on which nothing listens (connections are refused). */
+export async function refusingUrl(): Promise<string> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+  return `http://127.0.0.1:${port}`;
 }
 
 export interface EntryProbe {

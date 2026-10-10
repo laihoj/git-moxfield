@@ -59,6 +59,7 @@ describe('workspace isolation of deck data', () => {
     expect(await b.commits.getBySequence(deck.id, 1)).toBeNull();
     expect(await b.commits.findByIdPrefix(deck.id, v1.id.slice(0, 8))).toBeNull();
     expect(await b.commits.head(deck.id)).toBeNull();
+    expect(await b.commits.headWithSnapshot(deck.id)).toBeNull();
     expect(await b.commits.lineage(deck.id)).toEqual([]);
     expect(await b.commits.lineage(deck.id, v1.id)).toEqual([]);
     expect(await b.commits.listForDeck(deck.id)).toEqual([]);
@@ -66,7 +67,8 @@ describe('workspace isolation of deck data', () => {
     expect(await b.commits.maxSequence(deck.id)).toBeNull();
 
     expect(await b.observations.getById(observation.id)).toBeNull();
-    expect(await b.observations.latestForDeck(deck.id)).toBeNull();
+    expect(await b.observations.getWithSnapshot(observation.id)).toBeNull();
+    expect(await b.observations.latestWithSnapshot(deck.id)).toBeNull();
 
     expect(await b.tags.listForCommit(v1.id)).toEqual([]);
     expect(await b.tags.listForCommits([v1.id])).toEqual(new Map([[v1.id, []]]));
@@ -120,7 +122,7 @@ describe('workspace isolation of deck data', () => {
     expect((await a.decks.getById(deck.id))?.name).toBe(deck.name);
     expect(await a.tags.listForCommit(v1.id)).toEqual(['tournament']);
     expect((await a.notes.get(v1.id, 'note'))?.data).toEqual({ text: 'Top 4' });
-    expect((await a.observations.latestForDeck(deck.id))?.id).toBe(observation.id);
+    expect((await a.observations.latestWithSnapshot(deck.id))?.observation.id).toBe(observation.id);
   });
 
   it('lets two workspaces track the same source deck independently', async () => {

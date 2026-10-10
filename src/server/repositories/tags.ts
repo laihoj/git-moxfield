@@ -8,7 +8,15 @@ import { compareStrings } from '@/core/canonical';
 import { commits, versionTags } from '@/server/db/schema';
 
 import { toCommitRecord, type CommitRecord } from './commits';
-import { batches, distinct, inWorkspace, referencing, write, type RepositoryContext } from './context';
+import {
+  batches,
+  commitInWorkspace,
+  deckInWorkspace,
+  distinct,
+  referencing,
+  write,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 
 /** Maximum tag length in Unicode code points (after normalization). */
@@ -70,12 +78,8 @@ export interface VersionTagRepository {
 }
 
 export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRepository {
-  /** `commitColumn IN (commits of decks in the context's workspace)`. */
-  const ownedCommit = (commitColumn: typeof versionTags.commitId) =>
-    inArray(
-      commitColumn,
-      ctx.db.select({ id: commits.id }).from(commits).where(inWorkspace(ctx, commits.deckId)),
-    );
+  /** Tags of `commit` (a commit id, or the row's own commit) if it is in the context's workspace. */
+  const ownedCommit = (commit: string | typeof versionTags.commitId) => commitInWorkspace(ctx, commit);
 
   return {
     async add(commitId, tag) {
@@ -85,7 +89,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       const owned = await ctx.db
         .select({ id: commits.id })
         .from(commits)
-        .where(and(eq(commits.id, commitId), inWorkspace(ctx, commits.deckId)))
+        .where(and(eq(commits.id, commitId), deckInWorkspace(ctx, commits.deckId)))
         .get();
       if (!owned) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
       const createdAt = ctx.now();
@@ -107,7 +111,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
             and(
               eq(versionTags.commitId, commitId),
               eq(versionTags.name, validation.name),
-              ownedCommit(versionTags.commitId),
+              ownedCommit(commitId),
             ),
           ),
       );
@@ -118,7 +122,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       const rows = await ctx.db
         .select({ name: versionTags.name })
         .from(versionTags)
-        .where(and(eq(versionTags.commitId, commitId), ownedCommit(versionTags.commitId)))
+        .where(and(eq(versionTags.commitId, commitId), ownedCommit(commitId)))
         .all();
       return rows.map((row) => row.name).sort(compareStrings);
     },
@@ -145,7 +149,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
         .select({ name: versionTags.name, count: count() })
         .from(versionTags)
         .innerJoin(commits, eq(commits.id, versionTags.commitId))
-        .where(and(eq(commits.deckId, deckId), inWorkspace(ctx, commits.deckId)))
+        .where(and(eq(commits.deckId, deckId), deckInWorkspace(ctx, deckId)))
         .groupBy(versionTags.name)
         .all();
       return rows.sort((a, b) => compareStrings(a.name, b.name));
@@ -162,7 +166,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
           and(
             eq(commits.deckId, deckId),
             eq(versionTags.name, validation.name),
-            inWorkspace(ctx, commits.deckId),
+            deckInWorkspace(ctx, deckId),
           ),
         )
         .orderBy(desc(commits.sequence))

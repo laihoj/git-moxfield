@@ -199,6 +199,18 @@ describe('commits repository', () => {
     expect(await repos.commits.head('missing')).toBeNull();
   });
 
+  it('reads HEAD together with its snapshot', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    expect(await repos.commits.headWithSnapshot(deck.id)).toBeNull();
+    await commitTestSnapshot(repos, deck, version(1));
+    const v2 = await commitTestSnapshot(repos, deck, version(2));
+    // A version off the main line does not move HEAD.
+    await commitTestSnapshot(repos, deck, version(3), { moveHead: false });
+    expect(await repos.commits.headWithSnapshot(deck.id)).toEqual({ commit: v2, snapshot: version(2) });
+    expect(await repos.commits.headWithSnapshot('missing')).toBeNull();
+  });
+
   it('walks the lineage from HEAD or a given commit, oldest first', async () => {
     const { repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);

@@ -343,7 +343,7 @@ export async function runImportCommand(
       try {
         ownTarget = await openTarget(config, args.dryRun);
       } catch (error) {
-        io.err(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error)}`);
+        io.err(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`);
         return 1;
       }
       target = { db: ownTarget.db, description: describeConfiguredDatabase(config) };

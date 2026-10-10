@@ -5,6 +5,7 @@ import { emptySnapshot, stableStringify } from '@/core/canonical';
 import { snapshotHash } from '@/core/hash';
 import type { CanonicalSnapshot } from '@/core/model';
 import { MAX_STORED_VALUE_BYTES } from '@/server/repositories';
+import { snapshotLookupQuery } from '@/server/repositories/snapshots';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   countRows,
@@ -161,6 +162,21 @@ describe('snapshots repository', () => {
     expect(loaded.get(hashA)).toEqual(a);
     expect(loaded.get(hashB)).toEqual(b);
     expect((await repos.snapshots.getMany([])).size).toBe(0);
+  });
+
+  it('loads them by primary key, one probe per hash, without a temporary table of the hashes', async () => {
+    // `hash IN (?, ?, ...)` would build a temporary table of the hashes, whose rows remote
+    // libSQL counts as read too: three rows read per snapshot instead of one.
+    const { db } = await createTestRepositories();
+    const plan = await db.all<{ detail: string }>(
+      sql`EXPLAIN QUERY PLAN ${snapshotLookupQuery(['a'.repeat(64), 'b'.repeat(64)])}`,
+    );
+    expect(plan.map((row) => row.detail)).toEqual([
+      'CO-ROUTINE wanted',
+      'SCAN 2 CONSTANT ROWS',
+      'SCAN wanted',
+      'SEARCH s USING INDEX sqlite_autoindex_snapshots_1 (hash=?)',
+    ]);
   });
 
   it('refuses to read snapshots written with another schema version', async () => {

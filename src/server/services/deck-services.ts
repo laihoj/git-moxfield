@@ -16,6 +16,15 @@
  *
  * Remotely every query is a round trip, so independent reads are started together.
  *
+ * Reads run outside transactions, where every statement sees whatever is committed when it
+ * runs, and another function instance (with deck locks of its own) can write between any
+ * two of them. So nothing is read in two statements that a concurrent write could pull
+ * apart: an observation, which every ingest may prune with its snapshot, is always read
+ * together with its snapshot, and so is HEAD (`latestWithSnapshot`, `headWithSnapshot`);
+ * and a read that finds a deck's history gone because the deck was untracked meanwhile
+ * answers as for an unknown deck (`whileTracked`). The commit's checks before its
+ * transaction are advisory; the transaction checks again.
+ *
  * Every returned value is plain JSON-serializable data (it crosses the React Server
  * Components boundary). Failures that the user can act on are returned as outcome
  * values; programming errors and unknown decks surface as exceptions
@@ -50,6 +59,7 @@ import {
   type DeckRelinkRecord,
   type FetchErrorRecord,
   type ObservationRecord,
+  type ObservationWithSnapshot,
   type Repositories,
 } from '@/server/repositories';
 import type { DeckSourceRegistry } from '@/server/sources';
@@ -73,7 +83,7 @@ import {
 } from './dto';
 import { ServiceError } from './errors';
 import { DeckHistory, type ResolvedSide } from './history';
-import { requireRecord, requireSnapshot } from './invariants';
+import { unlessDeckVanished } from './invariants';
 import type { KeyedMutex } from './mutex';
 import { parseVersionRef } from './refs';
 import { setupInfo } from './setup-info';
@@ -135,6 +145,8 @@ type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
 
 interface Ingested {
   observation: ObservationRecord;
+  /** The observation's snapshot (as stored). */
+  snapshot: CanonicalSnapshot;
   changed: boolean;
 }
 
@@ -148,6 +160,15 @@ interface IngestRelink {
 type RelinkFailure = Extract<RelinkDeckOutcome, { ok: false }>;
 
 type FetchResult = ({ ok: true } & Ingested) | { ok: false; error: FetchErrorDTO };
+
+/**
+ * A stored deck state: a snapshot and its content hash (what an observation or a commit
+ * records), loaded together.
+ */
+interface StoredState {
+  snapshotHash: string;
+  snapshot: CanonicalSnapshot;
+}
 
 /** HEAD, working state and their diff for one deck. */
 interface DeckState {
@@ -272,36 +293,44 @@ class DefaultDeckServices implements DeckServices {
     return { ok: true, externalId, url, fetch };
   }
 
-  async getOverview(deckId: string): Promise<DeckOverviewDTO | null> {
-    const deck = await this.repos.decks.getById(deckId);
-    if (!deck) return null;
-    const [state, commits, relinks] = await Promise.all([
-      this.loadState(deck),
-      this.repos.commits.listForDeck(deck.id),
-      this.repos.decks.listRelinks(deck.id),
-    ]);
-    const { head, working, diff } = state;
-    const serverFetch = this.sources.require(deck.source).serverFetchStatus();
-    const snapshot = state.workingSnapshot ?? state.headSnapshot;
-    const commanderKeys = snapshot ? zoneCards(snapshot, 'commanders').map((card) => card.key) : [];
-    let suggestedMessage = '';
-    if (diff !== null) suggestedMessage = head ? suggestCommitMessage(diff) : INITIAL_VERSION_MESSAGE;
-    const [recentVersions, catalog] = await Promise.all([
-      this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
-      this.history.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
-    ]);
+  getOverview(deckId: string): Promise<DeckOverviewDTO | null> {
+    return this.whileTracked(deckId, null, async () => {
+      const deck = await this.repos.decks.getById(deckId);
+      if (!deck) return null;
+      // The version count comes from the list of versions: counting them separately would
+      // read every version twice.
+      const listingCommits = this.repos.commits.listForDeck(deck.id);
+      const [state, commits, relinks] = await Promise.all([
+        this.loadState(
+          deck,
+          listingCommits.then((all) => all.length),
+        ),
+        listingCommits,
+        this.repos.decks.listRelinks(deck.id),
+      ]);
+      const { head, working, diff } = state;
+      const serverFetch = this.sources.require(deck.source).serverFetchStatus();
+      const snapshot = state.workingSnapshot ?? state.headSnapshot;
+      const commanderKeys = snapshot ? zoneCards(snapshot, 'commanders').map((card) => card.key) : [];
+      let suggestedMessage = '';
+      if (diff !== null) suggestedMessage = head ? suggestCommitMessage(diff) : INITIAL_VERSION_MESSAGE;
+      const [recentVersions, catalog] = await Promise.all([
+        this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
+        this.history.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
+      ]);
 
-    return {
-      ...this.summarize(state),
-      diff,
-      relinks: relinks.map(toDeckRelinkDTO).reverse(),
-      warnings: working?.warnings ?? [],
-      recentVersions,
-      serverFetch,
-      catalog,
-      autoRefreshSuggested: this.autoRefreshSuggested(deck, working, serverFetch),
-      suggestedMessage,
-    };
+      return {
+        ...this.summarize(state),
+        diff,
+        relinks: relinks.map(toDeckRelinkDTO).reverse(),
+        warnings: working?.warnings ?? [],
+        recentVersions,
+        serverFetch,
+        catalog,
+        autoRefreshSuggested: this.autoRefreshSuggested(deck, working, serverFetch),
+        suggestedMessage,
+      };
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -534,7 +563,9 @@ class DefaultDeckServices implements DeckServices {
     const source = this.sources.require(deck.source);
     const changedMessage = `The deck changed on ${source.displayName} since you reviewed it. Review the new changes and commit again.`;
 
-    const latest = await this.repos.observations.latestForDeck(deckId);
+    // Every observation is read with its snapshot in one statement: another function
+    // instance's ingests may prune either of them at any time (see `ObservationRepository`).
+    const latest = await this.repos.observations.latestWithSnapshot(deckId);
     if (!latest) {
       return commitFailure(
         'no-working-state',
@@ -542,11 +573,11 @@ class DefaultDeckServices implements DeckServices {
       );
     }
     const reviewed =
-      latest.id === input.expectedObservationId
+      latest.observation.id === input.expectedObservationId
         ? latest
-        : await this.repos.observations.getById(input.expectedObservationId);
-    if (reviewed?.deckId !== deckId) return reviewOutdated();
-    if (!(await this.sameDeckState(this.repos, reviewed.snapshotHash, latest.snapshotHash))) {
+        : await this.repos.observations.getWithSnapshot(input.expectedObservationId);
+    if (reviewed?.observation.deckId !== deckId) return reviewOutdated();
+    if (!sameDeckState(storedState(reviewed), storedState(latest))) {
       return commitFailure('stale', changedMessage);
     }
 
@@ -560,10 +591,10 @@ class DefaultDeckServices implements DeckServices {
     // reviewed state is committed: it is a real observation the user has reviewed.
     if (source.serverFetchStatus().state === 'available') {
       // The reviewed observation must survive the pruning of this ingest.
-      const fresh = await this.fetchAndIngest(deck, source, 'commit', [reviewed.id]);
-      const diff = fresh.ok
-        ? await this.deckStateDiff(this.repos, reviewed.snapshotHash, fresh.observation.snapshotHash)
-        : null;
+      const fresh = await this.fetchAndIngest(deck, source, 'commit', [reviewed.observation.id]);
+      // Both snapshots are at hand: nothing to read, so nothing another instance's pruning
+      // could have removed meanwhile.
+      const diff = fresh.ok ? deckStateDiff(storedState(reviewed), storedState(fresh)) : null;
       if (diff && !diff.isEmpty) {
         // Committing the reviewed state would drop the primer the source just returned.
         const primerOnly =
@@ -590,7 +621,7 @@ class DefaultDeckServices implements DeckServices {
         deckId,
         sequence: outcome.version.sequence,
         commitId: outcome.version.commitId,
-        ingestMethod: reviewed.ingestMethod,
+        ingestMethod: reviewed.observation.ingestMethod,
       });
     }
     return outcome;
@@ -604,24 +635,28 @@ class DefaultDeckServices implements DeckServices {
     repos: Repositories,
     deck: DeckRecord,
     source: DeckSource,
-    reviewed: ObservationRecord,
+    reviewed: ObservationWithSnapshot,
     expectedHeadCommitId: string | null,
   ): Promise<{ ok: true; branch: BranchRecord } | { ok: false; outcome: CommitOutcome }> {
-    const branch = await repos.branches.getByName(deck.id, deck.headBranchName);
+    const [branch, head] = await Promise.all([
+      repos.branches.getByName(deck.id, deck.headBranchName),
+      repos.commits.headWithSnapshot(deck.id),
+    ]);
     if (!branch) throw new Error(`Deck ${deck.id} has no ${deck.headBranchName} branch`);
     const parentId = branch.headCommitId;
-    if (parentId !== expectedHeadCommitId) return { ok: false, outcome: headMoved() };
-    if (parentId !== null) {
-      const head = requireRecord(await repos.commits.getById(parentId), `Commit ${parentId}`);
-      if (await this.sameDeckState(repos, head.snapshotHash, reviewed.snapshotHash)) {
-        return {
-          ok: false,
-          outcome: commitFailure(
-            'nothing-to-commit',
-            `The deck on ${source.displayName} matches v${head.sequence}. There is nothing to commit.`,
-          ),
-        };
-      }
+    // Outside a transaction the two reads may straddle another instance's commit; either
+    // way HEAD is no longer what the user reviewed against.
+    if (parentId !== expectedHeadCommitId || (head?.commit.id ?? null) !== parentId) {
+      return { ok: false, outcome: headMoved() };
+    }
+    if (head && sameDeckState(storedState(head), storedState(reviewed))) {
+      return {
+        ok: false,
+        outcome: commitFailure(
+          'nothing-to-commit',
+          `The deck on ${source.displayName} matches v${head.commit.sequence}. There is nothing to commit.`,
+        ),
+      };
     }
     return { ok: true, branch };
   }
@@ -635,13 +670,13 @@ class DefaultDeckServices implements DeckServices {
     tx: Repositories,
     deck: DeckRecord,
     source: DeckSource,
-    reviewed: ObservationRecord,
+    reviewed: ObservationWithSnapshot,
     input: { message: string; expectedHeadCommitId: string | null; tags: string[] },
   ): Promise<CommitOutcome> {
+    const { observation } = reviewed;
     // Another process may have pruned the reviewed observation, with its snapshot and raw
-    // payload, since the checks before this transaction. First, as `commitTarget` reads
-    // that snapshot.
-    if (!(await tx.observations.getById(reviewed.id))) return reviewOutdated();
+    // payload, since the checks before this transaction.
+    if (!(await tx.observations.getById(observation.id))) return reviewOutdated();
     const target = await this.commitTarget(tx, deck, source, reviewed, input.expectedHeadCommitId);
     if (!target.ok) return target.outcome;
     const { branch } = target;
@@ -651,10 +686,10 @@ class DefaultDeckServices implements DeckServices {
     const createdAt = this.now().toISOString();
     const id = commitId({
       deck: `${deck.source}:${deck.externalId}`,
-      snapshotHash: reviewed.snapshotHash,
+      snapshotHash: observation.snapshotHash,
       parentId,
       createdAt,
-      sourceVersion: reviewed.sourceVersion,
+      sourceVersion: observation.sourceVersion,
       message: input.message,
     });
     const commit = await tx.commits.insert({
@@ -663,15 +698,15 @@ class DefaultDeckServices implements DeckServices {
       branchId: branch.id,
       sequence,
       parentId,
-      snapshotHash: reviewed.snapshotHash,
-      rawBlobHash: reviewed.rawBlobHash,
+      snapshotHash: observation.snapshotHash,
+      rawBlobHash: observation.rawBlobHash,
       message: input.message,
       createdAt,
-      ingestMethod: reviewed.ingestMethod,
-      fetchedAt: reviewed.fetchedAt,
-      sourceVersion: reviewed.sourceVersion,
-      sourceUpdatedAt: reviewed.sourceUpdatedAt,
-      sourceMetadata: reviewed.sourceMetadata,
+      ingestMethod: observation.ingestMethod,
+      fetchedAt: observation.fetchedAt,
+      sourceVersion: observation.sourceVersion,
+      sourceUpdatedAt: observation.sourceUpdatedAt,
+      sourceMetadata: observation.sourceMetadata,
     });
     await tx.branches.setHead(branch.id, commit.id, { expectedHeadCommitId: parentId });
     for (const tag of input.tags) await tx.tags.add(commit.id, tag);
@@ -683,92 +718,105 @@ class DefaultDeckServices implements DeckServices {
   // -------------------------------------------------------------------------
 
   listVersions(deckId: string, options: { tag?: string } = {}): Promise<VersionListItemDTO[]> {
-    return this.history.listVersions(deckId, options.tag);
+    return this.whileTracked(deckId, [], () => this.history.listVersions(deckId, options.tag));
   }
 
-  async getVersion(deckId: string, sequence: number): Promise<VersionDetailDTO | null> {
-    const deck = await this.repos.decks.getById(deckId);
-    if (!deck) return null;
-    const [detail, state] = await Promise.all([
-      this.history.versionDetail(deckId, sequence),
-      this.loadState(deck),
-    ]);
-    if (!detail) return null;
-    return { deck: this.summarize(state), ...detail };
+  getVersion(deckId: string, sequence: number): Promise<VersionDetailDTO | null> {
+    return this.whileTracked(deckId, null, async () => {
+      const deck = await this.repos.decks.getById(deckId);
+      if (!deck) return null;
+      const [detail, state] = await Promise.all([
+        this.history.versionDetail(deckId, sequence),
+        this.loadState(deck),
+      ]);
+      if (!detail) return null;
+      return { deck: this.summarize(state), ...detail };
+    });
   }
 
-  async compare(deckId: string, from: VersionRef, to: VersionRef): Promise<CompareDTO | null> {
-    const deck = await this.repos.decks.getById(deckId);
-    if (!deck) return null;
-    const state = await this.loadState(deck);
-    const [fromSide, toSide] = await Promise.all([this.resolveRef(state, from), this.resolveRef(state, to)]);
-    if (!fromSide || !toSide) return null;
-    return {
-      deck: this.summarize(state),
-      ...(await this.history.comparison(deckId, fromSide, toSide)),
-      hasWorking: state.working !== null,
-    };
+  compare(deckId: string, from: VersionRef, to: VersionRef): Promise<CompareDTO | null> {
+    return this.whileTracked(deckId, null, async () => {
+      const deck = await this.repos.decks.getById(deckId);
+      if (!deck) return null;
+      const state = await this.loadState(deck);
+      const [fromSide, toSide] = await Promise.all([
+        this.resolveRef(state, from),
+        this.resolveRef(state, to),
+      ]);
+      if (!fromSide || !toSide) return null;
+      return {
+        deck: this.summarize(state),
+        ...(await this.history.comparison(deckId, fromSide, toSide)),
+        hasWorking: state.working !== null,
+      };
+    });
   }
 
   // -------------------------------------------------------------------------
   // Cards
   // -------------------------------------------------------------------------
 
-  async searchCards(
+  searchCards(
     deckId: string,
     query: string,
     limit = DEFAULT_CARD_SEARCH_LIMIT,
   ): Promise<CardSearchResultDTO[]> {
-    // The search is scoped to the workspace's deck by itself; the lookup keeps "unknown
-    // deck" explicit (and costs no extra round trip).
-    const [deck, results] = await Promise.all([
-      this.repos.decks.getById(deckId),
-      this.history.searchCards(deckId, query, limit, true),
-    ]);
-    return deck ? results : [];
+    return this.whileTracked(deckId, [], async () => {
+      // The search is scoped to the workspace's deck by itself; the lookup keeps "unknown
+      // deck" explicit (and costs no extra round trip).
+      const [deck, results] = await Promise.all([
+        this.repos.decks.getById(deckId),
+        this.history.searchCards(deckId, query, limit, true),
+      ]);
+      return deck ? results : [];
+    });
   }
 
-  async cardHistory(
+  cardHistory(
     deckId: string,
     card: string,
     options: { includeWorking?: boolean } = {},
   ): Promise<CardHistoryDTO | null> {
-    const deck = await this.repos.decks.getById(deckId);
-    if (!deck) return null;
-    const state = await this.loadState(deck);
-    const { working, workingSnapshot } = state;
-    const found = await this.history.cardHistory(
-      deckId,
-      card,
-      options.includeWorking !== false && working && workingSnapshot
-        ? {
-            fetchedAt: working.fetchedAt,
-            snapshot: workingSnapshot,
-            label: `Current ${this.sources.require(deck.source).displayName} deck`,
-          }
-        : null,
-    );
-    if (!found) return null;
-    return { deck: this.summarize(state), ...found };
+    return this.whileTracked(deckId, null, async () => {
+      const deck = await this.repos.decks.getById(deckId);
+      if (!deck) return null;
+      const state = await this.loadState(deck);
+      const { working, workingSnapshot } = state;
+      const found = await this.history.cardHistory(
+        deckId,
+        card,
+        options.includeWorking !== false && working && workingSnapshot
+          ? {
+              fetchedAt: working.fetchedAt,
+              snapshot: workingSnapshot,
+              label: `Current ${this.sources.require(deck.source).displayName} deck`,
+            }
+          : null,
+      );
+      if (!found) return null;
+      return { deck: this.summarize(state), ...found };
+    });
   }
 
   // -------------------------------------------------------------------------
   // Restore, tags, notes
   // -------------------------------------------------------------------------
 
-  async restoreExport(deckId: string, sequence: number): Promise<RestoreDTO | null> {
-    const deck = await this.repos.decks.getById(deckId);
-    if (!deck) return null;
-    const [restore, state] = await Promise.all([
-      this.history.restoreExport(deck, sequence, 'source-deck'),
-      this.loadState(deck),
-    ]);
-    if (!restore) return null;
-    return {
-      deck: this.summarize(state),
-      version: toVersionRefDTO(restore.commit),
-      export: restore.export,
-    };
+  restoreExport(deckId: string, sequence: number): Promise<RestoreDTO | null> {
+    return this.whileTracked(deckId, null, async () => {
+      const deck = await this.repos.decks.getById(deckId);
+      if (!deck) return null;
+      const [restore, state] = await Promise.all([
+        this.history.restoreExport(deck, sequence, 'source-deck'),
+        this.loadState(deck),
+      ]);
+      if (!restore) return null;
+      return {
+        deck: this.summarize(state),
+        version: toVersionRefDTO(restore.commit),
+        export: restore.export,
+      };
+    });
   }
 
   async addTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
@@ -822,6 +870,15 @@ class DefaultDeckServices implements DeckServices {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * Runs `read`, a read of the deck's data in several statements; when the deck is
+   * untracked meanwhile (by another request), answers `whenGone`, as for an unknown deck,
+   * instead of failing on what went with it (see `unlessDeckVanished`).
+   */
+  private whileTracked<T>(deckId: string, whenGone: T, read: () => Promise<T>): Promise<T> {
+    return unlessDeckVanished(read, async () => (await this.repos.decks.getById(deckId)) !== null, whenGone);
+  }
 
   private async requireDeck(deckId: string): Promise<DeckRecord> {
     const deck = await this.repos.decks.getById(deckId);
@@ -966,7 +1023,7 @@ class DefaultDeckServices implements DeckServices {
         });
         await tx.observations.pruneForDeck(deck.id, []);
       }
-      const previous = await tx.observations.latestForDeck(deck.id);
+      const previous = await tx.observations.latestWithSnapshot(deck.id);
       const rawBlobHash = await tx.rawBlobs.put({ mediaType: raw.mediaType, data: raw.data });
       const snapshotHash = await tx.snapshots.put(snapshot);
       await tx.catalog.upsertMany(catalog);
@@ -986,49 +1043,46 @@ class DefaultDeckServices implements DeckServices {
         format: metadata.format,
         url: metadata.url,
       });
-      const changed =
-        previous === null || !(await this.sameDeckState(tx, previous.snapshotHash, snapshotHash));
+      const changed = previous === null || !sameDeckState(storedState(previous), { snapshotHash, snapshot });
       await tx.observations.pruneForDeck(deck.id, [
         observation.id,
-        ...(previous ? [previous.id] : []),
+        ...(previous ? [previous.observation.id] : []),
         ...(options.retain ?? []),
       ]);
-      return { observation, changed };
+      return { observation, snapshot, changed };
     });
   }
 
   /**
-   * Whether the stored snapshot `after` holds nothing that `before` does not record
-   * (empty diff `before` → `after`). Directional: a primer that only `after` has is a
-   * difference, one that only `before` has is not (see `primerChange`).
+   * HEAD and the working state of `deck`, each read with its snapshot in one statement:
+   * another function instance's ingests may prune the working state at any time, and the
+   * snapshot of an observation read in a separate statement could then be gone (see
+   * `ObservationRepository`). One round trip. `versionCount` is the number of versions when
+   * the caller reads them anyway.
    */
-  private async sameDeckState(repos: Repositories, before: string, after: string): Promise<boolean> {
-    return (await this.deckStateDiff(repos, before, after))?.isEmpty ?? true;
-  }
-
-  /** Diff of two stored snapshots; `null` when they are the same snapshot. */
-  private async deckStateDiff(repos: Repositories, before: string, after: string): Promise<DeckDiff | null> {
-    if (before === after) return null;
-    const snapshots = await repos.snapshots.getMany([before, after]);
-    return diffSnapshots(requireSnapshot(snapshots, before), requireSnapshot(snapshots, after));
-  }
-
-  private async loadState(deck: DeckRecord): Promise<DeckState> {
-    const [head, working, versionCount] = await Promise.all([
-      this.repos.commits.head(deck.id),
-      this.repos.observations.latestForDeck(deck.id),
-      this.repos.commits.count(deck.id),
+  private async loadState(
+    deck: DeckRecord,
+    versionCount: Promise<number> = this.repos.commits.count(deck.id),
+  ): Promise<DeckState> {
+    const [head, working, count] = await Promise.all([
+      this.repos.commits.headWithSnapshot(deck.id),
+      this.repos.observations.latestWithSnapshot(deck.id),
+      versionCount,
     ]);
-    const hashes: string[] = [];
-    if (head) hashes.push(head.snapshotHash);
-    if (working) hashes.push(working.snapshotHash);
-    const snapshots = await this.repos.snapshots.getMany(hashes);
-    const headSnapshot = head ? requireSnapshot(snapshots, head.snapshotHash) : null;
-    const workingSnapshot = working ? requireSnapshot(snapshots, working.snapshotHash) : null;
+    const headSnapshot = head?.snapshot ?? null;
+    const workingSnapshot = working?.snapshot ?? null;
     const diff = workingSnapshot
       ? diffSnapshots(headSnapshot ?? emptySnapshot(workingSnapshot.deck), workingSnapshot)
       : null;
-    return { deck, head, headSnapshot, working, workingSnapshot, diff, versionCount };
+    return {
+      deck,
+      head: head?.commit ?? null,
+      headSnapshot,
+      working: working?.observation ?? null,
+      workingSnapshot,
+      diff,
+      versionCount: count,
+    };
   }
 
   private summarize(state: DeckState): DeckSummaryDTO {
@@ -1058,6 +1112,12 @@ class DefaultDeckServices implements DeckServices {
   private async resolveRef(state: DeckState, ref: VersionRef): Promise<ResolvedSide | null> {
     const parsed = parseVersionRef(ref);
     if (!parsed) return null;
+    if (parsed.kind === 'head' && state.head && state.headSnapshot) {
+      return {
+        side: { kind: 'version', version: toVersionRefDTO(state.head) },
+        snapshot: state.headSnapshot,
+      };
+    }
     if (parsed.kind !== 'working') return this.history.resolveCommitted(state.deck.id, parsed, state.head);
     return state.working && state.workingSnapshot
       ? {
@@ -1122,6 +1182,28 @@ function unavailableError(status: ServerFetchStatus, now: Date): FetchErrorDTO |
       };
     }
   }
+}
+
+/** The state an observation or a commit records, from the record loaded with its snapshot. */
+function storedState(
+  loaded: { snapshot: CanonicalSnapshot } & ({ observation: ObservationRecord } | { commit: CommitRecord }),
+): StoredState {
+  const record = 'commit' in loaded ? loaded.commit : loaded.observation;
+  return { snapshotHash: record.snapshotHash, snapshot: loaded.snapshot };
+}
+
+/** Diff `before` → `after`; `null` when they are the same snapshot. */
+function deckStateDiff(before: StoredState, after: StoredState): DeckDiff | null {
+  return before.snapshotHash === after.snapshotHash ? null : diffSnapshots(before.snapshot, after.snapshot);
+}
+
+/**
+ * Whether `after` holds nothing that `before` does not record (empty diff `before` →
+ * `after`). Directional: a primer that only `after` has is a difference, one that only
+ * `before` has is not (see `primerChange`).
+ */
+function sameDeckState(before: StoredState, after: StoredState): boolean {
+  return deckStateDiff(before, after)?.isEmpty ?? true;
 }
 
 function toDeckRelinkDTO(relink: DeckRelinkRecord): DeckRelinkDTO {

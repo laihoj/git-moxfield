@@ -310,3 +310,59 @@ export function isSqlErrorKind(error: unknown, kind: SqlErrorKind): boolean {
 export function isRetryableSqlError(error: unknown): boolean {
   return classifySqlError(error).retryable;
 }
+
+/**
+ * Why a remote database could not be used at all: a problem with where it is or with the
+ * credentials, which an operator fixes in the configuration rather than in the data.
+ */
+export type ConnectionFailureKind =
+  /** HTTP 401: no token, or one the server does not accept (expired, revoked, another database's). */
+  | 'unauthorized'
+  /** HTTP 403: the token is valid but may not do this (a read-only token). */
+  | 'forbidden'
+  /** HTTP 404: no database answers at that URL. */
+  | 'not-found'
+  /** The server could not be reached: unknown host name, refused or timed-out connection, ... */
+  | 'unreachable';
+
+const HTTP_STATUS_FAILURES: ReadonlyMap<number, ConnectionFailureKind> = new Map<
+  number,
+  ConnectionFailureKind
+>([
+  [401, 'unauthorized'],
+  [403, 'forbidden'],
+  [404, 'not-found'],
+]);
+
+/** System and undici error codes of a connection that could not be made or broke off. */
+const NETWORK_ERROR_CODE =
+  /^(ENOTFOUND|EAI_AGAIN|EAI_FAIL|ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|EHOSTUNREACH|EHOSTDOWN|ENETUNREACH|ENETDOWN|EPIPE|UND_ERR_[A-Z_]+)$/;
+
+/**
+ * The connection problem behind `error` (anything opening or querying a remote database can
+ * throw), found by walking its `cause` chain; `undefined` for any other failure. The remote
+ * client reports an HTTP status as `HttpServerError` (`status`), the cause of a
+ * `LibsqlError` with code `SERVER_ERROR`; a request that never got an answer fails with
+ * `fetch`'s `TypeError: fetch failed`, whose cause carries the system error code.
+ */
+export function connectionFailureOf(error: unknown): ConnectionFailureKind | undefined {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (
+    typeof current === 'object' &&
+    current !== null &&
+    !seen.has(current) &&
+    seen.size < MAX_CAUSE_DEPTH
+  ) {
+    seen.add(current);
+    const status = field(current, 'status');
+    if (stringField(current, 'name') === 'HttpServerError' && typeof status === 'number') {
+      return HTTP_STATUS_FAILURES.get(status);
+    }
+    const code = stringField(current, 'code');
+    if (code !== undefined && NETWORK_ERROR_CODE.test(code)) return 'unreachable';
+    if (current instanceof TypeError && current.message === 'fetch failed') return 'unreachable';
+    current = field(current, 'cause');
+  }
+  return undefined;
+}

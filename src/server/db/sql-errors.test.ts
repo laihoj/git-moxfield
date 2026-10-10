@@ -10,6 +10,7 @@ import { applyMigrations } from './migration-state';
 import * as schema from './schema';
 import {
   classifySqlError,
+  connectionFailureOf,
   isConstraintViolation,
   isRetryableSqlError,
   isSqlErrorKind,
@@ -275,6 +276,59 @@ describe('classifySqlError', () => {
         isConstraintViolation(kind as SqlErrorKind),
       ),
     ).toBe(false);
+  });
+});
+
+describe('connectionFailureOf', () => {
+  /** What the remote client throws for an HTTP error status (`mapHranaError`). */
+  function httpStatusError(status: number): LibsqlError {
+    const cause = Object.assign(new Error(`Server returned HTTP status ${status}`), {
+      name: 'HttpServerError',
+      status,
+    });
+    return new LibsqlError(`SERVER_ERROR: ${cause.message}`, 'SERVER_ERROR', undefined, undefined, cause);
+  }
+
+  /** What `fetch` throws when no answer came: `TypeError: fetch failed`, the system error as cause. */
+  function fetchFailed(cause?: object): TypeError {
+    return new TypeError('fetch failed', cause === undefined ? undefined : { cause });
+  }
+
+  it.each([
+    [401, 'unauthorized'],
+    [403, 'forbidden'],
+    [404, 'not-found'],
+  ] as const)('reads HTTP status %i as %s, also when wrapped', (status, kind) => {
+    expect(connectionFailureOf(httpStatusError(status))).toBe(kind);
+    expect(connectionFailureOf(new Error('Opening failed', { cause: httpStatusError(status) }))).toBe(kind);
+  });
+
+  it.each(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'])(
+    'reads a request that got no answer (%s) as unreachable',
+    (code) => {
+      expect(connectionFailureOf(fetchFailed(Object.assign(new Error(code), { code })))).toBe('unreachable');
+      expect(connectionFailureOf(Object.assign(new Error(`connect ${code}`), { code }))).toBe('unreachable');
+    },
+  );
+
+  it('reads any failed fetch as unreachable, whatever its cause', () => {
+    expect(connectionFailureOf(fetchFailed(new Error('bad port')))).toBe('unreachable');
+    expect(connectionFailureOf(fetchFailed())).toBe('unreachable');
+  });
+
+  it('leaves every other failure alone', () => {
+    for (const error of [
+      httpStatusError(500),
+      httpStatusError(400),
+      remoteError('SQLITE_CONSTRAINT', 'SQLITE_CONSTRAINT: SQLite error: UNIQUE constraint failed: decks.id'),
+      remoteError('BLOCKED', 'Operation was blocked'),
+      new TypeError('x is not a function'),
+      Object.assign(new Error('Not a database error'), { status: 401 }),
+      'fetch failed',
+      undefined,
+    ]) {
+      expect(connectionFailureOf(error)).toBeUndefined();
+    }
   });
 });
 

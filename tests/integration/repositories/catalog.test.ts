@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { CardFacts } from '@/core/model';
 import { createRepositories } from '@/server/repositories';
-import { countRows, createTestRepositories, expectRepositoryError } from '@tests/support/db';
+import { catalogLookupQuery } from '@/server/repositories/catalog';
+import {
+  countRows,
+  createTestRepositories,
+  expectRepositoryError,
+  openTestDatabase,
+} from '@tests/support/db';
 
 function facts(overrides: Partial<CardFacts> & Pick<CardFacts, 'key' | 'name'>): CardFacts {
   return {
@@ -63,6 +69,55 @@ describe('card catalog repository', () => {
     expect(row).toEqual({ updated_at: '2026-01-01T00:00:01.000Z' });
   });
 
+  it('rewrites only the rows whose facts changed (Turso bills every row written)', async () => {
+    const { db, repos } = await createTestRepositories();
+    /** Rows `upsertMany(input)` inserted or updated (the in-memory database has one connection). */
+    const rowsWritten = async (input: CardFacts[]): Promise<number> => {
+      const total = async () => (await db.all<{ n: number }>(sql`SELECT total_changes() AS n`))[0]?.n ?? 0;
+      const before = await total();
+      await repos.catalog.upsertMany(input);
+      return (await total()) - before;
+    };
+    const updatedAt = async (key: string) =>
+      (await db.all<{ at: string }>(sql`SELECT updated_at AS at FROM card_catalog WHERE key = ${key}`))[0]
+        ?.at;
+    const solRing = facts({ key: 'sol ring', name: 'Sol Ring', scryfallId: 'scryfall-sol-ring' });
+    const crypt = facts({ key: 'mana crypt', name: 'Mana Crypt' });
+    const vault = facts({ key: 'mana vault', name: 'Mana Vault', cmc: 1.5, scryfallId: 'vault' });
+    expect(await rowsWritten([solRing, crypt, vault])).toBe(3);
+    const firstWritten = await updatedAt('sol ring');
+
+    // The same facts again (a capture of an unchanged deck): nothing is written.
+    expect(await rowsWritten([solRing, crypt, vault])).toBe(0);
+    expect(await updatedAt('sol ring')).toBe(firstWritten);
+
+    // Changes to and from NULL, and of a number; the duplicate key's last entry wins.
+    const changed = [
+      { ...solRing, scryfallId: undefined },
+      { ...crypt, scryfallId: 'crypt' },
+      { ...vault, cmc: 2 },
+    ];
+    expect(await rowsWritten([solRing, ...changed])).toBe(3);
+    expect(await updatedAt('sol ring')).not.toBe(firstWritten);
+    expect(await repos.catalog.getMany(['sol ring', 'mana crypt', 'mana vault'])).toEqual(
+      new Map(changed.map((fact) => [fact.key, fact])),
+    );
+
+    // Every fact counts as a change.
+    const plain = changed[0] ?? solRing;
+    for (const change of [
+      { name: 'Sol Ring!' },
+      { typeLine: 'Legendary Artifact' },
+      { primaryType: 'Creature' },
+      { manaCost: '{2}' },
+      { colorIdentity: ['W'] },
+      { layout: 'split' },
+    ] satisfies Partial<CardFacts>[]) {
+      expect(await rowsWritten([{ ...plain, ...change }]), JSON.stringify(change)).toBe(1);
+      expect(await rowsWritten([plain])).toBe(1);
+    }
+  });
+
   it('keeps each workspace’s facts apart: one workspace’s write never changes another’s read', async () => {
     const { db, repos } = await createTestRepositories();
     const bob = await repos.users.create({ displayName: 'Bob', role: 'member' });
@@ -112,5 +167,20 @@ describe('card catalog repository', () => {
     await db.run(sql`UPDATE card_catalog SET color_identity_json = '{"W":true}'`);
     const error = await expectRepositoryError(repos.catalog.getMany(['sol ring']), 'corrupt-data');
     expect(error.message).toMatch(/expected a string array/);
+  });
+
+  it('looks facts up by primary key, one probe per card, without a temporary table of the keys', async () => {
+    // `key IN (?, ?, ...)` would build a temporary table of the keys, whose rows remote
+    // libSQL counts as read too: three rows read per card instead of one.
+    const db = await openTestDatabase();
+    const plan = await db.all<{ detail: string }>(
+      sql`EXPLAIN QUERY PLAN ${catalogLookupQuery('workspace', ['sol ring', 'mana crypt', 'island'])}`,
+    );
+    expect(plan.map((row) => row.detail)).toEqual([
+      'CO-ROUTINE wanted',
+      'SCAN 3 CONSTANT ROWS',
+      'SCAN wanted',
+      'SEARCH c USING INDEX sqlite_autoindex_card_catalog_1 (workspace_id=? AND key=?)',
+    ]);
   });
 });
