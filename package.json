@@ -22,6 +22,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:remote": "vitest run -c vitest.remote.config.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --conditions=react-server scripts/migrate.ts",
@@ -33,6 +34,7 @@
     "dev:mock": "MOXFIELD_API_BASE_URL=http://localhost:4010 MOXFIELD_SITE_ORIGIN=http://localhost:4010 CAPTURE_ALLOWED_ORIGINS=http://localhost:4010 DATABASE_PATH=data/mock.db next dev --hostname 127.0.0.1"
   },
   "dependencies": {
+    "@libsql/client": "0.18.0",
     "better-sqlite3": "13.0.3",
     "clsx": "2.1.1",
     "diff": "9.0.0",

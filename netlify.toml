@@ -1,0 +1,51 @@
+# Netlify configuration. Why and how: docs/adr/0008-hosting-netlify-and-turso.md.
+#
+# Next.js runs on Netlify's OpenNext adapter (@netlify/plugin-nextjs). Netlify detects
+# and installs it automatically; it is deliberately not pinned (here or in package.json),
+# because a pinned adapter no longer receives Netlify's fixes.
+#
+# Environment variables are set in the Netlify UI (Project configuration > Environment
+# variables) or with `netlify env:set`, never in this file: this file is public, and
+# variables declared here reach the build only, not the functions or the edge proxy.
+#
+#   TURSO_DATABASE_URL     libsql://<database>-<organization>.turso.io (a libSQL database
+#                          in aws-us-east-2, next to the functions)
+#   TURSO_AUTH_TOKEN       from `turso db tokens create <database>`
+#   PUBLIC_APP_URL         https://<site>.netlify.app, or the custom domain
+#   MOXFIELD_SERVER_FETCH  off (Cloudflare blocks Moxfield requests from cloud IPs, so
+#                          decks only arrive through the bookmarklet)
+#
+# Never set these on Netlify:
+#
+#   NEXT_DIST_DIR          the publish directory below must be Next's build directory
+#   NODE_ENV               the build and the migrations need devDependencies (TypeScript,
+#                          tsx), which are not installed when NODE_ENV is production
+#   GIT_MOXFIELD_E2E       it enables the end-to-end tests' database reset endpoint
+
+[build]
+  command = "pnpm run build"
+  publish = ".next"
+
+[build.environment]
+  # Netlify Functions run on Node 24 (AWS Lambda has no Node 25); build on the same.
+  NODE_VERSION = "24"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+# Production deploys apply the database migrations after a successful build: a broken
+# build never touches the database, and a failed migration fails the deploy before it is
+# published. The previous deploy keeps serving until then, so every migration must be
+# backward compatible with the code currently live (expand, then contract).
+[context.production]
+  command = "pnpm run build && pnpm run db:migrate"
+
+# Only production builds run. On the free plan, deploy previews and branch deploys get
+# the production environment variables, so they would read and write the production
+# database. An `ignore` command that exits with 0 cancels the build (1 lets it run).
+# Also turn them off in the UI (Project configuration > Build & deploy > Branches and
+# deploy contexts: Deploy Previews "Don't deploy pull requests", Branch deploys "Deploy
+# only the production branch"), so that they are not even started.
+[context.deploy-preview]
+  ignore = "exit 0"
+
+[context.branch-deploy]
+  ignore = "exit 0"
