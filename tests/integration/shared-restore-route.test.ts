@@ -4,6 +4,7 @@
  * file equals the owner's; every failure is the same private 404; nothing is cached or
  * indexed, and the token never reaches the logs.
  */
+import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { restoreText } from '@/app/restore-download';
@@ -25,7 +26,7 @@ function harness(): ServiceHarness {
 
 vi.mock('@/server/db/client', async (importOriginal) => ({
   ...(await importOriginal<typeof DbModule>()),
-  getDb: () => harness().db,
+  getDb: () => Promise.resolve(harness().db),
 }));
 vi.mock('@/server/sources', async (importOriginal) => ({
   ...(await importOriginal<typeof SourcesModule>()),
@@ -49,7 +50,7 @@ let token: string;
 let linkId: string;
 
 beforeEach(async () => {
-  state.harness = createServiceHarness();
+  state.harness = await createServiceHarness();
   state.logs.length = 0;
   history = await sharedHistory(harness());
   const created = await history.shareLinks.createShareLink(
@@ -135,8 +136,10 @@ describe('GET /s/{token}/versions/{n}/restore.txt', () => {
 
   it('never logs the token, also when something goes wrong', async () => {
     // Recording the view fails: logged, and the download still works.
-    harness().db.$client.exec(
-      "CREATE TRIGGER refuse_views BEFORE UPDATE ON share_links BEGIN SELECT RAISE(ABORT, 'no writes'); END",
+    await harness().db.run(
+      sql.raw(
+        "CREATE TRIGGER refuse_views BEFORE UPDATE ON share_links BEGIN SELECT RAISE(ABORT, 'no writes'); END",
+      ),
     );
     expect((await download(token, '1')).status).toBe(200);
     expect((await download(token, '9')).status).toBe(404);

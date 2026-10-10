@@ -22,7 +22,7 @@ export const metadata: Metadata = { title: 'Admin' };
  */
 export default async function AdminPage() {
   const admin = await requireAdmin({ next: routes.admin() });
-  const auth = getAuthService();
+  const auth = await getAuthService();
   const [people, invites, recoveryLinks] = await Promise.all([
     auth.listUsers(admin),
     auth.listInvites(admin),

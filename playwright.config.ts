@@ -84,6 +84,10 @@ export default defineConfig({
       port: APP_PORT,
       env: {
         DATABASE_PATH: E2E_DATABASE_PATH,
+        // Never a remote database named in a developer's .env.local: the suite deletes and
+        // rebuilds its database (see the note on .env.local below).
+        TURSO_DATABASE_URL: '',
+        TURSO_AUTH_TOKEN: '',
         NEXT_DIST_DIR: E2E_NEXT_DIST_DIR,
         MOXFIELD_API_BASE_URL: MOCK_MOXFIELD_URL,
         MOXFIELD_SITE_ORIGIN: MOCK_MOXFIELD_URL,

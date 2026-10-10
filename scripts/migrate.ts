@@ -1,133 +1,142 @@
 /**
- * Applies the database migrations in `drizzle/` to `DATABASE_PATH`
- * (default `data/git-moxfield.db`; read from the environment and `.env*` files like the
- * app does) and reports what was applied.
+ * Applies the database migrations in `drizzle/` to the configured database and reports
+ * what was applied:
  *
  *   pnpm db:migrate
  *
- * The app migrates on first use as well (`openDatabase`); this script makes the step
- * explicit for deployments, backups and troubleshooting. Exits with code 1 and a
- * message when migrating fails or the database was migrated by a newer git-moxfield.
+ * The database is the one the app uses: `TURSO_DATABASE_URL` (+ `TURSO_AUTH_TOKEN`) when
+ * set, else the local file at `DATABASE_PATH` (default `data/git-moxfield.db`), read from
+ * the environment and `.env*` files like the app does.
+ *
+ * - A **remote** database (Turso) is never migrated by the app; this script is how it gets
+ *   migrated. Netlify runs it after every successful production build (`netlify.toml`).
+ * - A **local** database is migrated by the app when it opens it as well; this script
+ *   makes the step explicit for backups and troubleshooting.
+ *
+ * On Netlify (`NETLIFY=true` in builds) it refuses a local database: the build container's
+ * disk is thrown away after the build, so "migrating" a file there would report success
+ * while the real (Turso) database stays unmigrated, typically because `TURSO_DATABASE_URL`
+ * is not set for the build.
+ *
+ * Migrations are applied in one atomic batch; when something was applied, referential
+ * integrity is verified (`PRAGMA foreign_key_check`). Not safe to run from two processes
+ * against the same database at once (run it from one deploy step). Exits with code 1 and
+ * a message when migrating fails, the database cannot be reached, or it was migrated by a
+ * newer git-moxfield.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 
-import Database from 'better-sqlite3';
+import { getConfig, type AppConfig } from '@/server/config';
+import { ensureLocalWorkspace } from '@/server/db/client';
+import { createLibsqlDatabase, databaseKindOf, type LibsqlDatabase } from '@/server/db/libsql';
+import { applyMigrations } from '@/server/db/migration-state';
+import { runsOnNetlify, type PlatformEnv } from '@/server/platform';
 
-import { getConfig } from '@/server/config';
-import { openDatabase } from '@/server/db/client';
-
+import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
+import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 
-/** Table in which Drizzle records applied migrations (`created_at` = the journal's `when`). */
-const MIGRATIONS_TABLE = '__drizzle_migrations';
-
-interface JournalEntry {
-  tag: string;
-  when: number;
+export interface MigrateCommandIO {
+  out(line: string): void;
+  err(line: string): void;
 }
 
-function isJournalEntry(value: unknown): value is JournalEntry {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'tag' in value &&
-    typeof value.tag === 'string' &&
-    'when' in value &&
-    typeof value.when === 'number'
-  );
+export interface MigrateCommandDependencies {
+  config: AppConfig;
+  /** The process environment, to tell where the script runs. Default: `process.env`. */
+  env?: PlatformEnv;
+  io: MigrateCommandIO;
+  /** Folder with the migrations and their journal. Default: `drizzle/` in the working directory. */
+  migrationsFolder?: string;
 }
 
-/** The migrations shipped with this build, oldest first. */
-function readJournal(): JournalEntry[] {
-  const path = join(process.cwd(), 'drizzle', 'meta', '_journal.json');
-  const journal = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-  const entries =
-    typeof journal === 'object' && journal !== null && 'entries' in journal ? journal.entries : undefined;
-  if (!Array.isArray(entries) || !entries.every(isJournalEntry)) {
-    throw new Error(`${path} is not a Drizzle migration journal`);
-  }
-  return entries;
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-/** Timestamps of the migrations recorded in a database (empty for a new database). */
-function appliedMigrations(sqlite: Database.Database): Set<number> {
-  const table = sqlite
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(MIGRATIONS_TABLE);
-  if (table === undefined) return new Set();
-  const rows = sqlite.prepare(`SELECT created_at AS createdAt FROM "${MIGRATIONS_TABLE}"`).all() as {
-    createdAt: number | string;
-  }[];
-  return new Set(rows.map((row) => Number(row.createdAt)));
+/**
+ * Why `config`'s database must not be migrated from this process, or `null` when it may:
+ * on Netlify only a remote database is durable.
+ */
+function refusal(config: AppConfig, env: PlatformEnv): string | null {
+  if (!runsOnNetlify(env) || databaseKindOf(config.database.url) !== 'local') return null;
+  return config.database.source === 'DATABASE_PATH'
+    ? 'TURSO_DATABASE_URL is not set, so this would migrate a local database file in the ' +
+        "Netlify build container, which is thrown away after the build, while the app's Turso " +
+        'database stays unmigrated. Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in the Netlify ' +
+        'site settings (docs/adr/0008-hosting-netlify-and-turso.md).'
+    : 'TURSO_DATABASE_URL names a local database, which does not survive the Netlify build ' +
+        'container. Point it at the Turso database (libsql://<database>-<organization>.turso.io).';
 }
 
-function appliedBefore(path: string): Set<number> {
-  if (path === ':memory:' || !existsSync(path)) return new Set();
-  const sqlite = new Database(path, { readonly: true, fileMustExist: true });
+/** Runs `pnpm db:migrate`. @returns the process exit code. */
+export async function runMigrateCommand(deps: MigrateCommandDependencies): Promise<number> {
+  const { config, io } = deps;
+  let description: string;
+  let refused: string | null;
   try {
-    return appliedMigrations(sqlite);
-  } finally {
-    sqlite.close();
-  }
-}
-
-function migrate(path: string): number {
-  const journal = readJournal();
-  const created = path !== ':memory:' && !existsSync(path);
-  const before = appliedBefore(path);
-  const db = openDatabase(path);
-  let after: Set<number>;
-  try {
-    after = appliedMigrations(db.$client);
-  } finally {
-    db.$client.close();
-  }
-
-  const known = new Set(journal.map((entry) => entry.when));
-  const unknown = [...after].filter((when) => !known.has(when));
-  const pending = journal.filter((entry) => !after.has(entry.when));
-  const applied = journal.filter((entry) => after.has(entry.when) && !before.has(entry.when));
-
-  const shown = path === ':memory:' ? path : resolve(path);
-  // A new file usually means DATABASE_PATH does not point at the app's database.
-  console.log(created ? `Created a new database: ${shown}` : `Database: ${shown}`);
-  if (applied.length > 0) {
-    console.log(`Applied ${applied.length} migration${applied.length === 1 ? '' : 's'}:`);
-    for (const entry of applied) console.log(`  ${entry.tag}`);
-  }
-  if (unknown.length > 0 || pending.length > 0) {
-    console.error(
-      'The database was migrated by a newer version of git-moxfield ' +
-        `(${unknown.length} unknown migration${unknown.length === 1 ? '' : 's'}` +
-        (pending.length > 0 ? `; not applied: ${pending.map((entry) => entry.tag).join(', ')}` : '') +
-        '). Upgrade git-moxfield or restore a backup made with this version.',
-    );
+    description = describeConfiguredDatabase(config);
+    refused = refusal(config, deps.env ?? process.env);
+  } catch (error) {
+    io.err(describeFailure(error));
     return 1;
   }
-  console.log(
-    applied.length > 0
-      ? `Up to date: all ${journal.length} migrations applied.`
-      : `Already up to date (${journal.length} migrations applied).`,
-  );
-  return 0;
+  if (refused !== null) {
+    io.err(`Refusing to migrate the ${description}: ${refused}`);
+    return 1;
+  }
+
+  // A new file usually means DATABASE_PATH does not point at the app's database.
+  const created = isMissingDatabaseFile(config);
+  let handle: LibsqlDatabase;
+  try {
+    handle = await createLibsqlDatabase({ url: config.database.url, authToken: config.database.authToken });
+  } catch (error) {
+    io.err(`Could not open the ${description}: ${describeFailure(error)}`);
+    return 1;
+  }
+  try {
+    io.out(created ? `Created a new ${description}` : `Migrating the ${description}`);
+    const { applied, state } = await applyMigrations(
+      handle.db,
+      deps.migrationsFolder === undefined ? {} : { migrationsFolder: deps.migrationsFolder },
+    );
+    await ensureLocalWorkspace(handle.db);
+    if (applied.length === 0) {
+      io.out(`Already up to date (${plural(state.expected, 'migration')} applied).`);
+      return 0;
+    }
+    io.out(`Applied ${plural(applied.length, 'migration')}:`);
+    for (const tag of applied) io.out(`  ${tag}`);
+    io.out('Referential integrity verified (PRAGMA foreign_key_check).');
+    io.out(`Up to date: all ${plural(state.expected, 'migration')} applied.`);
+    return 0;
+  } catch (error) {
+    io.err(`Migrating the ${description} failed: ${describeFailure(error)}`);
+    return 1;
+  } finally {
+    handle.close();
+  }
 }
 
-function main(): number {
-  let path: string;
+async function main(): Promise<number> {
+  const io: MigrateCommandIO = {
+    out: (line) => {
+      console.log(line);
+    },
+    err: (line) => {
+      console.error(line);
+    },
+  };
+  let config: AppConfig;
   try {
     loadEnvFiles();
-    path = getConfig().DATABASE_PATH;
+    config = getConfig();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    io.err(describeFailure(error));
     return 1;
   }
-  try {
-    return migrate(path);
-  } catch (error) {
-    console.error(`Migrating ${path} failed: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
-  }
+  return runMigrateCommand({ config, io });
 }
 
-process.exitCode = main();
+// Run only as a script (`pnpm db:migrate`), not when imported by tests.
+if (isEntryPoint(import.meta.url)) runMain('db:migrate', main);

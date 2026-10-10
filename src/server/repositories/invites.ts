@@ -12,7 +12,7 @@ import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 
 import { invites, users } from '@/server/db/schema';
 
-import { referencing, withTransaction, type RepositoryContext } from './context';
+import { isUniqueViolation, referencing, withTransaction, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 import {
   insertUserAdoptingWorkspace,
@@ -50,15 +50,15 @@ export interface InviteRepository {
    * @throws {RepositoryError} `not-found` for an unknown creator; `conflict` when the
    * token hash is already stored.
    */
-  create(input: NewInvite): InviteRecord;
-  getById(id: string): InviteRecord | null;
+  create(input: NewInvite): Promise<InviteRecord>;
+  getById(id: string): Promise<InviteRecord | null>;
   /** The invite with this token hash in any state, or `null`. */
-  getByTokenHash(tokenHash: string): InviteRecord | null;
+  getByTokenHash(tokenHash: string): Promise<InviteRecord | null>;
   /** Every invite, newest first. */
-  list(): InviteRecord[];
+  list(): Promise<InviteRecord[]>;
   /**
-   * Uses up an invite and creates its user, atomically: one transaction marks the invite
-   * used (a conditional `UPDATE` that only matches an unused, unrevoked invite that has
+   * Uses up an invite and creates its user, atomically: one `IMMEDIATE` transaction marks
+   * the invite used (a conditional `UPDATE` that only matches an unused, unrevoked invite that has
    * not expired at `now` and whose creator, unless it is the command line, is an active
    * admin), creates the user with the invite's role and a workspace of its own (or, with
    * `adoptWorkspaceId`, owning that existing, unowned workspace), and records who used
@@ -71,19 +71,19 @@ export interface InviteRepository {
     tokenHash: string,
     now: string,
     user: { displayName: string; adoptWorkspaceId?: string },
-  ): { invite: InviteRecord; user: UserRecord } | null;
+  ): Promise<{ invite: InviteRecord; user: UserRecord } | null>;
   /**
    * Revokes an invite that is neither used nor revoked yet.
    * @returns whether the invite was revoked.
    */
-  revoke(id: string, at: string): boolean;
+  revoke(id: string, at: string): Promise<boolean>;
   /**
    * Revokes every invite `userId` made that is unused, not revoked and not expired at
    * `at`. @returns how many were revoked.
    */
-  revokePendingCreatedBy(userId: string, at: string): number;
+  revokePendingCreatedBy(userId: string, at: string): Promise<number>;
   /** Whether the invite's creator is an active admin (always `true` for the command line). */
-  hasActiveCreator(invite: InviteRecord): boolean;
+  hasActiveCreator(invite: InviteRecord): Promise<boolean>;
 }
 
 const recordColumns = {
@@ -99,37 +99,53 @@ const recordColumns = {
 };
 
 export function createInviteRepository(ctx: RepositoryContext): InviteRepository {
+  const duplicate = (cause?: unknown): RepositoryError =>
+    new RepositoryError(
+      'conflict',
+      'An invite with this token already exists',
+      cause === undefined ? undefined : { cause },
+    );
+
   return {
-    create(input) {
-      const taken = ctx.db
+    async create(input) {
+      const taken = await ctx.db
         .select({ id: invites.id })
         .from(invites)
         .where(eq(invites.tokenHash, input.tokenHash))
         .get();
-      if (taken) throw new RepositoryError('conflict', 'An invite with this token already exists');
-      return referencing('Invite', () =>
-        ctx.db
-          .insert(invites)
-          .values({
-            id: ctx.newId(),
-            tokenHash: input.tokenHash,
-            role: input.role,
-            note: input.note.trim(),
-            createdByUserId: input.createdByUserId,
-            createdAt: ctx.now(),
-            expiresAt: input.expiresAt,
-          })
-          .returning(recordColumns)
-          .get(),
-      );
+      if (taken) throw duplicate();
+      const values = {
+        id: ctx.newId(),
+        tokenHash: input.tokenHash,
+        role: input.role,
+        note: input.note.trim(),
+        createdByUserId: input.createdByUserId,
+        createdAt: ctx.now(),
+        expiresAt: input.expiresAt,
+      };
+      try {
+        return await referencing('Invite', () =>
+          write(ctx, (db) => db.insert(invites).values(values).returning(recordColumns).get()),
+        );
+      } catch (error) {
+        // The same token hash stored since the check above.
+        if (isUniqueViolation(error)) throw duplicate(error);
+        throw error;
+      }
     },
 
-    getById(id) {
-      return ctx.db.select(recordColumns).from(invites).where(eq(invites.id, id)).get() ?? null;
+    async getById(id) {
+      const row = await ctx.db.select(recordColumns).from(invites).where(eq(invites.id, id)).get();
+      return row ?? null;
     },
 
-    getByTokenHash(tokenHash) {
-      return ctx.db.select(recordColumns).from(invites).where(eq(invites.tokenHash, tokenHash)).get() ?? null;
+    async getByTokenHash(tokenHash) {
+      const row = await ctx.db
+        .select(recordColumns)
+        .from(invites)
+        .where(eq(invites.tokenHash, tokenHash))
+        .get();
+      return row ?? null;
     },
 
     list() {
@@ -140,13 +156,13 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
         .all();
     },
 
-    accept(tokenHash, now, user) {
+    async accept(tokenHash, now, user) {
       if (user.displayName.trim() === '') {
         throw new RepositoryError('invalid-input', 'A user needs a display name');
       }
-      return withTransaction(ctx, (tx) => {
+      return withTransaction(ctx, async (tx) => {
         // `undefined` when no row matched (Drizzle's type omits that case).
-        const claimed = tx.db
+        const claimed = (await tx.db
           .update(invites)
           .set({ usedAt: now })
           .where(
@@ -168,17 +184,17 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
             ),
           )
           .returning(recordColumns)
-          .get() as InviteRecord | undefined;
+          .get()) as InviteRecord | undefined;
         if (!claimed) return null;
         const created =
           user.adoptWorkspaceId === undefined
-            ? insertUserWithWorkspace(tx, { displayName: user.displayName, role: claimed.role })
-            : insertUserAdoptingWorkspace(tx, {
+            ? await insertUserWithWorkspace(tx, { displayName: user.displayName, role: claimed.role })
+            : await insertUserAdoptingWorkspace(tx, {
                 displayName: user.displayName,
                 role: claimed.role,
                 workspaceId: user.adoptWorkspaceId,
               });
-        const invite = tx.db
+        const invite = await tx.db
           .update(invites)
           .set({ usedByUserId: created.id })
           .where(eq(invites.id, claimed.id))
@@ -188,34 +204,36 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
       });
     },
 
-    revoke(id, at) {
-      const result = ctx.db
-        .update(invites)
-        .set({ revokedAt: at })
-        .where(and(eq(invites.id, id), isNull(invites.usedAt), isNull(invites.revokedAt)))
-        .run();
-      return result.changes > 0;
+    async revoke(id, at) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(invites)
+          .set({ revokedAt: at })
+          .where(and(eq(invites.id, id), isNull(invites.usedAt), isNull(invites.revokedAt))),
+      );
+      return result.rowsAffected > 0;
     },
 
-    revokePendingCreatedBy(userId, at) {
-      const result = ctx.db
-        .update(invites)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            eq(invites.createdByUserId, userId),
-            isNull(invites.usedAt),
-            isNull(invites.revokedAt),
-            gt(invites.expiresAt, at),
+    async revokePendingCreatedBy(userId, at) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(invites)
+          .set({ revokedAt: at })
+          .where(
+            and(
+              eq(invites.createdByUserId, userId),
+              isNull(invites.usedAt),
+              isNull(invites.revokedAt),
+              gt(invites.expiresAt, at),
+            ),
           ),
-        )
-        .run();
-      return result.changes;
+      );
+      return result.rowsAffected;
     },
 
-    hasActiveCreator(invite) {
+    async hasActiveCreator(invite) {
       if (invite.createdByUserId === null) return true;
-      const creator = ctx.db
+      const creator = await ctx.db
         .select({ id: users.id })
         .from(users)
         .where(and(eq(users.id, invite.createdByUserId), eq(users.role, 'admin'), isNull(users.disabledAt)))

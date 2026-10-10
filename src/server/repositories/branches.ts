@@ -35,17 +35,17 @@ export interface SetHeadOptions {
 
 export interface BranchRepository {
   /** The deck's `main` branch (`null` only for an unknown deck). */
-  getMain(deckId: string): BranchRecord | null;
-  getByName(deckId: string, name: string): BranchRecord | null;
-  getById(id: string): BranchRecord | null;
+  getMain(deckId: string): Promise<BranchRecord | null>;
+  getByName(deckId: string, name: string): Promise<BranchRecord | null>;
+  getById(id: string): Promise<BranchRecord | null>;
   /** All branches of a deck: `main` first, then by name. */
-  list(deckId: string): BranchRecord[];
+  list(deckId: string): Promise<BranchRecord[]>;
   /**
    * Moves a branch head to a commit of the same deck and marks the deck as updated.
    * @throws {RepositoryError} `not-found` for an unknown branch or a commit that is not
    * part of the branch's deck; `conflict` when `expectedHeadCommitId` does not match.
    */
-  setHead(branchId: string, commitId: string, options?: SetHeadOptions): void;
+  setHead(branchId: string, commitId: string, options?: SetHeadOptions): Promise<void>;
 }
 
 export function createBranchRepository(ctx: RepositoryContext): BranchRepository {
@@ -53,8 +53,8 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
   const owned = () => inWorkspace(ctx, branches.deckId);
 
   return {
-    getMain(deckId) {
-      const row = ctx.db
+    async getMain(deckId) {
+      const row = await ctx.db
         .select()
         .from(branches)
         .where(and(eq(branches.deckId, deckId), eq(branches.kind, 'main'), owned()))
@@ -62,8 +62,8 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       return row ?? null;
     },
 
-    getByName(deckId, name) {
-      const row = ctx.db
+    async getByName(deckId, name) {
+      const row = await ctx.db
         .select()
         .from(branches)
         .where(and(eq(branches.deckId, deckId), eq(branches.name, name), owned()))
@@ -71,14 +71,13 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
       return row ?? null;
     },
 
-    getById(id) {
-      return (
-        ctx.db
-          .select()
-          .from(branches)
-          .where(and(eq(branches.id, id), owned()))
-          .get() ?? null
-      );
+    async getById(id) {
+      const row = await ctx.db
+        .select()
+        .from(branches)
+        .where(and(eq(branches.id, id), owned()))
+        .get();
+      return row ?? null;
     },
 
     list(deckId) {
@@ -90,16 +89,16 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
         .all();
     },
 
-    setHead(branchId, commitId, options = {}) {
-      withTransaction(ctx, (tx) => {
+    async setHead(branchId, commitId, options = {}) {
+      await withTransaction(ctx, async (tx) => {
         const { db } = tx;
-        const branch = db
+        const branch = await db
           .select()
           .from(branches)
           .where(and(eq(branches.id, branchId), inWorkspace(tx, branches.deckId)))
           .get();
         if (!branch) throw new RepositoryError('not-found', `Branch ${branchId} does not exist`);
-        const commit = db
+        const commit = await db
           .select({ id: commits.id })
           .from(commits)
           .where(and(eq(commits.id, commitId), eq(commits.deckId, branch.deckId)))
@@ -118,11 +117,11 @@ export function createBranchRepository(ctx: RepositoryContext): BranchRepository
           );
         }
         const now = ctx.now();
-        db.update(branches)
+        await db
+          .update(branches)
           .set({ headCommitId: commitId, updatedAt: now })
-          .where(eq(branches.id, branchId))
-          .run();
-        db.update(decks).set({ updatedAt: now }).where(eq(decks.id, branch.deckId)).run();
+          .where(eq(branches.id, branchId));
+        await db.update(decks).set({ updatedAt: now }).where(eq(decks.id, branch.deckId));
       });
     },
   };

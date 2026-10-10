@@ -1,20 +1,35 @@
 /**
  * Card-level queries over the `snapshot_cards` index: per-version zone quantities of
  * one card (the raw material of card history) and card search across a deck's history.
+ *
+ * Cost (Turso bills every row a query reads, including rows scanned): SQLite walks the
+ * deck's commits in version order (`commits_deck_sequence_uq`) and looks each card up in
+ * the `(card_key, snapshot_hash)` index (`snapshot_cards_card_key_snapshot_idx`) instead of
+ * reading every card row of every version. `CROSS JOIN` fixes that join order (SQLite
+ * never reorders it), so the plans do not depend on the planner's estimates;
+ * `tests/integration/repositories/card-index.test.ts` asserts them, and the remote suite
+ * (`tests/remote/repositories.test.ts`) bounds the rows read. Measured on a libSQL server
+ * (sqld) holding 10 decks of 50 versions of 100 cards:
+ *
+ * - card history of one card in 29 versions: 110 rows read (5,111 before the index);
+ * - a search: 5,102 rows for the candidates (each card row of the deck once) plus 2,632 for
+ *   the version statistics of 20 hits (35,411 in all before, about 7 per card row).
+ *
+ * Search still reads every card row of the deck once, because matching folds names in
+ * JavaScript (diacritics, punctuation). Should that become too expensive, a per-deck card
+ * summary maintained at commit time would make it proportional to the distinct cards.
  */
-import { and, asc, eq, min, sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 
 import { compareStrings } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
 import type { ZoneQuantity } from '@/core/history/types';
 import type { CardKey } from '@/core/model';
 import { compareZones, isZoneId } from '@/core/zones';
-import { commits, observations, snapshotCards } from '@/server/db/schema';
 
 import { corruptData } from './codec';
-import { inWorkspace, type RepositoryContext } from './context';
+import { batches, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
-import { latestObservationFirst } from './observations';
 
 /** Where one card was in one version. */
 export interface CardVersionZones {
@@ -44,7 +59,7 @@ export interface CardIndexRepository {
    * each. Versions without the card are omitted; combine with the commit lineage to
    * get one point per version. `key` is normalized with `cardKey`.
    */
-  versionsContainingCard(deckId: string, key: CardKey): CardVersionZones[];
+  versionsContainingCard(deckId: string, key: CardKey): Promise<CardVersionZones[]>;
   /**
    * Finds cards that appear in any version of the deck or, unless `includeWorking` is
    * `false`, in its working state (the latest observation). Committed history only, with
@@ -60,30 +75,156 @@ export interface CardIndexRepository {
     query: string,
     limit?: number,
     options?: { includeWorking?: boolean },
-  ): CardSearchHit[];
+  ): Promise<CardSearchHit[]>;
+}
+
+/** One card in one zone of one version (a `snapshot_cards` row joined to its commit). */
+interface CardOccurrenceRow {
+  key: string;
+  commitId: string;
+  sequence: number;
+  zone: string;
+  quantity: number;
+  name: string;
+}
+
+/** A card and one of its names, as it appears in a version or the working state. */
+interface CardNameRow {
+  key: string;
+  name: string;
+}
+
+/**
+ * Every row of `keys` in the versions of the deck, in version order. Walks the deck's
+ * commits by `(deck_id, sequence)` and probes `(card_key, snapshot_hash)` per commit:
+ * rows read ≈ versions + occurrences, whatever the size of the snapshots.
+ *
+ * @internal exported for the query-plan tests.
+ */
+export function cardOccurrencesQuery(workspaceId: string, deckId: string, keys: readonly string[]): SQL {
+  return sql`
+    SELECT sc.card_key AS "key", c.id AS "commitId", c.sequence AS "sequence",
+      sc.zone AS "zone", sc.quantity AS "quantity", sc.name AS "name"
+    FROM decks d
+    CROSS JOIN commits c
+    CROSS JOIN snapshot_cards sc
+    WHERE d.id = ${deckId} AND d.workspace_id = ${workspaceId}
+      AND c.deck_id = d.id
+      AND sc.card_key IN (${sql.join(
+        keys.map((key) => sql`${key}`),
+        sql`, `,
+      )})
+      AND sc.snapshot_hash = c.snapshot_hash
+    ORDER BY c.sequence`;
+}
+
+/**
+ * Every distinct (card, name) pair in the versions of the deck: the search candidates.
+ * One pass over the deck's card rows through the primary key (`snapshot_hash` first);
+ * the de-duplication happens in a temporary index, which reads no table rows.
+ *
+ * @internal exported for the query-plan tests.
+ */
+export function committedCardNamesQuery(workspaceId: string, deckId: string): SQL {
+  return sql`
+    SELECT DISTINCT sc.card_key AS "key", sc.name AS "name"
+    FROM decks d
+    CROSS JOIN commits c
+    CROSS JOIN snapshot_cards sc
+    WHERE d.id = ${deckId} AND d.workspace_id = ${workspaceId}
+      AND c.deck_id = d.id
+      AND sc.snapshot_hash = c.snapshot_hash`;
+}
+
+/**
+ * The cards (one row per card and zone) of the deck's latest observation: latest
+ * `fetched_at`, ties broken by insertion order, as `latestObservationFirst`.
+ *
+ * @internal exported for the query-plan tests.
+ */
+export function workingCardsQuery(workspaceId: string, deckId: string): SQL {
+  return sql`
+    SELECT sc.card_key AS "key", sc.name AS "name"
+    FROM snapshot_cards sc
+    WHERE sc.snapshot_hash = (
+      SELECT o.snapshot_hash
+      FROM decks d
+      CROSS JOIN observations o
+      WHERE d.id = ${deckId} AND d.workspace_id = ${workspaceId} AND o.deck_id = d.id
+      ORDER BY o.fetched_at DESC, o.rowid DESC
+      LIMIT 1
+    )`;
+}
+
+/** The name SQLite's `MIN()` would pick (binary collation: UTF-8 byte order). */
+function smallerName(a: string, b: string): string {
+  return Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')) <= 0 ? a : b;
+}
+
+/** Version statistics of one card in the deck's history. */
+interface CommittedStats {
+  versionsPresent: number;
+  lastSeenSequence: number;
+  /** The card's name in its newest version (the smallest, should it have several there). */
+  name: string;
+}
+
+/** Aggregates occurrence rows (in version order) per card. */
+function committedStats(rows: readonly CardOccurrenceRow[]): Map<string, CommittedStats> {
+  const stats = new Map<string, CommittedStats>();
+  for (const row of rows) {
+    const known = stats.get(row.key);
+    if (!known) {
+      stats.set(row.key, { versionsPresent: 1, lastSeenSequence: row.sequence, name: row.name });
+    } else if (row.sequence > known.lastSeenSequence) {
+      known.versionsPresent++;
+      known.lastSeenSequence = row.sequence;
+      known.name = row.name;
+    } else if (row.sequence === known.lastSeenSequence) {
+      known.name = smallerName(known.name, row.name);
+    }
+  }
+  return stats;
+}
+
+/** A search candidate before its version statistics are known. */
+interface Candidate {
+  key: CardKey;
+  /** Its names in the deck's history (empty when it was never committed). */
+  committedNames: string[];
+  /** Its name in the working state, when the working state is searched and holds it. */
+  workingName: string | undefined;
+  /** The name it is shown and matched with, when already certain. */
+  name: string | undefined;
+  /** Its rank; for a card whose name is not yet certain, the best rank any of its names gets. */
+  rank: number;
+}
+
+function rankOf(key: CardKey, names: readonly string[], folded: string): number {
+  return Math.min(
+    matchRank(foldForSearch(key), folded),
+    ...names.map((name) => matchRank(foldForSearch(name), folded)),
+  );
+}
+
+function byRankThenKey(a: { rank: number; key: CardKey }, b: { rank: number; key: CardKey }): number {
+  return a.rank - b.rank || compareStrings(a.key, b.key);
 }
 
 export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepository {
+  /** Occurrence rows of `keys` in the deck's versions, in version order. */
+  async function occurrences(deckId: string, keys: readonly string[]): Promise<CardOccurrenceRow[]> {
+    const pages = await Promise.all(
+      batches(keys).map((batch) =>
+        ctx.db.all<CardOccurrenceRow>(cardOccurrencesQuery(ctx.workspaceId, deckId, batch)),
+      ),
+    );
+    return pages.length === 1 ? (pages[0] ?? []) : pages.flat().sort((a, b) => a.sequence - b.sequence);
+  }
+
   return {
-    versionsContainingCard(deckId, key) {
-      const rows = ctx.db
-        .select({
-          commitId: commits.id,
-          sequence: commits.sequence,
-          zone: snapshotCards.zone,
-          quantity: snapshotCards.quantity,
-        })
-        .from(commits)
-        .innerJoin(snapshotCards, eq(snapshotCards.snapshotHash, commits.snapshotHash))
-        .where(
-          and(
-            eq(commits.deckId, deckId),
-            eq(snapshotCards.cardKey, cardKey(key)),
-            inWorkspace(ctx, commits.deckId),
-          ),
-        )
-        .orderBy(asc(commits.sequence))
-        .all();
+    async versionsContainingCard(deckId, key) {
+      const rows = await occurrences(deckId, [cardKey(key)]);
       const versions: CardVersionZones[] = [];
       for (const row of rows) {
         if (!isZoneId(row.zone))
@@ -99,106 +240,91 @@ export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepo
       return versions;
     },
 
-    searchCardsInDeck(deckId, query, limit = DEFAULT_CARD_SEARCH_LIMIT, options = {}) {
+    async searchCardsInDeck(deckId, query, limit = DEFAULT_CARD_SEARCH_LIMIT, options = {}) {
       if (!Number.isInteger(limit) || limit < 1) {
         throw new RepositoryError('invalid-input', `Search limit must be a positive integer, got ${limit}`);
       }
       const folded = foldForSearch(query);
       if (folded === '') return [];
 
-      const candidates = new Map<CardKey, CardSearchHit>();
-      for (const row of committedCards(ctx, deckId)) {
-        candidates.set(row.key, {
-          key: row.key,
-          name: row.name,
-          versionsPresent: row.versions,
-          lastSeenSequence: row.lastSeenSequence,
-          inWorkingState: false,
-        });
-      }
-      const working = options.includeWorking === false ? [] : workingCards(ctx, deckId);
-      for (const row of working) {
-        const known = candidates.get(row.key);
-        if (known) {
-          known.name = row.name;
-          known.inWorkingState = true;
-        } else {
-          candidates.set(row.key, {
-            key: row.key,
-            name: row.name,
-            versionsPresent: 0,
-            lastSeenSequence: null,
-            inWorkingState: true,
-          });
+      // 1. Candidates: every card of the deck's history with its names, and the working state.
+      const [committedRows, workingRows] = await Promise.all([
+        ctx.db.all<CardNameRow>(committedCardNamesQuery(ctx.workspaceId, deckId)),
+        options.includeWorking === false
+          ? Promise.resolve<CardNameRow[]>([])
+          : ctx.db.all<CardNameRow>(workingCardsQuery(ctx.workspaceId, deckId)),
+      ]);
+      const candidates = new Map<CardKey, Candidate>();
+      const candidate = (key: CardKey): Candidate => {
+        let found = candidates.get(key);
+        if (!found) {
+          found = { key, committedNames: [], workingName: undefined, name: undefined, rank: NO_MATCH };
+          candidates.set(key, found);
         }
+        return found;
+      };
+      for (const row of committedRows) candidate(row.key).committedNames.push(row.name);
+      for (const row of workingRows) {
+        const found = candidate(row.key);
+        found.workingName =
+          found.workingName === undefined ? row.name : smallerName(found.workingName, row.name);
       }
 
-      const ranked: { hit: CardSearchHit; rank: number }[] = [];
-      for (const hit of candidates.values()) {
-        const rank = Math.min(
-          matchRank(foldForSearch(hit.key), folded),
-          matchRank(foldForSearch(hit.name), folded),
+      // 2. Rank. A card's shown name is its working name or its newest committed name; when
+      // it had several names in its history, which one is newest is only known after step 3,
+      // so it is ranked by its best name for now and ranked again then.
+      const matches: Candidate[] = [];
+      let uncertain = 0;
+      for (const found of candidates.values()) {
+        const [onlyName, ...otherNames] = found.committedNames;
+        found.name = found.workingName ?? (otherNames.length === 0 ? onlyName : undefined);
+        found.rank = rankOf(
+          found.key,
+          found.name === undefined ? found.committedNames : [found.name],
+          folded,
         );
-        if (rank !== NO_MATCH) ranked.push({ hit, rank });
+        if (found.rank === NO_MATCH) continue;
+        matches.push(found);
+        if (found.name === undefined) uncertain++;
       }
-      return ranked
-        .sort((a, b) => a.rank - b.rank || compareStrings(a.hit.key, b.hit.key))
+      // Ranking an uncertain card again can only make it worse, so the final `limit` hits
+      // are among the first `limit + uncertain` by the provisional ranking.
+      const shortlist = matches.sort(byRankThenKey).slice(0, limit + uncertain);
+
+      // 3. Version statistics of the shortlisted cards, through the card-key index.
+      const stats = committedStats(
+        await occurrences(
+          deckId,
+          shortlist.filter((found) => found.committedNames.length > 0).map((found) => found.key),
+        ),
+      );
+
+      const hits: { hit: CardSearchHit; rank: number; key: CardKey }[] = [];
+      for (const found of shortlist) {
+        const committed = stats.get(found.key);
+        const name = found.workingName ?? committed?.name;
+        // Gone since step 1 (the deck changed in between): nothing to show.
+        if (name === undefined) continue;
+        const rank = found.name === undefined ? rankOf(found.key, [name], folded) : found.rank;
+        if (rank === NO_MATCH) continue;
+        hits.push({
+          key: found.key,
+          rank,
+          hit: {
+            key: found.key,
+            name,
+            versionsPresent: committed?.versionsPresent ?? 0,
+            lastSeenSequence: committed?.lastSeenSequence ?? null,
+            inWorkingState: found.workingName !== undefined,
+          },
+        });
+      }
+      return hits
+        .sort(byRankThenKey)
         .slice(0, limit)
         .map(({ hit }) => hit);
     },
   };
-}
-
-interface CommittedCardRow {
-  key: string;
-  name: string;
-  versions: number;
-  lastSeenSequence: number;
-}
-
-/**
- * Every card that appears in any version of the deck, with the number of versions
- * containing it and its name in the newest such version (aggregated in SQL so only
- * one row per distinct card reaches JavaScript).
- */
-function committedCards(ctx: RepositoryContext, deckId: string): CommittedCardRow[] {
-  return ctx.db.all<CommittedCardRow>(sql`
-    WITH per_version AS (
-      SELECT sc.card_key, c.sequence, MIN(sc.name) AS name
-      FROM commits c
-      JOIN snapshot_cards sc ON sc.snapshot_hash = c.snapshot_hash
-      WHERE c.deck_id = ${deckId}
-        AND c.deck_id IN (SELECT d.id FROM decks d WHERE d.workspace_id = ${ctx.workspaceId})
-      GROUP BY sc.card_key, c.id, c.sequence
-    ),
-    ranked AS (
-      SELECT card_key, name, sequence,
-        COUNT(*) OVER (PARTITION BY card_key) AS versions,
-        ROW_NUMBER() OVER (PARTITION BY card_key ORDER BY sequence DESC) AS position
-      FROM per_version
-    )
-    SELECT card_key AS "key", name, versions, sequence AS "lastSeenSequence"
-    FROM ranked
-    WHERE position = 1
-  `);
-}
-
-/** Cards of the deck's latest observation (one row per card, any zone). */
-function workingCards(ctx: RepositoryContext, deckId: string): { key: string; name: string }[] {
-  const latest = ctx.db
-    .select({ snapshotHash: observations.snapshotHash })
-    .from(observations)
-    .where(and(eq(observations.deckId, deckId), inWorkspace(ctx, observations.deckId)))
-    .orderBy(...latestObservationFirst)
-    .limit(1)
-    .get();
-  if (!latest) return [];
-  return ctx.db
-    .select({ key: snapshotCards.cardKey, name: min(snapshotCards.name).mapWith(String) })
-    .from(snapshotCards)
-    .where(eq(snapshotCards.snapshotHash, latest.snapshotHash))
-    .groupBy(snapshotCards.cardKey)
-    .all();
 }
 
 const NO_MATCH = Number.POSITIVE_INFINITY;

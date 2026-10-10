@@ -11,7 +11,8 @@
  * card history's {@link WorkingPoint}, the `working` compare side, card search with the
  * working state).
  *
- * Synchronous on purpose: callers wrap calls in `settle`, like the rest of the services.
+ * Every view is asynchronous. Remotely each repository call is a round trip, so reads
+ * that do not depend on each other are started together.
  */
 import 'server-only';
 
@@ -96,7 +97,8 @@ export interface ResolvedSide<Side extends CompareSideDTO = CompareSideDTO> {
 /** The working state as the last point of a card history (owner scope only). */
 export interface WorkingPoint {
   fetchedAt: string;
-  snapshotHash: string;
+  /** The working state's snapshot (the caller has it loaded already). */
+  snapshot: CanonicalSnapshot;
   /** Label of the point, e.g. `Current Moxfield deck`. */
   label: string;
 }
@@ -121,29 +123,34 @@ export class DeckHistory {
   ) {}
 
   /** A stored snapshot; its absence means the database is inconsistent. */
-  snapshot(hash: string): CanonicalSnapshot {
-    return requireRecord(this.repos.snapshots.get(hash), `Snapshot ${hash}`);
+  async snapshot(hash: string): Promise<CanonicalSnapshot> {
+    return requireRecord(await this.repos.snapshots.get(hash), `Snapshot ${hash}`);
   }
 
   /** The workspace's card facts for `keys`, as a plain record. */
-  catalogFor(keys: Iterable<CardKey>): Record<CardKey, CardFacts> {
-    return toCatalogRecord(this.repos.catalog.getMany(keys));
+  async catalogFor(keys: Iterable<CardKey>): Promise<Record<CardKey, CardFacts>> {
+    return toCatalogRecord(await this.repos.catalog.getMany(keys));
   }
 
   /**
    * List items for `selected` (a subset of `all`, the deck's commits), each with its
    * stats relative to its parent. Snapshots are loaded in one batch.
    */
-  versionItems(all: readonly CommitRecord[], selected: readonly CommitRecord[]): VersionListItemDTO[] {
+  async versionItems(
+    all: readonly CommitRecord[],
+    selected: readonly CommitRecord[],
+  ): Promise<VersionListItemDTO[]> {
     if (selected.length === 0) return [];
     const byId = new Map(all.map((commit) => [commit.id, commit]));
     const parents = selected.map((commit) =>
       commit.parentId === null ? null : requireRecord(byId.get(commit.parentId), `Commit ${commit.parentId}`),
     );
-    const snapshots = this.repos.snapshots.getMany(
-      [...selected, ...parents].flatMap((commit) => (commit ? [commit.snapshotHash] : [])),
-    );
-    const tags = this.repos.tags.listForCommits(selected.map((commit) => commit.id));
+    const [snapshots, tags] = await Promise.all([
+      this.repos.snapshots.getMany(
+        [...selected, ...parents].flatMap((commit) => (commit ? [commit.snapshotHash] : [])),
+      ),
+      this.repos.tags.listForCommits(selected.map((commit) => commit.id)),
+    ]);
     return selected.map((commit, index) => {
       const parent = parents[index] ?? null;
       const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
@@ -159,11 +166,14 @@ export class DeckHistory {
   }
 
   /** The deck's versions, newest first; with `tag`, only those carrying it. */
-  listVersions(deckId: string, tag = ''): VersionListItemDTO[] {
-    const all = this.repos.commits.listForDeck(deckId);
+  async listVersions(deckId: string, tag = ''): Promise<VersionListItemDTO[]> {
     const wanted = tag.trim();
-    if (wanted === '') return this.versionItems(all, all);
-    const tagged = new Set(this.repos.tags.commitsWithTag(deckId, wanted).map((commit) => commit.id));
+    const [all, withTag] = await Promise.all([
+      this.repos.commits.listForDeck(deckId),
+      wanted === '' ? null : this.repos.tags.commitsWithTag(deckId, wanted),
+    ]);
+    if (withTag === null) return this.versionItems(all, all);
+    const tagged = new Set(withTag.map((commit) => commit.id));
     return this.versionItems(
       all,
       all.filter((commit) => tagged.has(commit.id)),
@@ -171,14 +181,20 @@ export class DeckHistory {
   }
 
   /** Version `sequence` of the deck with its diff, primer diff, notes and neighbours, or `null`. */
-  versionDetail(deckId: string, sequence: number): VersionHistoryDetail | null {
-    const commit = this.repos.commits.getBySequence(deckId, sequence);
+  async versionDetail(deckId: string, sequence: number): Promise<VersionHistoryDetail | null> {
+    const commit = await this.repos.commits.getBySequence(deckId, sequence);
     if (!commit) return null;
-    const parent =
+    const [parent, lineage, tags, notes] = await Promise.all([
       commit.parentId === null
         ? null
-        : requireRecord(this.repos.commits.getById(commit.parentId), `Commit ${commit.parentId}`);
-    const snapshots = this.repos.snapshots.getMany(
+        : this.repos.commits
+            .getById(commit.parentId)
+            .then((found) => requireRecord(found, `Commit ${commit.parentId}`)),
+      this.repos.commits.lineage(deckId),
+      this.repos.tags.listForCommit(commit.id),
+      this.repos.notes.listForCommit(commit.id),
+    ]);
+    const snapshots = await this.repos.snapshots.getMany(
       parent ? [commit.snapshotHash, parent.snapshotHash] : [commit.snapshotHash],
     );
     const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
@@ -186,24 +202,17 @@ export class DeckHistory {
     const diff = diffSnapshots(parentSnapshot ?? emptySnapshot(snapshot.deck), snapshot);
     const primerDiff = primerLineDiff(parentSnapshot ? parentSnapshot.primer : '', snapshot.primer);
 
-    const lineage = this.repos.commits.lineage(deckId);
     const position = lineage.findIndex((entry) => entry.id === commit.id);
     const next = position === -1 ? undefined : lineage[position + 1];
 
     return {
-      version: toVersionListItemDTO({
-        commit,
-        parent,
-        snapshot,
-        diff,
-        tags: this.repos.tags.listForCommit(commit.id),
-      }),
+      version: toVersionListItemDTO({ commit, parent, snapshot, diff, tags }),
       snapshot,
       sourceMetadata: commit.sourceMetadata,
       diff,
       primerDiff,
-      notes: this.repos.notes.listForCommit(commit.id).map(toCommitNoteDTO),
-      catalog: this.catalogFor([...allCards(snapshot).map((card) => card.key), ...diffCardKeys(diff)]),
+      notes: notes.map(toCommitNoteDTO),
+      catalog: await this.catalogFor([...allCards(snapshot).map((card) => card.key), ...diffCardKeys(diff)]),
       previous: parent ? toVersionRefDTO(parent) : null,
       next: next ? toVersionRefDTO(next) : null,
     };
@@ -214,11 +223,11 @@ export class DeckHistory {
    * sequences fall back to commit id prefixes where the text is one; prefixes must be
    * unique within the deck. `null` when nothing matches.
    */
-  resolveCommitted(
+  async resolveCommitted(
     deckId: string,
     ref: CommittedVersionRef,
     head: CommitRecord | null,
-  ): ResolvedSide<CommittedCompareSideDTO> | null {
+  ): Promise<ResolvedSide<CommittedCompareSideDTO> | null> {
     let commit: CommitRecord | null;
     switch (ref.kind) {
       case 'empty':
@@ -227,41 +236,45 @@ export class DeckHistory {
         commit = head;
         break;
       case 'sequence':
-        commit = this.repos.commits.getBySequence(deckId, ref.sequence);
+        commit = await this.repos.commits.getBySequence(deckId, ref.sequence);
         if (!commit && ref.fallbackPrefix !== null) {
-          commit = this.repos.commits.findByIdPrefix(deckId, ref.fallbackPrefix);
+          commit = await this.repos.commits.findByIdPrefix(deckId, ref.fallbackPrefix);
         }
         break;
       case 'commit-prefix':
-        commit = this.repos.commits.findByIdPrefix(deckId, ref.prefix);
+        commit = await this.repos.commits.findByIdPrefix(deckId, ref.prefix);
         break;
     }
     if (!commit) return null;
     return {
       side: { kind: 'version', version: toVersionRefDTO(commit) },
-      snapshot: this.snapshot(commit.snapshotHash),
+      snapshot: await this.snapshot(commit.snapshotHash),
     };
   }
 
   /** The comparison of two resolved sides, with every version of the deck for the pickers. */
-  comparison<Side extends CompareSideDTO>(
+  async comparison<Side extends CompareSideDTO>(
     deckId: string,
     from: ResolvedSide<Side>,
     to: ResolvedSide<Side>,
-  ): HistoryComparison<Side> {
+  ): Promise<HistoryComparison<Side>> {
     // The empty side borrows the other side's deck info, so comparing against the empty
     // deck does not report the deck name, format and tags as changes.
     const fromSnapshot = from.snapshot ?? emptySnapshot(to.snapshot?.deck);
     const toSnapshot = to.snapshot ?? emptySnapshot(from.snapshot?.deck);
     const diff = diffSnapshots(fromSnapshot, toSnapshot);
+    const [catalog, versions] = await Promise.all([
+      this.catalogFor(diffCardKeys(diff)),
+      this.repos.commits.listForDeck(deckId),
+    ]);
     return {
       from: from.side,
       to: to.side,
       diff,
       primerDiff: primerLineDiff(fromSnapshot.primer, toSnapshot.primer),
       primers: { from: fromSnapshot.primer, to: toSnapshot.primer },
-      catalog: this.catalogFor(diffCardKeys(diff)),
-      versions: this.repos.commits.listForDeck(deckId).map(toVersionRefDTO),
+      catalog,
+      versions: versions.map(toVersionRefDTO),
     };
   }
 
@@ -269,11 +282,16 @@ export class DeckHistory {
    * Cards of the deck's history matching `query`, with their zones in HEAD. With
    * `includeWorking`, cards that are only in the working state match too.
    */
-  searchCards(deckId: string, query: string, limit: number, includeWorking: boolean): CardSearchResultDTO[] {
+  async searchCards(
+    deckId: string,
+    query: string,
+    limit: number,
+    includeWorking: boolean,
+  ): Promise<CardSearchResultDTO[]> {
     const boundedLimit = Number.isFinite(limit)
       ? Math.min(MAX_CARD_SEARCH_LIMIT, Math.max(1, Math.floor(limit)))
       : DEFAULT_CARD_SEARCH_LIMIT;
-    const hits = this.repos.cardIndex.searchCardsInDeck(
+    const hits = await this.repos.cardIndex.searchCardsInDeck(
       deckId,
       query.slice(0, MAX_SEARCH_QUERY_LENGTH),
       boundedLimit,
@@ -281,9 +299,11 @@ export class DeckHistory {
     );
     if (hits.length === 0) return [];
 
-    const head = this.repos.commits.head(deckId);
-    const headIndex = head ? cardZoneIndex(this.snapshot(head.snapshotHash)) : null;
-    const catalog = this.repos.catalog.getMany(hits.map((hit) => hit.key));
+    const [head, catalog] = await Promise.all([
+      this.repos.commits.head(deckId),
+      this.repos.catalog.getMany(hits.map((hit) => hit.key)),
+    ]);
+    const headIndex = head ? cardZoneIndex(await this.snapshot(head.snapshotHash)) : null;
     return hits.map((hit) => ({
       key: hit.key,
       name: hit.name,
@@ -298,85 +318,74 @@ export class DeckHistory {
    * The history of a card (`card` is a card key or name) over the deck's versions, oldest
    * first, followed by `working` when given. Follows the card across renames the diff
    * reconciles, so either name gives one history. `null` when the card never appears.
+   *
+   * Committed zones come from the `snapshot_cards` index (one query per key the card had);
+   * full snapshots are loaded only where the card may have been renamed (see
+   * {@link CardHistoryInputs}).
    */
-  cardHistory(
+  async cardHistory(
     deckId: string,
     card: string,
     working: WorkingPoint | null,
-  ): { history: CardHistory; facts: CardFacts | null } | null {
+  ): Promise<{ history: CardHistory; facts: CardFacts | null } | null> {
     // Keys are fixed points of `cardKey`, so this accepts both keys and names.
     const key = cardKey(card);
     if (key === '') return null;
 
-    const lineage = this.repos.commits.lineage(deckId);
-    const points: CardVersionPoint[] = lineage.map((commit) => ({
-      commitId: commit.id,
-      sequence: commit.sequence,
-      at: commit.createdAt,
-      message: commit.message,
-      zones: [],
-    }));
-    if (working) {
-      points.push({
-        commitId: null,
-        sequence: null,
-        at: working.fetchedAt,
-        message: working.label,
+    const lineage = await this.repos.commits.lineage(deckId);
+    const inputs = new CardHistoryInputs(this.repos, deckId, lineage, working?.snapshot ?? null);
+    const [, keyFacts] = await Promise.all([inputs.prefetch(key), this.repos.catalog.getMany([key])]);
+
+    const traced = await inputs.run(() => {
+      const points: CardVersionPoint[] = lineage.map((commit) => ({
+        commitId: commit.id,
+        sequence: commit.sequence,
+        at: commit.createdAt,
+        message: commit.message,
         zones: [],
+      }));
+      if (working) {
+        points.push({
+          commitId: null,
+          sequence: null,
+          at: working.fetchedAt,
+          message: working.label,
+          zones: [],
+        });
+      }
+      const keys = traceCardKeys({
+        key,
+        length: points.length,
+        contains: (pointKey, index) => inputs.zonesAt(pointKey, index).length > 0,
+        renames: (index) => {
+          const [before, after] = inputs.snapshotPair(index - 1, index);
+          return renamedKeys(before, after);
+        },
       });
-    }
-    const hashes = [
-      ...lineage.map((commit) => commit.snapshotHash),
-      ...(working ? [working.snapshotHash] : []),
-    ];
-    const snapshots = new Map<number, CanonicalSnapshot>();
-    const snapshotAt = (index: number): CanonicalSnapshot => {
-      let snapshot = snapshots.get(index);
-      if (!snapshot) {
-        snapshot = this.snapshot(requireRecord(hashes[index], `Snapshot of point ${index}`));
-        snapshots.set(index, snapshot);
-      }
-      return snapshot;
-    };
-    // Committed zones come from the snapshot_cards index, one query per key; full
-    // snapshots are loaded only where the card may have been renamed.
-    const indexedZones = new Map<CardKey, Map<string, ZoneQuantity[]>>();
-    let workingIndex: ReturnType<typeof cardZoneIndex> | undefined;
-    const zonesAt = (pointKey: CardKey, index: number): ZoneQuantity[] => {
-      const commit = lineage[index];
-      if (!commit) return zoneQuantities((workingIndex ??= cardZoneIndex(snapshotAt(index))).get(pointKey));
-      let byCommit = indexedZones.get(pointKey);
-      if (!byCommit) {
-        const rows = this.repos.cardIndex.versionsContainingCard(deckId, pointKey);
-        byCommit = new Map(rows.map((entry) => [entry.commitId, entry.zones]));
-        indexedZones.set(pointKey, byCommit);
-      }
-      return byCommit.get(commit.id) ?? [];
-    };
-
-    const keys = traceCardKeys({
-      key,
-      length: points.length,
-      contains: (pointKey, index) => zonesAt(pointKey, index).length > 0,
-      renames: (index) => renamedKeys(snapshotAt(index - 1), snapshotAt(index)),
+      points.forEach((point, index) => {
+        const pointKey = keys[index] ?? key;
+        point.zones = inputs.zonesAt(pointKey, index);
+        const previousKey = keys[index - 1];
+        if (previousKey !== undefined && previousKey !== pointKey) {
+          point.renamedFrom = {
+            key: previousKey,
+            name: cardName(inputs.snapshotAt(index - 1), previousKey) ?? previousKey,
+          };
+        }
+      });
+      const newest = points.findLastIndex((point) => point.zones.length > 0);
+      if (newest === -1) return null;
+      return {
+        points,
+        historyKey: keys.at(-1) ?? key,
+        name: cardName(inputs.snapshotAt(newest), keys[newest] ?? key),
+      };
     });
-    points.forEach((point, index) => {
-      const pointKey = keys[index] ?? key;
-      point.zones = zonesAt(pointKey, index);
-      const previousKey = keys[index - 1];
-      if (previousKey !== undefined && previousKey !== pointKey) {
-        point.renamedFrom = {
-          key: previousKey,
-          name: cardName(snapshotAt(index - 1), previousKey) ?? previousKey,
-        };
-      }
-    });
-    const newest = points.findLastIndex((point) => point.zones.length > 0);
-    if (newest === -1) return null;
+    if (traced === null) return null;
 
-    const historyKey = keys.at(-1) ?? key;
-    const facts = this.repos.catalog.getMany([historyKey]).get(historyKey) ?? null;
-    const name = cardName(snapshotAt(newest), keys[newest] ?? key);
+    const { points, historyKey, name } = traced;
+    const catalog = historyKey === key ? keyFacts : await this.repos.catalog.getMany([historyKey]);
+    const facts = catalog.get(historyKey) ?? null;
     return {
       history: deriveCardHistory({ key: historyKey, name: name ?? facts?.name ?? historyKey, points }),
       facts,
@@ -387,22 +396,166 @@ export class DeckHistory {
    * Paste-ready restore text for version `sequence` of the deck, or `null`. `target`: the
    * deck itself (its owner, the default) or a deck of the reader's own (a viewer).
    */
-  restoreExport(
+  async restoreExport(
     deck: Pick<DeckRecord, 'id' | 'source'>,
     sequence: number,
     target: RestoreTarget = 'source-deck',
-  ): { commit: CommitRecord; export: RestoreExport } | null {
-    const commit = this.repos.commits.getBySequence(deck.id, sequence);
+  ): Promise<{ commit: CommitRecord; export: RestoreExport } | null> {
+    const commit = await this.repos.commits.getBySequence(deck.id, sequence);
     if (!commit) return null;
-    return {
-      commit,
-      export: this.sources.require(deck.source).exportForRestore(this.snapshot(commit.snapshotHash), target),
-    };
+    const snapshot = await this.snapshot(commit.snapshotHash);
+    return { commit, export: this.sources.require(deck.source).exportForRestore(snapshot, target) };
   }
 
   /** Every tag used in the deck, with the number of versions carrying it, sorted by name. */
-  listTags(deckId: string): TagCountDTO[] {
-    return this.repos.tags.listForDeck(deckId).map((tag) => ({ name: tag.name, count: tag.count }));
+  async listTags(deckId: string): Promise<TagCountDTO[]> {
+    return (await this.repos.tags.listForDeck(deckId)).map((tag) => ({ name: tag.name, count: tag.count }));
+  }
+}
+
+/** Thrown by {@link CardHistoryInputs} when a run needs data that is not loaded yet. */
+class MissingCardHistoryInput extends Error {
+  override readonly name = 'MissingCardHistoryInput';
+}
+
+/**
+ * The inputs of one card history, loaded on demand: per card key, the versions of the deck
+ * that contain it (from the `snapshot_cards` index), and per point, its full snapshot.
+ *
+ * The tracing in `@/core/history` is synchronous and discovers what it needs as it goes:
+ * which keys depends on the renames it finds, and it compares full snapshots only where a
+ * tracked key appears or disappears. So it runs against this cache ({@link run}): a miss
+ * records what is missing and aborts the run, which then loads everything missing (one
+ * round of parallel queries) and runs again. A run is a pure computation over the cache,
+ * so running again is cheap and gives exactly the result of one uninterrupted run with
+ * every input at hand; every round loads at least one more input, so it ends.
+ * {@link prefetch} loads up front what the run for a card that was never renamed needs,
+ * so that the common case takes no extra round.
+ */
+class CardHistoryInputs {
+  /** Per key: the zones of the card in each version that contains it, by commit id. */
+  readonly #occurrences = new Map<CardKey, ReadonlyMap<string, ZoneQuantity[]>>();
+  /** Per point index. */
+  readonly #snapshots = new Map<number, CanonicalSnapshot>();
+  readonly #missingKeys = new Set<CardKey>();
+  readonly #missingPoints = new Set<number>();
+  #workingIndex: ReturnType<typeof cardZoneIndex> | undefined;
+
+  /**
+   * @param lineage the deck's versions, oldest first: points `0 … lineage.length - 1`.
+   * @param working the working state's snapshot: the last point, when given.
+   */
+  constructor(
+    private readonly repos: HistoryRepositories,
+    private readonly deckId: string,
+    private readonly lineage: readonly CommitRecord[],
+    working: CanonicalSnapshot | null,
+  ) {
+    if (working !== null) this.#snapshots.set(lineage.length, working);
+  }
+
+  /** Number of points: the versions, plus the working state when given. */
+  get length(): number {
+    return this.lineage.length + (this.#snapshots.has(this.lineage.length) ? 1 : 0);
+  }
+
+  /** The card `key`'s zones at point `index` (empty when the point does not contain it). */
+  zonesAt(key: CardKey, index: number): ZoneQuantity[] {
+    const commit = this.lineage[index];
+    if (!commit)
+      return zoneQuantities((this.#workingIndex ??= cardZoneIndex(this.snapshotAt(index))).get(key));
+    const byCommit = this.#occurrences.get(key);
+    if (byCommit === undefined) {
+      this.#missingKeys.add(key);
+      throw new MissingCardHistoryInput(`The versions containing ${key} are not loaded`);
+    }
+    return byCommit.get(commit.id) ?? [];
+  }
+
+  /** The full snapshot at point `index`. */
+  snapshotAt(index: number): CanonicalSnapshot {
+    this.#requireSnapshots(index);
+    return this.#snapshot(index);
+  }
+
+  /** The full snapshots at points `a` and `b`, asking for both at once when they are missing. */
+  snapshotPair(a: number, b: number): [CanonicalSnapshot, CanonicalSnapshot] {
+    this.#requireSnapshots(a, b);
+    return [this.#snapshot(a), this.#snapshot(b)];
+  }
+
+  /**
+   * Loads what tracing `key` needs when the card was never renamed: its versions, and the
+   * snapshots of the points where it is looked up in full (where it entered the deck, up
+   * to its newest point; the point after that; its newest point, for its name). Follows
+   * how `traceCardKeys` walks; a mismatch would only cost another round in {@link run}.
+   */
+  async prefetch(key: CardKey): Promise<void> {
+    await this.#load([key], []);
+    const present = Array.from({ length: this.length }, (_, index) => this.zonesAt(key, index).length > 0);
+    const anchor = present.lastIndexOf(true);
+    if (anchor === -1) return;
+    const points = new Set([anchor, anchor + 1]);
+    for (let index = 1; index <= anchor; index++) {
+      if (present[index] === true && present[index - 1] === false) points.add(index - 1).add(index);
+    }
+    await this.#load([], points);
+  }
+
+  /** Runs `compute` (pure and synchronous) until it no longer misses an input; returns its result. */
+  async run<T>(compute: () => T): Promise<T> {
+    for (;;) {
+      try {
+        return compute();
+      } catch (error) {
+        if (!(error instanceof MissingCardHistoryInput)) throw error;
+      }
+      const keys = [...this.#missingKeys];
+      const points = [...this.#missingPoints];
+      this.#missingKeys.clear();
+      this.#missingPoints.clear();
+      if ((await this.#load(keys, points)) === 0) {
+        throw new Error('A card history asked for inputs that do not exist');
+      }
+    }
+  }
+
+  #requireSnapshots(...indices: number[]): void {
+    const missing = indices.filter((index) => !this.#snapshots.has(index));
+    if (missing.length === 0) return;
+    for (const index of missing) this.#missingPoints.add(index);
+    throw new MissingCardHistoryInput(`The snapshots of points ${missing.join(', ')} are not loaded`);
+  }
+
+  #snapshot(index: number): CanonicalSnapshot {
+    return requireRecord(this.#snapshots.get(index), `Snapshot of point ${index}`);
+  }
+
+  /**
+   * Loads the versions containing each of `keys` and the snapshots of the versions among
+   * `points` that are not loaded yet, in parallel. @returns how many inputs it loaded.
+   */
+  async #load(keys: Iterable<CardKey>, points: Iterable<number>): Promise<number> {
+    const wantedKeys = [...new Set(keys)].filter((key) => !this.#occurrences.has(key));
+    const wantedCommits = [...new Set(points)].flatMap((index) => {
+      const commit = this.lineage[index];
+      return commit === undefined || this.#snapshots.has(index) ? [] : [{ index, commit }];
+    });
+    if (wantedKeys.length === 0 && wantedCommits.length === 0) return 0;
+    const [rows, snapshots] = await Promise.all([
+      Promise.all(wantedKeys.map((key) => this.repos.cardIndex.versionsContainingCard(this.deckId, key))),
+      wantedCommits.length === 0
+        ? new Map<string, CanonicalSnapshot>()
+        : this.repos.snapshots.getMany(wantedCommits.map(({ commit }) => commit.snapshotHash)),
+    ]);
+    wantedKeys.forEach((key, position) => {
+      const versions = rows[position] ?? [];
+      this.#occurrences.set(key, new Map(versions.map((entry) => [entry.commitId, entry.zones])));
+    });
+    for (const { index, commit } of wantedCommits) {
+      this.#snapshots.set(index, requireSnapshot(snapshots, commit.snapshotHash));
+    }
+    return wantedKeys.length + wantedCommits.length;
   }
 }
 

@@ -36,7 +36,7 @@ function editedSpec() {
 
 describe('deck services: the core workflow', () => {
   it('tracks a deck, commits v1, detects Moxfield edits and commits v2', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     api.setDeck(blueFarmSpec());
 
@@ -206,7 +206,7 @@ describe('deck services: the core workflow', () => {
   });
 
   it('rejects input that is not a Moxfield deck', async () => {
-    const { services, api } = createServiceHarness();
+    const { services, api } = await createServiceHarness();
     const outcome = await services.trackDeck('https://example.com/decks/abc');
     expect(outcome).toEqual({ ok: false, reason: expect.stringContaining('moxfield.com') as unknown });
     expect(await services.listDecks()).toEqual([]);
@@ -214,7 +214,7 @@ describe('deck services: the core workflow', () => {
   });
 
   it('suggests a background refresh only when the deck was last checked long enough ago', async () => {
-    const { services, api, clock } = createServiceHarness();
+    const { services, api, clock } = await createServiceHarness();
     api.setDeck(blueFarmSpec());
     const tracked = await services.trackDeck(BLUE_FARM_URL);
     if (!tracked.ok) throw new Error(tracked.reason);
@@ -232,8 +232,8 @@ describe('deck services: the core workflow', () => {
     expect((await services.getOverview(tracked.deckId))?.autoRefreshSuggested).toBe(false);
   });
 
-  it('exposes setup information without the User-Agent value', () => {
-    const { services } = createServiceHarness({ env: { MOXFIELD_USER_AGENT: 'secret-agent/1.0' } });
+  it('exposes setup information without the User-Agent value', async () => {
+    const { services } = await createServiceHarness({ env: { MOXFIELD_USER_AGENT: 'secret-agent/1.0' } });
     const setup = services.getSetupInfo();
     expect(setup).toEqual({
       serverFetch: { state: 'available' },
@@ -245,8 +245,8 @@ describe('deck services: the core workflow', () => {
     expect(JSON.stringify(setup)).not.toContain('secret-agent');
   });
 
-  it('converts primer markup through the deck source', () => {
-    const { services } = createServiceHarness();
+  it('converts primer markup through the deck source', async () => {
+    const { services } = await createServiceHarness();
     const markdown = services.primerToMarkdown(
       'moxfield',
       '===panel: Combo\nUse [[Underworld Breach]].\n===endpanel',

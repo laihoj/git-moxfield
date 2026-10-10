@@ -32,7 +32,8 @@ const LOOP_STEPS = [
 ] as const;
 
 export default async function DecksPage() {
-  const decks = await servicesFor(await requireUser()).listDecks();
+  const services = await servicesFor(await requireUser());
+  const decks = await services.listDecks();
 
   if (decks.length === 0) {
     return (

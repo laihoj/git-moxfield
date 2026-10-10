@@ -3,11 +3,17 @@
  * deck services on an in-memory database: the bookmarklet key authenticates the
  * cross-site post and picks the workspace, the answer hands the browser a pending,
  * short-lived hand-off for `/api/auth/handoff` (which signs nobody in by itself), the
- * `Origin` header only rules out explicit third-party origins, and keys never reach logs
- * or pages.
+ * `Origin` header only rules out explicit third-party origins, compressed payloads are
+ * decoded within hard limits, and keys never reach logs or pages.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  CAPTURE_GZIP_TAG,
+  MAX_DECODED_CAPTURE_BYTES,
+  MAX_ENCODED_CAPTURE_CHARS,
+  MAX_PLAIN_CAPTURE_BYTES,
+} from '@/integrations/moxfield/capture-codec-protocol';
 import {
   CAPTURE_FORM_FIELD,
   CAPTURE_FORM_TOKEN_FIELD,
@@ -19,7 +25,9 @@ import { HANDOFF_LIFETIME_MS } from '@/server/auth/service';
 import type { SessionUser, SignIn } from '@/server/auth/types';
 import type * as ConfigModule from '@/server/config';
 import type { AppConfig } from '@/server/config';
+import { CAPTURE_FORM_BODY_LIMIT } from '@/app/api/capture/read-body';
 import { keyOfBookmarklet, signUp } from '@tests/support/auth';
+import { gzipPayload } from '@tests/support/capture-codec';
 import { buildCaptureEnvelope } from '@tests/support/moxfield-deck-builder';
 import { appRequest, setCookies } from '@tests/support/routes';
 import { blueFarmSpec, createServiceHarness, defined, type ServiceHarness } from '@tests/support/services';
@@ -36,11 +44,11 @@ function harness(): ServiceHarness {
 
 vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
-  getAuthService: () => harness().auth,
+  getAuthService: () => Promise.resolve(harness().auth),
 }));
 vi.mock('@/server/access', async (importOriginal) => ({
   ...(await importOriginal<typeof AccessModule>()),
-  servicesFor: (user: SessionUser) => harness().servicesForWorkspace(user.workspaceId),
+  servicesFor: (user: SessionUser) => Promise.resolve(harness().servicesForWorkspace(user.workspaceId)),
 }));
 vi.mock('@/server/config', async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
@@ -65,7 +73,7 @@ let owner: SignIn;
 let key: string;
 
 beforeEach(async () => {
-  state.harness = createServiceHarness();
+  state.harness = await createServiceHarness();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(state.harness.clock.now());
   state.logs.length = 0;
@@ -164,21 +172,75 @@ describe('POST /api/capture/form', () => {
     ]);
   });
 
-  it('ingests a large deck whose form-encoded body is well over 10 MB', async () => {
-    // A huge Considering board: the envelope stays under MAX_CAPTURE_BYTES, but form
-    // encoding (every quote, colon, comma and brace becomes %XX) grows it by about 1.5x.
+  it('ingests a compressed payload, as current bookmarklets send it', async () => {
+    const payload = gzipPayload(JSON.stringify(buildCaptureEnvelope(blueFarmSpec())));
+    const response = await post({
+      fields: { [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload },
+    });
+    expect(response.status).toBe(303);
+    const [deck] = await ownersDecks();
+    expect(deck?.name).toBe('Blue Farm');
+    expect(handoffTarget(response)).toBe(`/decks/${deck?.id}?captured=1`);
+  });
+
+  it('ingests a large deck sent compressed, in a body far below the platform limit', async () => {
+    // A huge Considering board: the envelope is close to MAX_CAPTURE_BYTES, which would
+    // make a form body of over 10 MB uncompressed.
     const considering = Array.from({ length: 11_000 }, (_, i) => `Considered Card ${i}`);
-    const payload = JSON.stringify(buildCaptureEnvelope(blueFarmSpec({ considering })));
-    const fields = { [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload };
-    expect(payload.length).toBeGreaterThan(7_000_000);
-    expect(payload.length).toBeLessThanOrEqual(MAX_CAPTURE_BYTES);
-    expect(new URLSearchParams(fields).toString().length).toBeGreaterThan(11 * 1024 * 1024);
+    const envelope = JSON.stringify(buildCaptureEnvelope(blueFarmSpec({ considering })));
+    expect(envelope.length).toBeGreaterThan(7_000_000);
+    expect(envelope.length).toBeLessThanOrEqual(MAX_CAPTURE_BYTES);
+    const fields = { [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: gzipPayload(envelope) };
+    expect(fields[CAPTURE_FORM_FIELD].length).toBeLessThan(MAX_ENCODED_CAPTURE_CHARS);
+    expect(new URLSearchParams(fields).toString().length).toBeLessThan(CAPTURE_FORM_BODY_LIMIT);
 
     const response = await post({ fields });
     expect(response.status).toBe(303);
     const [deck] = await ownersDecks();
     expect(handoffTarget(response)).toBe(`/decks/${deck?.id}?captured=1`);
   }, 60_000);
+
+  it.each([
+    ['a decompression bomb', gzipPayload(' '.repeat(MAX_DECODED_CAPTURE_BYTES + 1))],
+    ['plain JSON over the uncompressed limit', ' '.repeat(MAX_PLAIN_CAPTURE_BYTES) + '{}'],
+  ])('sends %s to the paste page as too large, through the sign-in hand-off', async (_case, payload) => {
+    const response = await post({
+      fields: { [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload },
+    });
+    expect(response.status).toBe(303);
+    expect(handoffTarget(response)).toBe('/capture?mode=paste&error=too-large');
+    expect(setCookies(response).has('__Host-gm_handoff')).toBe(true);
+    expect(await ownersDecks()).toEqual([]);
+  });
+
+  it.each([
+    ['damaged', `${CAPTURE_GZIP_TAG}bm90IGd6aXA`],
+    ['in an unknown encoding', 'gm-brotli-base64url:AAAA'],
+  ])('sends a compressed payload that is %s to the paste page as invalid', async (_case, payload) => {
+    const response = await post({
+      fields: { [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload },
+    });
+    expect(handoffTarget(response)).toBe('/capture?mode=paste&error=invalid');
+    expect(await ownersDecks()).toEqual([]);
+    expect(state.logs.filter((entry) => entry.level === 'error')).toEqual([]);
+  });
+
+  it('answers a body over the route limit before reading it', async () => {
+    const response = await POST(
+      appRequest('/api/capture/form', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'content-length': String(CAPTURE_FORM_BODY_LIMIT + 1),
+          origin: 'null',
+        },
+        body: new URLSearchParams({ [CAPTURE_FORM_TOKEN_FIELD]: key }),
+      }),
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/capture?mode=paste&error=too-large');
+    expect(setCookies(response).size).toBe(0);
+  });
 
   it('rejects an explicit third-party origin before reading the body', async () => {
     const response = await post({ origin: 'https://evil.example' });
@@ -240,7 +302,7 @@ describe('POST /api/capture/form', () => {
       (await harness().auth.createBookmarkletKey(anna.user, 'Phone', 'http://localhost:3000')).bookmarklets
         .sameTab,
     );
-    harness().repos.users.setDisabled(anna.user.id, true);
+    await harness().repos.users.setDisabled(anna.user.id, true);
     expect((await post()).status).toBe(403);
   });
 

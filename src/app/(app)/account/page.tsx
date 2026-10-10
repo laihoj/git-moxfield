@@ -29,7 +29,7 @@ export const metadata: Metadata = { title: 'Account' };
  */
 export default async function AccountPage() {
   const user = await requireUser({ next: routes.account() });
-  const auth = getAuthService();
+  const auth = await getAuthService();
   const [keys, revokedKeyShareLinks, sessions, recoveries] = await Promise.all([
     auth.listKeys(user),
     auth.listRevokedKeyShareLinks(user),

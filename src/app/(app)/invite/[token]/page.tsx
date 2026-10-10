@@ -26,7 +26,10 @@ export const metadata: Metadata = { title: 'Invitation', robots: { index: false,
  */
 export default async function InvitePage({ params }: PageProps<'/invite/[token]'>) {
   const { token } = await params;
-  const [invite, user] = await Promise.all([getAuthService().getInvite(token), getCurrentUser()]);
+  const [invite, user] = await Promise.all([
+    getAuthService().then((auth) => auth.getInvite(token)),
+    getCurrentUser(),
+  ]);
 
   if (invite.status !== 'valid') return <InviteProblem status={invite.status} signedIn={user !== null} />;
 

@@ -17,8 +17,8 @@ import {
 } from './sql-errors';
 import { TransactionAbortedError } from './transaction';
 
-/** better-sqlite3's error: a bare `SqliteError` whose `code` is the extended code. */
-function betterSqliteError(code: string, message: string): Error {
+/** The native error under a local `LibsqlError`: a `SqliteError` whose `code` is the extended code. */
+function nativeSqliteError(code: string, message: string): Error {
   return Object.assign(new Error(message), { name: 'SqliteError', code });
 }
 
@@ -183,7 +183,7 @@ describe('classifySqlError', () => {
     });
   });
 
-  describe('better-sqlite3 errors', () => {
+  describe('native SQLite errors (the cause of a local LibsqlError)', () => {
     it.each<[string, string, SqlErrorKind]>([
       ['SQLITE_CONSTRAINT_FOREIGNKEY', 'FOREIGN KEY constraint failed', 'foreign-key'],
       ['SQLITE_CONSTRAINT_PRIMARYKEY', 'UNIQUE constraint failed: p.id', 'unique'],
@@ -192,7 +192,7 @@ describe('classifySqlError', () => {
       ['SQLITE_CONSTRAINT_TRIGGER', 'commits are immutable', 'trigger'],
       ['SQLITE_BUSY', 'database is locked', 'busy'],
     ])('%s is %s', (code, message, kind) => {
-      expect(classifySqlError(betterSqliteError(code, message))).toEqual({
+      expect(classifySqlError(nativeSqliteError(code, message))).toEqual({
         kind,
         message,
         retryable: kind === 'busy',

@@ -11,7 +11,7 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
 import { credentials, users } from '@/server/db/schema';
 
-import { referencing, type RepositoryContext } from './context';
+import { isUniqueViolation, referencing, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 import type { UserRecord } from './users';
 
@@ -48,23 +48,25 @@ export interface CredentialRepository {
    * @throws {RepositoryError} `not-found` for an unknown user; `conflict` when the hash
    * is already stored; `invalid-input` for an empty label or hash.
    */
-  createKey(input: NewBookmarkletKey): CredentialRecord;
+  createKey(input: NewBookmarkletKey): Promise<CredentialRecord>;
   /**
    * The credential whose secret hashes to `secretHash`, with its user, when the
    * credential is not revoked and the user is not disabled; otherwise `null`.
    */
-  findActiveBySecretHash(secretHash: string): { credential: CredentialRecord; user: UserRecord } | null;
+  findActiveBySecretHash(
+    secretHash: string,
+  ): Promise<{ credential: CredentialRecord; user: UserRecord } | null>;
   /** The user's credentials, newest first; revoked ones only with `includeRevoked`. */
-  listForUser(userId: string, options?: { includeRevoked?: boolean }): CredentialRecord[];
+  listForUser(userId: string, options?: { includeRevoked?: boolean }): Promise<CredentialRecord[]>;
   /**
    * Revokes one of `userId`'s credentials. Another user's credential is never touched.
    * @returns whether an active credential was revoked.
    */
-  revoke(userId: string, credentialId: string, at: string): boolean;
+  revoke(userId: string, credentialId: string, at: string): Promise<boolean>;
   /** Revokes every active credential of the user. @returns how many were revoked. */
-  revokeAllForUser(userId: string, at: string): number;
+  revokeAllForUser(userId: string, at: string): Promise<number>;
   /** Records a use of the credential at `at`. */
-  touchLastUsed(id: string, at: string): void;
+  touchLastUsed(id: string, at: string): Promise<void>;
 }
 
 /** Columns of a credential record (everything except the secret hash and provider ids). */
@@ -80,36 +82,46 @@ export const credentialRecordColumns = {
 };
 
 export function createCredentialRepository(ctx: RepositoryContext): CredentialRepository {
+  const duplicate = (cause?: unknown): RepositoryError =>
+    new RepositoryError(
+      'conflict',
+      'A credential with this secret already exists',
+      cause === undefined ? undefined : { cause },
+    );
+
   return {
-    createKey(input) {
+    async createKey(input) {
       const label = input.label.trim();
       if (label === '') throw new RepositoryError('invalid-input', 'A key needs a label');
       if (input.secretHash === '') throw new RepositoryError('invalid-input', 'A key needs a secret hash');
-      const taken = ctx.db
+      const taken = await ctx.db
         .select({ id: credentials.id })
         .from(credentials)
         .where(eq(credentials.secretHash, input.secretHash))
         .get();
-      if (taken) throw new RepositoryError('conflict', 'A credential with this secret already exists');
-      return referencing(`Key of user ${input.userId}`, () =>
-        ctx.db
-          .insert(credentials)
-          .values({
-            id: ctx.newId(),
-            userId: input.userId,
-            kind: 'bookmarklet-key',
-            secretHash: input.secretHash,
-            label,
-            createdByCredentialId: input.createdByCredentialId ?? null,
-            createdAt: ctx.now(),
-          })
-          .returning(credentialRecordColumns)
-          .get(),
-      );
+      if (taken) throw duplicate();
+      const values = {
+        id: ctx.newId(),
+        userId: input.userId,
+        kind: 'bookmarklet-key' as const,
+        secretHash: input.secretHash,
+        label,
+        createdByCredentialId: input.createdByCredentialId ?? null,
+        createdAt: ctx.now(),
+      };
+      try {
+        return await referencing(`Key of user ${input.userId}`, () =>
+          write(ctx, (db) => db.insert(credentials).values(values).returning(credentialRecordColumns).get()),
+        );
+      } catch (error) {
+        // The same hash stored since the check above.
+        if (isUniqueViolation(error)) throw duplicate(error);
+        throw error;
+      }
     },
 
-    findActiveBySecretHash(secretHash) {
-      const row = ctx.db
+    async findActiveBySecretHash(secretHash) {
+      const row = await ctx.db
         .select({ credential: credentialRecordColumns, user: users })
         .from(credentials)
         .innerJoin(users, eq(users.id, credentials.userId))
@@ -138,32 +150,34 @@ export function createCredentialRepository(ctx: RepositoryContext): CredentialRe
         .all();
     },
 
-    revoke(userId, credentialId, at) {
-      const result = ctx.db
-        .update(credentials)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            eq(credentials.id, credentialId),
-            eq(credentials.userId, userId),
-            isNull(credentials.revokedAt),
+    async revoke(userId, credentialId, at) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(credentials)
+          .set({ revokedAt: at })
+          .where(
+            and(
+              eq(credentials.id, credentialId),
+              eq(credentials.userId, userId),
+              isNull(credentials.revokedAt),
+            ),
           ),
-        )
-        .run();
-      return result.changes > 0;
+      );
+      return result.rowsAffected > 0;
     },
 
-    revokeAllForUser(userId, at) {
-      const result = ctx.db
-        .update(credentials)
-        .set({ revokedAt: at })
-        .where(and(eq(credentials.userId, userId), isNull(credentials.revokedAt)))
-        .run();
-      return result.changes;
+    async revokeAllForUser(userId, at) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(credentials)
+          .set({ revokedAt: at })
+          .where(and(eq(credentials.userId, userId), isNull(credentials.revokedAt))),
+      );
+      return result.rowsAffected;
     },
 
-    touchLastUsed(id, at) {
-      ctx.db.update(credentials).set({ lastUsedAt: at }).where(eq(credentials.id, id)).run();
+    async touchLastUsed(id, at) {
+      await write(ctx, (db) => db.update(credentials).set({ lastUsedAt: at }).where(eq(credentials.id, id)));
     },
   };
 }

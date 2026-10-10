@@ -4,6 +4,7 @@
  * creating session descends from; and every operation is confined to the owner's
  * workspace, so another user can neither list nor revoke them.
  */
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { hashToken, parseToken } from '@/server/auth/tokens';
@@ -14,7 +15,7 @@ import { APP_URL, openShared, sharedHistory, shareLinksOf, tokenOfShareUrl } fro
 
 describe('share link services', () => {
   it('creates a link whose URL is the only place its token exists', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
 
     const created = await shareLinks.createShareLink(
@@ -34,7 +35,7 @@ describe('share link services', () => {
       lastViewedAt: null,
     });
 
-    const rows = JSON.stringify(harness.db.$client.prepare('SELECT * FROM share_links').all());
+    const rows = JSON.stringify(await harness.db.all(sql`SELECT * FROM share_links`));
     expect(rows).toContain(hashToken(token));
     expect(rows).not.toContain(token);
     expect(JSON.stringify(harness.logger.entries)).not.toContain(token);
@@ -43,7 +44,7 @@ describe('share link services', () => {
   });
 
   it('makes a different token every time, even with the same label', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
     const input = { label: 'Discord', includeNotes: true };
     const first = await shareLinks.createShareLink(deckId, input, APP_URL);
@@ -55,7 +56,7 @@ describe('share link services', () => {
   });
 
   it('normalizes labels and refuses invalid ones, storing nothing', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
     const create = (label: string) =>
       shareLinks.createShareLink(deckId, { label, includeNotes: false }, APP_URL);
@@ -63,7 +64,7 @@ describe('share link services', () => {
     expect((await create('  For   Pekka \n')).link.label).toBe('For Pekka');
     expect((await create('Café')).link.label).toBe('Café');
     expect((await create('x'.repeat(60))).link.label).toHaveLength(60);
-    const before = countRows(harness.db, 'share_links');
+    const before = await countRows(harness.db, 'share_links');
     await expectServiceError(create('   '), 'invalid-input');
     await expectServiceError(create('x'.repeat(61)), 'invalid-input');
     await expectServiceError(create('Pekka‮'), 'invalid-input');
@@ -78,11 +79,11 @@ describe('share link services', () => {
     await expect(
       shareLinks.createShareLink(deckId, { label: 'Ok', includeNotes: false }, 'javascript:alert(1)'),
     ).rejects.toThrow(TypeError);
-    expect(countRows(harness.db, 'share_links')).toBe(before);
+    expect(await countRows(harness.db, 'share_links')).toBe(before);
   });
 
   it('records the key the creating session descends from', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { owner, deckId } = await sharedHistory(harness);
     const key = await harness.auth.createBookmarkletKey(owner.user, 'Laptop', APP_URL);
     const viaKey = defined(
@@ -99,11 +100,9 @@ describe('share link services', () => {
       { label: 'Via invite', includeNotes: false },
       APP_URL,
     );
-    const rows = harness.db.$client
-      .prepare(
-        'SELECT label, credential_id AS credentialId, created_by_user_id AS userId FROM share_links ORDER BY label',
-      )
-      .all();
+    const rows = await harness.db.all(
+      sql`SELECT label, credential_id AS credentialId, created_by_user_id AS userId FROM share_links ORDER BY label`,
+    );
     expect(rows).toEqual([
       { label: 'Via invite', credentialId: null, userId: owner.user.id },
       { label: 'Via key', credentialId: key.key.id, userId: owner.user.id },
@@ -111,18 +110,18 @@ describe('share link services', () => {
   });
 
   it('makes nothing for a session that has ended meanwhile', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { owner, shareLinks, deckId } = await sharedHistory(harness);
     await harness.auth.endAllSessions(owner.user);
     await expectServiceError(
       shareLinks.createShareLink(deckId, { label: 'Late', includeNotes: false }, APP_URL),
       'forbidden',
     );
-    expect(countRows(harness.db, 'share_links')).toBe(0);
+    expect(await countRows(harness.db, 'share_links')).toBe(0);
   });
 
   it('confines every operation to the owner’s workspace', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
     const created = await shareLinks.createShareLink(
       deckId,
@@ -156,7 +155,7 @@ describe('share link services', () => {
   });
 
   it('revokes a link at once and idempotently, leaving the deck’s other links working', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
     const pekka = await shareLinks.createShareLink(deckId, { label: 'Pekka', includeNotes: false }, APP_URL);
     const discord = await shareLinks.createShareLink(
@@ -176,7 +175,7 @@ describe('share link services', () => {
   });
 
   it('lists when each link was last viewed', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { shareLinks, deckId } = await sharedHistory(harness);
     const created = await shareLinks.createShareLink(
       deckId,

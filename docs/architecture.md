@@ -42,12 +42,15 @@ src/
                       normalization, restore text format, browser capture bookmarklet.
   server/           Server-only application layer.
     config.ts         Typed environment configuration.
+    platform.ts       Where the process runs (Netlify or not), for platform defaults.
     sources.ts        DeckSource registry (wires adapters from config; process singleton).
     logger.ts         Structured logging.
-    db/               Drizzle schema, connection, migrations runner.
+    db/               Drizzle schema, libSQL connection, transactions, migration state.
     repositories/     Persistence (the only code that touches SQL).
     services/         Use cases: track, refresh, ingest capture, commit, history,
                       compare, card history, restore, tags, notes.
+    auth/             Accounts, sessions, keys, links, invites (ADR 0006).
+    access/           Who is asking → which services (ADR 0007); opens the database.
   app/              Next.js App Router: pages, server actions, route handlers.
   components/       React UI components.
 ```
@@ -201,8 +204,28 @@ show it.
 
 ## Persistence
 
-SQLite via Drizzle ORM. Content-addressed core: versions, and the snapshots and raw
-payloads they reference, are append-only; the working state is not (see below).
+SQLite via Drizzle ORM on libSQL (ADR 0008): Turso over HTTP in production, local
+`file:` and `:memory:` databases in development and tests, one driver and one dialect
+everywhere. Content-addressed core: versions, and the snapshots and raw payloads they
+reference, are append-only; the working state is not (see below).
+
+Every query is asynchronous. Writes go through `src/server/db/transaction.ts`:
+`runInTransaction` (repositories: `withTransaction`, services: `repos.transaction`) for
+read-check-write units, always `BEGIN IMMEDIATE`, retried as a whole after transient
+failures, so the callback must use only the transaction it receives, stay short, never
+fetch from Moxfield and have no other side effects; `runWrite` (repositories: `write`,
+`writeAll`) for single statements and atomic `db.batch()` write sets, which cost one round
+trip remotely. One-time things (invites, login links, hand-offs) are used up by a
+conditional `UPDATE` inside such a transaction, so of concurrent consumers exactly one
+wins. Database errors are classified by `classifySqlError` (walking the cause chain:
+remote errors carry no extended result codes) and never logged with their SQL or bound
+parameters. Values a remote libSQL server would reject (over 5,000,000 bytes) are refused
+earlier with an `invalid-input` repository error (`MAX_STORED_VALUE_BYTES`).
+
+Turso bills every row a query reads, so the hot queries are index-driven: card history
+and card search probe `snapshot_cards(card_key, snapshot_hash)` per version of the deck
+instead of scanning its whole history (`src/server/repositories/card-index.ts` has the
+measurements; tests pin the query plans).
 
 | Table            | Purpose                                                                      |
 | ---------------- | ---------------------------------------------------------------------------- |
@@ -238,8 +261,11 @@ Commit snapshots and raw blobs are never pruned. A review superseded by two or m
 ingests can no longer be committed; the commit answers `stale` and the user reviews
 again.
 
-Migrations run with foreign keys off, inside Drizzle's single migration transaction,
-and are followed by `PRAGMA foreign_key_check`: drizzle-kit rebuilds tables (copy into
+A local database is migrated when the app opens it; a remote one never is (concurrent
+cold starts would race): the deploy runs `pnpm db:migrate`, and the app refuses a
+database that is not exactly at its migrations, saying so. Migrations run with foreign
+keys off, as one atomic batch (libSQL's `migrate`), and are followed by
+`PRAGMA foreign_key_check`: drizzle-kit rebuilds tables (copy into
 `__new_<table>`, `DROP`, rename) for changes SQLite cannot `ALTER`, and with foreign
 keys on, `DROP TABLE` fails on, or cascades into, the referencing rows. A rebuild drops
 the table's triggers, so a migration that rebuilds `commits`, `snapshots`,
@@ -277,6 +303,21 @@ Users see `vN` (per-deck sequence); short ids are shown as secondary detail.
 3. In one transaction: verify HEAD still equals `expectedHeadCommitId`; refuse empty
    commits when HEAD exists and the diff is empty (both checked again, authoritatively);
    insert commit with `sequence = head.sequence + 1`; move the branch head.
+
+Refresh, capture ingestion, commit and untrack of one deck run under a per-deck lock
+(`KeyedMutex`), always taken before the database's write lock and never inside a
+transaction. The lock is per process, so on Netlify it is per function instance: it
+keeps one instance's requests from interleaving, while the compare-and-set on the branch
+head (step 3) is what keeps two instances from committing over each other. The fetch of
+step 2 happens outside any transaction; transactions hold no network request other than
+their own statements.
+
+Request-handling code gets services from `src/server/access` (`servicesFor(user)`,
+`shareLinkServicesFor(user)`, `sharedDeckServices(token)`) and the auth service from
+`getAuthService()`; all of them are asynchronous because the database is opened on first
+use (and a database that cannot be opened, or is not migrated, fails the request
+clearly). Reads that do not depend on each other are started together: remotely every
+query is a round trip.
 
 ### Fetch policy
 

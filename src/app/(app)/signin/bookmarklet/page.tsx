@@ -36,7 +36,8 @@ export default async function BookmarkletSignInPage({ searchParams }: PageProps<
   const { next: rawNext } = await searchParams;
   const next = safeRedirectPath(rawNext, '/');
   const [handoffToken, sessionToken] = await Promise.all([readHandoffToken(), readSessionToken()]);
-  const confirmation = await getAuthService().describeHandoff(handoffToken, sessionToken);
+  const auth = await getAuthService();
+  const confirmation = await auth.describeHandoff(handoffToken, sessionToken);
   if (confirmation === null) return <HandoffExpired signedIn={(await getCurrentUser()) !== null} />;
 
   const { displayName, keyLabel, keyCreatedAt, replaces, expiresAt } = confirmation;

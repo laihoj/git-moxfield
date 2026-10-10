@@ -63,7 +63,7 @@ export type DatabaseKind = 'remote' | 'local';
 /** Default wait limit for the in-process write lock. */
 export const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
 
-/** Default time a local file database waits for another process's lock (as better-sqlite3 did). */
+/** Default time a local file database waits for another process's lock. */
 export const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
 export interface LibsqlDatabaseOptions {
@@ -211,6 +211,15 @@ export function databaseKindOf(url: string): DatabaseKind {
 /** A description of the database `url` names that is safe to log (no credentials, no query). */
 export function describeDatabaseUrl(url: string): string {
   return parseDatabaseUrl(url).description;
+}
+
+/**
+ * The absolute path of the database file `url` names; `undefined` for in-memory and
+ * remote databases. @throws {DatabaseConfigError} for other URLs.
+ */
+export function databaseFileOf(url: string): string | undefined {
+  const target = parseDatabaseUrl(url);
+  return target.kind === 'local' ? target.file : undefined;
 }
 
 function text(value: Value | undefined): string {

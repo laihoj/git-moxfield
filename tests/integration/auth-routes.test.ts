@@ -27,7 +27,7 @@ function harness(): ServiceHarness {
 
 vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
-  getAuthService: () => harness().auth,
+  getAuthService: () => Promise.resolve(harness().auth),
 }));
 vi.mock('@/server/config', async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
@@ -38,8 +38,8 @@ const { GET: handoffRoute, POST: handoffConfirmRoute } = await import('@/app/api
 const { POST: e2eSession } = await import('@/app/api/e2e/session/route');
 const { GET: e2eSetupCode } = await import('@/app/api/e2e/setup-code/route');
 
-beforeEach(() => {
-  state.harness = createServiceHarness();
+beforeEach(async () => {
+  state.harness = await createServiceHarness();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(state.harness.clock.now());
 });
@@ -125,7 +125,9 @@ describe('GET /api/auth/handoff', () => {
     );
     expect(setCookies(response).size).toBe(0);
     expect((await harness().auth.resolveSession(victim.session.token))?.id).toBe(victim.user.id);
-    expect(harness().repos.sessions.listActiveForUser(owner.user.id, harness().clock.iso())).toHaveLength(1);
+    expect(
+      await harness().repos.sessions.listActiveForUser(owner.user.id, harness().clock.iso()),
+    ).toHaveLength(1);
     expect(await harness().auth.resolveSession(started.handoff.token)).toBeNull();
   });
 
@@ -343,14 +345,14 @@ describe('test-only e2e endpoints', () => {
       );
       expect(response.status).toBe(403);
     }
-    expect(harness().repos.users.count()).toBe(0);
+    expect(await harness().repos.users.count()).toBe(0);
   });
 
   it('do not exist unless GIT_MOXFIELD_E2E is set', async () => {
     state.config = parseConfig({});
     expect((await session({})).status).toBe(404);
     expect((await e2eSetupCode()).status).toBe(404);
-    expect(harness().repos.users.count()).toBe(0);
+    expect(await harness().repos.users.count()).toBe(0);
   });
 
   it('sign a new user in, with an optional bookmarklet', async () => {

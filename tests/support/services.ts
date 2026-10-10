@@ -86,7 +86,7 @@ export interface ServiceHarness {
   /** Services bound to `workspaceId`, on the same database, sources, clock and locks. */
   servicesForWorkspace(workspaceId: string): DeckServices;
   /** Creates a user with a workspace of their own (directly, bypassing invites). */
-  createUser(displayName: string, role?: UserRole): HarnessUser;
+  createUser(displayName: string, role?: UserRole): Promise<HarnessUser>;
   /** The auth service on the same database, config, clock and logger. */
   auth: AuthService;
 }
@@ -99,10 +99,11 @@ export interface ServiceHarnessOptions {
 }
 
 /**
- * Services over a fresh in-memory database. Defaults: no request spacing, a 10 s
- * refresh cooldown, auto refresh after 300 s and a one-hour block backoff.
+ * Services over a fresh in-memory database, closed when the current test finishes (see
+ * `openTestDatabase`). Defaults: no request spacing, a 10 s refresh cooldown, auto refresh
+ * after 300 s and a one-hour block backoff.
  */
-export function createServiceHarness(options: ServiceHarnessOptions = {}): ServiceHarness {
+export async function createServiceHarness(options: ServiceHarnessOptions = {}): Promise<ServiceHarness> {
   const api = new FakeMoxfieldApi();
   const clock = new ManualClock();
   const logger = recordingLogger();
@@ -121,7 +122,7 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}): Servi
     logger,
   });
   const sources = options.sources ? options.sources(defaults) : defaults;
-  const db = openTestDatabase();
+  const db = await openTestDatabase();
   const locks = new KeyedMutex();
   const servicesForWorkspace = (workspaceId: string): DeckServices =>
     createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks });
@@ -138,8 +139,8 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}): Servi
     logger,
     sibling: build,
     servicesForWorkspace,
-    createUser: (displayName, role = 'member') => {
-      const user = repos.users.create({ displayName, role });
+    createUser: async (displayName, role = 'member') => {
+      const user = await repos.users.create({ displayName, role });
       return { user, services: servicesForWorkspace(user.workspaceId) };
     },
     auth: createAuthService({ db, config, now: clock.now, logger }),

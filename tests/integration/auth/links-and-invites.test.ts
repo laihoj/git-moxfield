@@ -3,6 +3,7 @@
  * for new ones. All expire, work once (also when used concurrently) and are stored
  * hashed; admins (or the command line) create invites and recovery links.
  */
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
@@ -27,13 +28,13 @@ import { APP_URL, openShared, sharedHistory, shareLinksOf, tokenOfShareUrl } fro
 
 describe('device links', () => {
   it('sign another device in once, within 15 minutes', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { user } = await signUp(harness.auth, 'Mikko');
     const link = await harness.auth.createDeviceLink(user);
     expect(link.path).toMatch(/^\/signin\/gml_[A-Za-z0-9_-]{43}$/);
     expect(link.expiresAt).toBe(new Date(harness.clock.epochMs() + DEVICE_LINK_LIFETIME_MS).toISOString());
     const token = tokenOfPath(link.path);
-    expect(harness.db.$client.prepare('SELECT token_hash AS hash FROM login_links').all()).toEqual([
+    expect(await harness.db.all(sql`SELECT token_hash AS hash FROM login_links`)).toEqual([
       { hash: hashToken(token) },
     ]);
 
@@ -54,7 +55,7 @@ describe('device links', () => {
   });
 
   it('expire, and do nothing for disabled users or malformed tokens', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { user } = await signUp(harness.auth, 'Mikko');
     const expiring = tokenOfPath((await harness.auth.createDeviceLink(user)).path);
     const forDisabled = tokenOfPath((await harness.auth.createDeviceLink(user)).path);
@@ -63,7 +64,7 @@ describe('device links', () => {
     expect(await harness.auth.getLoginLink(expiring)).toEqual({ status: 'expired' });
     expect(await harness.auth.consumeLoginLink(expiring, 'Phone')).toBeNull();
 
-    harness.repos.users.setDisabled(user.id, true);
+    await harness.repos.users.setDisabled(user.id, true);
     expect(await harness.auth.getLoginLink(forDisabled)).toEqual({ status: 'expired' });
     expect(await harness.auth.getLoginLink('gml_short')).toEqual({ status: 'invalid' });
     expect(await harness.auth.getLoginLink(`gmi_${'A'.repeat(43)}`)).toEqual({ status: 'invalid' });
@@ -71,16 +72,16 @@ describe('device links', () => {
   });
 
   it('cannot be used for a disabled user', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { user } = await signUp(harness.auth, 'Mikko');
     const token = tokenOfPath((await harness.auth.createDeviceLink(user)).path);
-    harness.repos.users.setDisabled(user.id, true);
+    await harness.repos.users.setDisabled(user.id, true);
     expect(await harness.auth.getLoginLink(token)).toEqual({ status: 'invalid' });
     expect(await harness.auth.consumeLoginLink(token, 'Phone')).toBeNull();
   });
 
   it('sign in exactly once when used twice at the same time', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { user } = await signUp(harness.auth, 'Mikko');
     const token = tokenOfPath((await harness.auth.createDeviceLink(user)).path);
     const results = await Promise.all([
@@ -94,7 +95,7 @@ describe('device links', () => {
 
 describe('recovery links', () => {
   it('are created by admins or the command line for 24 hours; only the newest works', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
 
@@ -121,20 +122,20 @@ describe('recovery links', () => {
   });
 
   it('are refused for unknown and disabled users, and for the asking admin themselves', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     await expectServiceError(harness.auth.createRecoveryLink(SYSTEM_ACTOR, 'nope'), 'not-found');
     await expectServiceError(harness.auth.createRecoveryLink(admin.user, admin.user.id), 'invalid-input');
-    harness.repos.users.setDisabled(member.user.id, true);
+    await harness.repos.users.setDisabled(member.user.id, true);
     await expectServiceError(harness.auth.createRecoveryLink(SYSTEM_ACTOR, member.user.id), 'invalid-input');
-    expect(countRows(harness.db, 'login_links')).toBe(0);
+    expect(await countRows(harness.db, 'login_links')).toBe(0);
     // The command line may make one for an admin (the operator helping themselves).
     await harness.auth.createRecoveryLink(SYSTEM_ACTOR, admin.user.id);
   });
 
   it('sign out every other device of the person, revoke their keys and withdraw their links', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     const key = keyOfBookmarklet(
@@ -172,7 +173,7 @@ describe('recovery links', () => {
     }
 
     it('revoke every link to the person’s decks, however it was made, and nobody else’s', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
       const mikko = await sharedHistory(harness, 'Mikko');
       const anna = await sharedHistory(harness, 'Anna');
@@ -213,7 +214,7 @@ describe('recovery links', () => {
     });
 
     it('also end the links made in an earlier recovery’s session (an admin who used the link)', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
       const mikko = await sharedHistory(harness, 'Mikko');
       const used = tokenOfPath((await harness.auth.createRecoveryLink(admin.user, mikko.owner.user.id)).path);
@@ -232,7 +233,7 @@ describe('recovery links', () => {
   });
 
   it('leave a record the person sees, which signing the recovered browser out does not erase', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     expect(await harness.auth.listRecoveryUses(member.user)).toEqual([]);
@@ -260,7 +261,7 @@ describe('recovery links', () => {
   });
 
   it('between admins sign the other admin out everywhere, so a takeover cannot go unnoticed', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const first = await signUp(harness.auth, 'First', { role: 'admin' });
     const second = await signUp(harness.auth, 'Second', { role: 'admin' });
     const link = tokenOfPath((await harness.auth.createRecoveryLink(first.user, second.user.id)).path);
@@ -271,7 +272,7 @@ describe('recovery links', () => {
   });
 
   it('are listed to admins (never their tokens) and can be withdrawn', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     const other = await signUp(harness.auth, 'Anna');
@@ -307,10 +308,10 @@ describe('recovery links', () => {
   });
 
   it('cannot withdraw a device link through the recovery link admin action', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const member = await signUp(harness.auth, 'Mikko');
     const device = tokenOfPath((await harness.auth.createDeviceLink(member.user)).path);
-    const id = defined(harness.repos.loginLinks.getByTokenHash(hashToken(device))).id;
+    const id = defined(await harness.repos.loginLinks.getByTokenHash(hashToken(device))).id;
     expect(await harness.auth.revokeRecoveryLink(SYSTEM_ACTOR, id)).toBe(false);
     expect(await harness.auth.getLoginLink(device)).toMatchObject({ status: 'valid' });
   });
@@ -318,7 +319,7 @@ describe('recovery links', () => {
 
 describe('device links and keys', () => {
   it('start a session that descends from the key of the session that made the link', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const owner = await signUp(harness.auth, 'Mikko');
     const created = await harness.auth.createBookmarkletKey(owner.user, 'Laptop', 'http://localhost:3000');
     const viaKey = defined(
@@ -341,7 +342,7 @@ describe('device links and keys', () => {
 
 describe('invites', () => {
   it('are created by admins or the command line, never by members', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
 
@@ -369,7 +370,7 @@ describe('invites', () => {
   });
 
   it('create a user with a workspace of their own and sign them in', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const issued = await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member', note: 'for Anna' });
     const token = tokenOfPath(issued.path);
     expect(await harness.auth.getInvite(token)).toEqual({
@@ -399,7 +400,7 @@ describe('invites', () => {
   });
 
   it('keep an invite usable when the name is invalid', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const token = tokenOfPath((await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member' })).path);
     expect(await harness.auth.acceptInvite(token, '   ', 'Firefox')).toMatchObject({
       ok: false,
@@ -409,7 +410,7 @@ describe('invites', () => {
   });
 
   it('expire after 7 days, can be revoked while unused, and reject malformed tokens', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const expiring = await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
     const revoked = await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
 
@@ -434,22 +435,22 @@ describe('invites', () => {
     expect(await harness.auth.acceptInvite(`gmi_${'A'.repeat(43)}`, 'X', null)).toMatchObject({
       reason: 'invalid',
     });
-    expect(harness.repos.users.count()).toBe(0);
+    expect(await harness.repos.users.count()).toBe(0);
   });
 
   it('create exactly one user when accepted twice at the same time', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const token = tokenOfPath((await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member' })).path);
     const outcomes = await Promise.all([
       harness.auth.acceptInvite(token, 'First', null),
       harness.auth.acceptInvite(token, 'Second', null),
     ]);
     expect(outcomes.map((outcome) => (outcome.ok ? 'ok' : outcome.reason)).sort()).toEqual(['ok', 'used']);
-    expect(harness.repos.users.count()).toBe(1);
+    expect(await harness.repos.users.count()).toBe(1);
   });
 
   it('let the first admin adopt the history of a pre-account installation (the command-line claim)', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     // A single-user installation: a deck in the `local` workspace, no users.
     harness.api.setDeck(blueFarmSpec());
     const tracked = await harness.services.trackDeck(BLUE_FARM_URL);
@@ -464,13 +465,13 @@ describe('invites', () => {
 
     const second = await signUp(harness.auth, 'Second admin', { role: 'admin' });
     expect(second.user.workspaceId).not.toBe(LOCAL_WORKSPACE_ID);
-    expect(defined(harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).id).toBe(admin.user.id);
+    expect(defined(await harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).id).toBe(admin.user.id);
   });
 
   it('give the first admin of a fresh installation a workspace of their own', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Operator', { role: 'admin' });
     expect(admin.user.workspaceId).not.toBe(LOCAL_WORKSPACE_ID);
-    expect(harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).toBeNull();
+    expect(await harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).toBeNull();
   });
 });

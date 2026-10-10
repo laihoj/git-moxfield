@@ -19,7 +19,7 @@
  * {@link DeckConfinementError} (a 500) instead of answering with data.
  *
  * The view remembers the commits it returned, so build one per request (it is cheap)
- * and let it go with the request.
+ * and let it go with the request. A refusal rejects the call (every method is `async`).
  */
 import 'server-only';
 
@@ -60,45 +60,50 @@ export function confineToDeck(repos: HistoryRepositories, deckId: string): Histo
   const knownSnapshot = (hash: string): string =>
     snapshotHashes.has(hash) ? hash : refuse(`Snapshot ${hash}`);
 
+  // Every wrapper is `async`, so a refused identifier rejects the call like any other
+  // failure instead of throwing synchronously.
   return {
     decks: {
-      getById: (id) => repos.decks.getById(deck(id)),
+      getById: async (id) => repos.decks.getById(deck(id)),
     },
     commits: {
-      getById: (id) => commit(repos.commits.getById(id)),
-      getBySequence: (id, sequence) => commit(repos.commits.getBySequence(deck(id), sequence)),
-      findByIdPrefix: (id, prefix) => commit(repos.commits.findByIdPrefix(deck(id), prefix)),
-      head: (id) => commit(repos.commits.head(deck(id))),
-      lineage: (id, fromCommitId) =>
+      getById: async (id) => commit(await repos.commits.getById(id)),
+      getBySequence: async (id, sequence) => commit(await repos.commits.getBySequence(deck(id), sequence)),
+      findByIdPrefix: async (id, prefix) => commit(await repos.commits.findByIdPrefix(deck(id), prefix)),
+      head: async (id) => commit(await repos.commits.head(deck(id))),
+      lineage: async (id, fromCommitId) =>
         commitList(
-          repos.commits.lineage(deck(id), fromCommitId === undefined ? undefined : knownCommit(fromCommitId)),
+          await repos.commits.lineage(
+            deck(id),
+            fromCommitId === undefined ? undefined : knownCommit(fromCommitId),
+          ),
         ),
-      listForDeck: (id) => commitList(repos.commits.listForDeck(deck(id))),
-      count: (id) => repos.commits.count(deck(id)),
+      listForDeck: async (id) => commitList(await repos.commits.listForDeck(deck(id))),
+      count: async (id) => repos.commits.count(deck(id)),
     },
     snapshots: {
-      get: (hash) => repos.snapshots.get(knownSnapshot(hash)),
-      getMany: (hashes) => repos.snapshots.getMany([...hashes].map(knownSnapshot)),
+      get: async (hash) => repos.snapshots.get(knownSnapshot(hash)),
+      getMany: async (hashes) => repos.snapshots.getMany([...hashes].map(knownSnapshot)),
     },
     tags: {
-      listForCommit: (id) => repos.tags.listForCommit(knownCommit(id)),
-      listForCommits: (ids) => repos.tags.listForCommits([...ids].map(knownCommit)),
-      listForDeck: (id) => repos.tags.listForDeck(deck(id)),
-      commitsWithTag: (id, tag) => commitList(repos.tags.commitsWithTag(deck(id), tag)),
+      listForCommit: async (id) => repos.tags.listForCommit(knownCommit(id)),
+      listForCommits: async (ids) => repos.tags.listForCommits([...ids].map(knownCommit)),
+      listForDeck: async (id) => repos.tags.listForDeck(deck(id)),
+      commitsWithTag: async (id, tag) => commitList(await repos.tags.commitsWithTag(deck(id), tag)),
     },
     notes: {
-      listForCommit: (id) => repos.notes.listForCommit(knownCommit(id)),
+      listForCommit: async (id) => repos.notes.listForCommit(knownCommit(id)),
     },
     cardIndex: {
-      versionsContainingCard: (id, key) => repos.cardIndex.versionsContainingCard(deck(id), key),
-      searchCardsInDeck: (id, query, limit) =>
+      versionsContainingCard: async (id, key) => repos.cardIndex.versionsContainingCard(deck(id), key),
+      searchCardsInDeck: async (id, query, limit) =>
         repos.cardIndex.searchCardsInDeck(deck(id), query, limit, { includeWorking: false }),
     },
     // Card facts (type line, mana cost) are reference data about card names, scoped to the
     // workspace, not deck history; the history views only look up the keys of cards in the
     // deck's committed versions.
     catalog: {
-      getMany: (keys) => repos.catalog.getMany(keys),
+      getMany: async (keys) => repos.catalog.getMany(keys),
     },
   };
 }

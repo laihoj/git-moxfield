@@ -80,5 +80,7 @@ export default defineConfig([
     'drizzle/**',
     'data/**',
     'coverage/**',
+    // Output of local `netlify build` / `netlify dev` runs: bundled functions, not source.
+    '.netlify/**',
   ]),
 ]);

@@ -96,7 +96,16 @@ export interface HranaStub {
   readonly url: string;
   /** Pipeline requests received so far. */
   readonly requests: () => number;
+  /** SQL of every statement executed so far, in order. */
+  readonly statements: () => readonly string[];
   close(): Promise<void>;
+}
+
+export interface HranaStubOptions {
+  /** What `PRAGMA foreign_keys` returns. Default 1. */
+  foreignKeys?: 0 | 1;
+  /** Statements that return no rows (default: every statement returns one row). */
+  empty?: RegExp;
 }
 
 interface PipelineRequest {
@@ -115,10 +124,10 @@ function readBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function integerResult(column: string, value: number): unknown {
+function integerResult(column: string, value: number | undefined): unknown {
   return {
     cols: [{ name: column, decltype: null }],
-    rows: [[{ type: 'integer', value: String(value) }]],
+    rows: value === undefined ? [] : [[{ type: 'integer', value: String(value) }]],
     affected_row_count: 0,
     last_insert_rowid: null,
   };
@@ -126,11 +135,12 @@ function integerResult(column: string, value: number): unknown {
 
 /**
  * A minimal libSQL server (Hrana 2 over HTTP, JSON) that answers every statement with one
- * integer row: `PRAGMA foreign_keys` with `foreignKeys`, anything else with 1. Enough to
- * open a remote database without a real server.
+ * integer row: `PRAGMA foreign_keys` with `foreignKeys`, statements matching `empty` with
+ * no rows, anything else with 1. Enough to open a remote database without a real server.
  */
-export async function startHranaStub(options: { foreignKeys?: 0 | 1 } = {}): Promise<HranaStub> {
+export async function startHranaStub(options: HranaStubOptions = {}): Promise<HranaStub> {
   let requests = 0;
+  const statements: string[] = [];
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (request.method !== 'POST' || request.url !== '/v2/pipeline') {
       response.writeHead(404).end();
@@ -141,10 +151,12 @@ export async function startHranaStub(options: { foreignKeys?: 0 | 1 } = {}): Pro
     const results = body.requests.map((item) => {
       if (item.type === 'close') return { type: 'ok', response: { type: 'close' } };
       if (item.type === 'execute') {
-        const isForeignKeys = /^\s*PRAGMA\s+foreign_keys\s*;?\s*$/i.test(item.stmt?.sql ?? '');
+        const statement = item.stmt?.sql ?? '';
+        statements.push(statement);
+        const isForeignKeys = /^\s*PRAGMA\s+foreign_keys\s*;?\s*$/i.test(statement);
         const result = isForeignKeys
           ? integerResult('foreign_keys', options.foreignKeys ?? 1)
-          : integerResult('1', 1);
+          : integerResult('1', options.empty?.test(statement) === true ? undefined : 1);
         return { type: 'ok', response: { type: 'execute', result } };
       }
       return { type: 'error', error: { message: `Unsupported request ${item.type}`, code: 'UNSUPPORTED' } };
@@ -162,6 +174,7 @@ export async function startHranaStub(options: { foreignKeys?: 0 | 1 } = {}): Pro
   return {
     url: `http://127.0.0.1:${port}`,
     requests: () => requests,
+    statements: () => [...statements],
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {

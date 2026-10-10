@@ -57,6 +57,13 @@
       "when": 1791639657836,
       "tag": "0007_share_links_credential_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791649739112,
+      "tag": "0008_card_key_snapshot_index",
+      "breakpoints": true
     }
   ]
 }

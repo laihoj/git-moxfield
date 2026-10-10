@@ -15,20 +15,22 @@
  *
  * Links are printed with the base URL from --base-url, else `PUBLIC_APP_URL`, else
  * http://localhost:3000. They are secrets: hand them to the person they are for, and do
- * not paste them anywhere public. Reads `DATABASE_PATH` (and the rest of the
- * configuration) from the environment and `.env*` files, like the app.
+ * not paste them anywhere public. Works on the app's database (`TURSO_DATABASE_URL`, else
+ * `DATABASE_PATH`) and the rest of its configuration, read from the environment and
+ * `.env*` files like the app does (see `./database`).
  */
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { createAuthService, SYSTEM_ACTOR, type AuthService } from '@/server/auth/service';
 import type { UserDTO } from '@/server/auth/types';
 import { getConfig, type AppConfig } from '@/server/config';
-import { openDatabase, type Db } from '@/server/db/client';
+import type { Db } from '@/server/db/client';
+import type { LibsqlDatabase } from '@/server/db/libsql';
 import { createLogger, type Logger } from '@/server/logger';
 import { isServiceError } from '@/server/services/errors';
 
+import { describeConfiguredDatabase, describeFailure, openConfiguredDatabase } from './database';
+import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 
 const DEFAULT_APP_URL = 'http://localhost:3000';
@@ -207,17 +209,24 @@ function quietLogger(): Logger {
 }
 
 async function main(): Promise<number> {
+  let config: AppConfig;
   try {
     loadEnvFiles();
+    config = getConfig();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     return 1;
   }
-  const config = getConfig();
-  const db = openDatabase(config.DATABASE_PATH);
+  let database: LibsqlDatabase;
+  try {
+    database = await openConfiguredDatabase(config);
+  } catch (error) {
+    console.error(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error)}`);
+    return 1;
+  }
   try {
     return await runUsersCommand(process.argv.slice(2), {
-      db,
+      db: database.db,
       config,
       io: {
         out: (line) => {
@@ -229,30 +238,9 @@ async function main(): Promise<number> {
       },
     });
   } finally {
-    db.$client.close();
-  }
-}
-
-/** Whether Node runs this file as the main module (symlinks resolved, as for `import.meta.url`). */
-function isEntryPoint(): boolean {
-  const entryPoint = process.argv[1];
-  if (entryPoint === undefined) return false;
-  try {
-    return realpathSync(entryPoint) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
+    database.close();
   }
 }
 
 // Run only as a script (`pnpm users`), not when imported by tests.
-if (isEntryPoint()) {
-  main().then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (error: unknown) => {
-      console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-      process.exitCode = 1;
-    },
-  );
-}
+if (isEntryPoint(import.meta.url)) runMain('users', main);

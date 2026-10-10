@@ -77,10 +77,13 @@ function deckLocks(): KeyedMutex {
  * Deck services for `user` (owner scope): everything they can see and change, and
  * nothing else. Cheap to call; the process-wide state behind it (database connection,
  * deck sources with their block backoff and throttle, per-deck locks) is shared.
+ *
+ * Asynchronous because the database is opened on first use: it rejects when the
+ * database cannot be opened (see `getDb`).
  */
-export function servicesFor(user: SessionUser): DeckServices {
+export async function servicesFor(user: SessionUser): Promise<DeckServices> {
   return createServices({
-    db: getDb(),
+    db: await getDb(),
     sources: getDeckSourceRegistry(),
     config: getConfig(),
     workspaceId: user.workspaceId,
@@ -93,8 +96,8 @@ export function servicesFor(user: SessionUser): DeckServices {
  * The share links of `user`'s decks (owner scope): create, list, revoke. `user` must be
  * the request's session user; new links record the key that session descends from.
  */
-export function shareLinkServicesFor(user: SessionUser): ShareLinkServices {
-  return createShareLinkServices({ db: getDb(), user, logger: createLogger('share-links') });
+export async function shareLinkServicesFor(user: SessionUser): Promise<ShareLinkServices> {
+  return createShareLinkServices({ db: await getDb(), user, logger: createLogger('share-links') });
 }
 
 /**
@@ -106,9 +109,9 @@ export function shareLinkServicesFor(user: SessionUser): ShareLinkServices {
  * Records the view (at most hourly). Viewer pages need no session and should not look
  * for one.
  */
-export function sharedDeckServices(token: unknown): Promise<SharedDeckAccess | null> {
+export async function sharedDeckServices(token: unknown): Promise<SharedDeckAccess | null> {
   return openSharedDeck(token, {
-    db: getDb(),
+    db: await getDb(),
     sources: getDeckSourceRegistry(),
     logger: createLogger('share-links'),
   });

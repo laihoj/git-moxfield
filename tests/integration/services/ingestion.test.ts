@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { DeckSourceError, type DeckSource } from '@/integrations/deck-source';
@@ -21,7 +22,7 @@ const OTHER_DECK = blueFarmSpec({ publicId: 'OtherDeckForCapture0001', name: 'Ot
 
 describe('deck services: server fetch failures', () => {
   it('pauses server fetches after a Cloudflare block and keeps browser capture working', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     api.setDeck(blueFarmSpec());
     api.mode = 'blocked';
@@ -142,7 +143,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('never fetches when server fetching is turned off', async () => {
-    const harness = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+    const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const { services, api } = harness;
     api.setDeck(blueFarmSpec());
 
@@ -174,7 +175,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('surfaces Moxfield rate limiting with its Retry-After', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const deckId = await trackDeck(harness);
     harness.api.mode = 'rate-limited';
     harness.clock.advance(60);
@@ -196,7 +197,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('sends nothing to Moxfield until its Retry-After has passed', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckA = await trackDeck(harness);
     const deckB = await trackDeck(harness, OTHER_DECK);
@@ -240,7 +241,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('suggests no background refresh while Moxfield asked to wait', async () => {
-    const harness = createServiceHarness({ env: { AUTO_REFRESH_AFTER_SECONDS: '15' } });
+    const harness = await createServiceHarness({ env: { AUTO_REFRESH_AFTER_SECONDS: '15' } });
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     api.mode = 'rate-limited'; // Retry-After: 30
@@ -254,7 +255,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('enforces the per-deck refresh cooldown without network requests', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     const requests = api.requests.length;
@@ -284,7 +285,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('ingests the deck without its primer when the primer request fails', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -310,7 +311,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('reports a primer that arrives after a primer-less version as a change', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     // A bare deck paste has no primer; it is committed as v1.
     const pasted = await services.ingestCapture({
@@ -342,7 +343,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('does not report an empty primer that arrives after a primer-less version', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     const noPrimer = blueFarmSpec({ primer: '' });
     api.mode = 'primer-down';
@@ -362,7 +363,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('keeps a bounded number of observations however often the deck is checked', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, db } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -383,9 +384,10 @@ describe('deck services: server fetch failures', () => {
         track: false,
       });
     }
-    expect(countRows(db, 'observations')).toBeLessThanOrEqual(2);
-    expect(countRows(db, 'raw_blobs')).toBeLessThanOrEqual(countRows(db, 'commits') + 2);
-    expect(countRows(db, 'snapshots')).toBeLessThanOrEqual(countRows(db, 'commits') + 2);
+    const commits = await countRows(db, 'commits');
+    expect(await countRows(db, 'observations')).toBeLessThanOrEqual(2);
+    expect(await countRows(db, 'raw_blobs')).toBeLessThanOrEqual(commits + 2);
+    expect(await countRows(db, 'snapshots')).toBeLessThanOrEqual(commits + 2);
 
     // The history is intact and committing keeps working.
     await publishAndRefresh(
@@ -394,21 +396,19 @@ describe('deck services: server fetch failures', () => {
       moveCard(blueFarmSpec({ version: 50 }), 'Dress Down', 'mainboard', 'considering'),
     );
     expect(committed(await commitReviewed(harness, deckId, 'Dress Down to Considering')).sequence).toBe(2);
-    const dangling = db.$client
-      .prepare(
-        `SELECT COUNT(*) AS n FROM commits
-         WHERE NOT EXISTS (SELECT 1 FROM snapshots WHERE hash = commits.snapshot_hash)
-            OR NOT EXISTS (SELECT 1 FROM raw_blobs WHERE hash = commits.raw_blob_hash)`,
-      )
-      .get() as { n: number };
-    expect(dangling.n).toBe(0);
-    expect(db.$client.pragma('foreign_key_check')).toEqual([]);
+    const dangling = await db.all<{ n: number }>(
+      sql`SELECT COUNT(*) AS n FROM commits
+          WHERE NOT EXISTS (SELECT 1 FROM snapshots WHERE hash = commits.snapshot_hash)
+             OR NOT EXISTS (SELECT 1 FROM raw_blobs WHERE hash = commits.raw_blob_hash)`,
+    );
+    expect(dangling).toEqual([{ n: 0 }]);
+    expect(await db.all(sql`PRAGMA foreign_key_check`)).toEqual([]);
     expect(defined(await services.getVersion(deckId, 1)).snapshot.zones.mainboard).toBeDefined();
     expect(defined(await services.getOverview(deckId)).status).toBe('clean');
   });
 
   it('commits a review rendered just before a refresh, and asks for a new review after more', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -452,7 +452,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('reports Moxfield outages and missing decks', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     const requests = api.requests.length;
@@ -472,7 +472,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('hides unexpected errors behind a generic message and logs them', async () => {
-    const harness = createServiceHarness({
+    const harness = await createServiceHarness({
       sources: (defaults) => {
         const moxfield = defaults.require('moxfield');
         const failing: DeckSource = Object.create(moxfield) as DeckSource;
@@ -500,7 +500,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('rejects unusable captured data with a schema error', async () => {
-    const { services } = createServiceHarness();
+    const { services } = await createServiceHarness();
     for (const data of ['', 'not json', { content: '# just a primer' }, { publicId: 'x', boards: 7 }]) {
       await expect(services.ingestCapture({ data, method: 'manual-paste', track: true })).rejects.toSatisfy(
         (error: unknown) => error instanceof DeckSourceError && error.code === 'schema',
@@ -510,7 +510,7 @@ describe('deck services: server fetch failures', () => {
   });
 
   it('removes a deck with its entire history when untracked', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, db } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version', ['stable']));
@@ -534,7 +534,7 @@ describe('deck services: server fetch failures', () => {
       'version_tags',
       'commit_notes',
     ]) {
-      expect(countRows(db, table)).toBe(0);
+      expect(await countRows(db, table)).toBe(0);
     }
     // Untracking twice is harmless.
     await services.untrackDeck(deckId);

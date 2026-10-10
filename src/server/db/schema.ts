@@ -75,6 +75,11 @@ export const snapshots = sqliteTable('snapshots', {
 /**
  * Derived index of snapshot contents for card history and search. Rebuildable from
  * `snapshots.canonical_json` at any time.
+ *
+ * `(card_key, snapshot_hash)` lets card history and search probe one card per version of
+ * a deck (rows read ≈ versions + hits) instead of reading every card of every version;
+ * Turso bills every row a query reads (ADR 0008). Its `card_key` prefix also serves
+ * lookups by card alone.
  */
 export const snapshotCards = sqliteTable(
   'snapshot_cards',
@@ -89,7 +94,7 @@ export const snapshotCards = sqliteTable(
   },
   (t) => [
     primaryKey({ columns: [t.snapshotHash, t.zone, t.cardKey] }),
-    index('snapshot_cards_card_key_idx').on(t.cardKey),
+    index('snapshot_cards_card_key_snapshot_idx').on(t.cardKey, t.snapshotHash),
   ],
 );
 

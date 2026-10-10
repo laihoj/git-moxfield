@@ -2,10 +2,14 @@
  * Browser capture: parsing what the user's browser hands over (bookmarklet envelope or
  * manually pasted JSON), and building the bookmarklet itself.
  *
- * The protocol is specified in `./capture-protocol`.
+ * The protocol is specified in `./capture-protocol`, the transport encoding of the
+ * payload (compression) in `./capture-codec-protocol`. {@link parseMoxfieldCapture} takes
+ * the capture's JSON text or value, so a compressed payload must be decoded first
+ * (`decodeCapturePayload` in `./capture-codec`, which the capture endpoints call).
  */
 import { DeckSourceError } from '../deck-source';
 
+import { ENCODE_CAPTURE_PAYLOAD_SOURCE } from './capture-codec-protocol';
 import {
   BOOKMARKLET_KEY_PATTERN,
   CAPTURE_ENVELOPE_KIND,
@@ -184,10 +188,17 @@ function withoutTrailingSlash(url: URL): string {
 }
 
 /**
- * Shared prelude: status overlay (textContent only), deck/primer fetching and the
- * deck-page check. `C` is the JSON-encoded configuration.
+ * Shared prelude: status overlay (textContent only), deck/primer fetching, the payload
+ * encoder and the deck-page check. `C` is the JSON-encoded configuration.
+ *
+ * `capture(id)` resolves with the capture payload: the envelope JSON, compressed by
+ * `encode` (`ENCODE_CAPTURE_PAYLOAD_SOURCE`, which returns the JSON unchanged in browsers
+ * without `CompressionStream`). Should compressing fail anyway, the plain JSON is sent:
+ * the server accepts both. Both modes send this one payload everywhere it goes (PAYLOAD
+ * message, form field, clipboard).
  */
 const PRELUDE = String.raw`
+const encode = ${ENCODE_CAPTURE_PAYLOAD_SOURCE};
 let box = null;
 const say = (text, bad) => {
   try {
@@ -223,7 +234,12 @@ const capture = async (id) => {
   } catch (e) {
     primerError = 'Primer not captured: ' + why(e);
   }
-  return JSON.stringify({ kind: C.kind, version: C.version, source: 'moxfield', pageUrl: location.origin + location.pathname, capturedAt: new Date().toISOString(), deck, primer, primerError });
+  const json = JSON.stringify({ kind: C.kind, version: C.version, source: 'moxfield', pageUrl: location.origin + location.pathname, capturedAt: new Date().toISOString(), deck, primer, primerError });
+  try {
+    return await encode(json);
+  } catch (_) {
+    return json;
+  }
 };
 const m = /^\/decks\/([A-Za-z0-9_-]{4,64})(?:\/|$)/.exec(location.pathname);
 if (location.origin !== C.site || !m) {
@@ -232,11 +248,14 @@ if (location.origin !== C.site || !m) {
 }
 `;
 
-/** Popup mode: window.open first (synchronously), then postMessage handshake. */
+/**
+ * Popup mode: window.open first (synchronously), then postMessage handshake. When the
+ * popup is blocked, the payload goes to the clipboard for the capture page's paste form.
+ */
 const POPUP_MODE = String.raw`
 const n = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 const popup = window.open(C.app + C.capturePath + '#n=' + n, '_blank');
-const json = capture(m[1]);
+const payload = capture(m[1]);
 if (!popup) {
   const pasteUrl = C.app + C.capturePath + '?' + C.pasteQuery;
   const copied = () => {
@@ -247,10 +266,10 @@ if (!popup) {
     say('Could not copy the deck: ' + why(e), true);
     alert('git-moxfield: the popup was blocked and the deck could not be copied (' + why(e) + '). Allow popups for this site and try again.');
   };
-  const copyText = () => json.then((t) => navigator.clipboard.writeText(t)).then(copied, failed);
+  const copyText = () => payload.then((t) => navigator.clipboard.writeText(t)).then(copied, failed);
   say('Popup blocked; copying the deck to the clipboard…');
   try {
-    navigator.clipboard.write([new ClipboardItem({ 'text/plain': json.then((t) => new Blob([t], { type: 'text/plain' })) })]).then(copied, copyText);
+    navigator.clipboard.write([new ClipboardItem({ 'text/plain': payload.then((t) => new Blob([t], { type: 'text/plain' })) })]).then(copied, copyText);
   } catch (_) {
     copyText();
   }
@@ -268,7 +287,7 @@ const onMessage = (e) => {
   if (e.source !== popup || e.origin !== C.appOrigin || !d || typeof d !== 'object' || d.n !== n) return;
   if (d.t === C.ready && !answered) {
     answered = true;
-    json.then(
+    payload.then(
       (j) => popup.postMessage({ t: C.payload, n, json: j, key: C.key }, C.appOrigin),
       (err) => {
         popup.postMessage({ t: C.error, n, message: why(err) }, C.appOrigin);
@@ -289,10 +308,10 @@ timer = setTimeout(() => {
   stop();
   say('No answer from ' + C.app + '. Is git-moxfield running? Run the bookmarklet again.', true);
 }, C.timeout);
-json.catch((e) => say('Could not read the deck: ' + why(e), true));
+payload.catch((e) => say('Could not read the deck: ' + why(e), true));
 `;
 
-/** Same-tab mode: fetch, then POST the key and the envelope to git-moxfield in this tab. */
+/** Same-tab mode: fetch, then POST the key and the payload to git-moxfield in this tab. */
 const SAME_TAB_MODE = String.raw`
 say('Reading the deck…');
 capture(m[1]).then((j) => {
@@ -326,9 +345,11 @@ capture(m[1]).then((j) => {
  * The script is self-contained ES2020 (no external scripts), runs only on
  * `{siteOrigin}/decks/{id}`, fetches the deck and primer endpoints as the user's own
  * browser, and hands the {@link import('./capture-protocol').CaptureEnvelope} to
- * git-moxfield as described in `./capture-protocol`. Messages are only exchanged with
- * the exact app origin (never `'*'`) and carry a fresh 128-bit nonce. A small status
- * overlay on the Moxfield page reports progress; failures end in an `alert`.
+ * git-moxfield as described in `./capture-protocol`, gzip-compressed as described in
+ * `./capture-codec-protocol` (plain JSON in browsers that cannot compress). Messages are
+ * only exchanged with the exact app origin (never `'*'`) and carry a fresh 128-bit nonce.
+ * A small status overlay on the Moxfield page reports progress; failures end in an
+ * `alert`.
  *
  * Each mode embeds only the configuration it uses. Both carry the owner's key, which
  * makes every bookmarklet a credential: whoever holds it can send decks to its owner's

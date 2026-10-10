@@ -1,6 +1,7 @@
 # ADR 0005: Technology stack
 
-- Status: accepted
+- Status: accepted; the database driver is superseded by
+  [ADR 0008](0008-hosting-netlify-and-turso.md) (libSQL everywhere, Turso in production)
 - Date: 2026-10-09
 
 ## Decision

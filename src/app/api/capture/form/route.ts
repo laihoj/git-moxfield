@@ -2,8 +2,12 @@
  * `POST /api/capture/form`: target of the same-tab bookmarklet (phones and in-app
  * browsers, where popups are blocked). The bookmarklet submits a hidden form from the
  * Moxfield deck page with two fields: `token`, the user's bookmarklet key, and `payload`,
- * the capture envelope JSON. The deck goes into the key owner's workspace, and the
- * browser goes on to the deck page through the sign-in hand-off (below).
+ * the capture payload (the envelope JSON, compressed as described in
+ * `capture-codec-protocol.ts`, or plain). The payload is decoded, within hard size limits,
+ * only once the key is accepted. The deck goes into the key owner's workspace, and the
+ * browser goes on to the deck page through the sign-in hand-off (below); a capture that
+ * cannot be used leads to the paste form instead, with `error=too-large` (over the size
+ * limits) or `error=invalid` (damaged, or not a Moxfield deck).
  *
  * Authentication is the **bookmarklet key**, a per-user secret: it decides which
  * workspace receives the capture, and requests without a valid key get 403, with a page
@@ -39,6 +43,7 @@
  */
 import type { NextRequest } from 'next/server';
 
+import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD } from '@/integrations/moxfield/capture-protocol';
 import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
@@ -50,7 +55,7 @@ import type { StartedHandoff } from '@/server/auth/types';
 import { getConfig } from '@/server/config';
 import { createLogger } from '@/server/logger';
 
-import { isUnusableCaptureError } from '../errors';
+import { classifyRejectedCapture } from '../errors';
 import { describeRejectedKey, isAcceptableCaptureOrigin } from '../form-guard';
 import { CAPTURE_FORM_BODY_LIMIT, declaredTooLarge, readBodyLimited } from '../read-body';
 
@@ -118,7 +123,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const key = form.get(CAPTURE_FORM_TOKEN_FIELD);
-  const started = await getAuthService().startKeyHandoff(key, request.headers.get('user-agent'));
+  const auth = await getAuthService();
+  const started = await auth.startKeyHandoff(key, request.headers.get('user-agent'));
   if (started === null) {
     // Never log the key itself, only why it was not accepted.
     log.warn('Rejected same-tab capture without a valid bookmarklet key', {
@@ -135,8 +141,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const outcome = await servicesFor(started.user).ingestCapture({
-      data: payload,
+    const services = await servicesFor(started.user);
+    const outcome = await services.ingestCapture({
+      data: await decodeCapturePayload(payload),
       method: 'browser-capture',
       track: true,
     });
@@ -145,7 +152,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
     return handOff(request, started, pastePageWithError('failed'));
   } catch (error) {
-    if (isUnusableCaptureError(error)) return handOff(request, started, pastePageWithError('invalid'));
+    const rejected = classifyRejectedCapture(error);
+    if (rejected !== null) return handOff(request, started, pastePageWithError(rejected.formError));
     log.error('Same-tab capture failed', { error, userId: started.user.id });
     return handOff(request, started, pastePageWithError('failed'));
   }

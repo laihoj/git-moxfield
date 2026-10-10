@@ -8,7 +8,14 @@ import type { DeckSourceErrorCode } from '@/integrations/deck-source';
 import { branches, commits, decks, observations } from '@/server/db/schema';
 
 import { corruptData, decodeJson, encodeJson, isRecord } from './codec';
-import { withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import {
+  isUniqueViolation,
+  withTransaction,
+  write,
+  writeAll,
+  type LibsqlExecutor,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 import { deleteUnreferencedRawBlobs } from './raw-blobs';
 import { deleteUnreferencedSnapshots } from './snapshots';
@@ -66,38 +73,52 @@ export interface DeckRepository {
    * @throws {RepositoryError} `conflict` when the deck is already tracked;
    * `invalid-input` when source or external id is empty.
    */
-  create(input: NewDeck): DeckRecord;
-  getById(id: string): DeckRecord | null;
-  getBySourceExternal(source: string, externalId: string): DeckRecord | null;
+  create(input: NewDeck): Promise<DeckRecord>;
+  getById(id: string): Promise<DeckRecord | null>;
+  getBySourceExternal(source: string, externalId: string): Promise<DeckRecord | null>;
   /** All decks of the workspace, most recently updated first (then by name). */
-  list(): DeckRecord[];
+  list(): Promise<DeckRecord[]>;
   /**
    * Refreshes the cached listing info. `updatedAt` only moves when a value actually
    * changed, so routine refreshes do not reorder the deck list.
    * @returns whether anything changed.
    * @throws {RepositoryError} `not-found` for an unknown deck.
    */
-  updateCachedInfo(id: string, info: DeckCachedInfo): boolean;
+  updateCachedInfo(id: string, info: DeckCachedInfo): Promise<boolean>;
   /** @throws {RepositoryError} `not-found` for an unknown deck. */
-  recordFetchAttempt(id: string, at: string): void;
+  recordFetchAttempt(id: string, at: string): Promise<void>;
   /**
    * Records the error of the latest fetch, or clears it with `null` after a success.
    * @throws {RepositoryError} `not-found` for an unknown deck.
    */
-  recordFetchError(id: string, error: FetchErrorRecord | null): void;
+  recordFetchError(id: string, error: FetchErrorRecord | null): Promise<void>;
   /**
    * Deletes a deck with its entire history (branches, commits, observations, tags,
    * notes). Snapshots and raw payloads that no other deck references are removed too.
    * @returns `false` when the deck did not exist.
    */
-  delete(id: string): boolean;
+  delete(id: string): Promise<boolean>;
 }
 
 export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
   const inWorkspace = eq(decks.workspaceId, ctx.workspaceId);
 
-  function requireDeck(db: DbExecutor, id: string): void {
-    const row = db
+  const findBySource = (db: LibsqlExecutor, source: string, externalId: string) =>
+    db
+      .select()
+      .from(decks)
+      .where(and(inWorkspace, eq(decks.source, source), eq(decks.externalId, externalId)))
+      .get();
+
+  const alreadyTracked = (input: NewDeck, existingId: string, cause?: unknown): RepositoryError =>
+    new RepositoryError(
+      'conflict',
+      `Deck ${input.source}:${input.externalId} is already tracked as ${existingId}`,
+      cause === undefined ? undefined : { cause },
+    );
+
+  async function requireDeck(db: LibsqlExecutor, id: string): Promise<void> {
+    const row = await db
       .select({ id: decks.id })
       .from(decks)
       .where(and(inWorkspace, eq(decks.id, id)))
@@ -106,56 +127,55 @@ export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
   }
 
   return {
-    create(input) {
+    async create(input) {
       if (input.source.trim() === '' || input.externalId.trim() === '') {
         throw new RepositoryError('invalid-input', 'A deck needs a source and an external id');
       }
-      return withTransaction(ctx, ({ db }) => {
-        const existing = db
-          .select({ id: decks.id })
-          .from(decks)
-          .where(and(inWorkspace, eq(decks.source, input.source), eq(decks.externalId, input.externalId)))
-          .get();
-        if (existing) {
-          throw new RepositoryError(
-            'conflict',
-            `Deck ${input.source}:${input.externalId} is already tracked as ${existing.id}`,
-          );
-        }
-        const now = ctx.now();
-        const id = ctx.newId();
-        const row = db
-          .insert(decks)
-          .values({
-            id,
-            workspaceId: ctx.workspaceId,
-            source: input.source,
-            externalId: input.externalId,
-            url: input.url,
-            name: input.name,
-            format: input.format,
-            headBranchName: MAIN_BRANCH_NAME,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .returning()
-          .get();
-        db.insert(branches)
-          .values({
-            id: ctx.newId(),
+      const existing = await findBySource(ctx.db, input.source, input.externalId);
+      if (existing) throw alreadyTracked(input, existing.id);
+      const now = ctx.now();
+      const id = ctx.newId();
+      const branchId = ctx.newId();
+      try {
+        // Deck and main branch in one atomic batch: one round trip, no transaction.
+        const [inserted] = await writeAll(ctx, (db) => [
+          db
+            .insert(decks)
+            .values({
+              id,
+              workspaceId: ctx.workspaceId,
+              source: input.source,
+              externalId: input.externalId,
+              url: input.url,
+              name: input.name,
+              format: input.format,
+              headBranchName: MAIN_BRANCH_NAME,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning(),
+          db.insert(branches).values({
+            id: branchId,
             deckId: id,
             name: MAIN_BRANCH_NAME,
             kind: 'main',
             createdAt: now,
             updatedAt: now,
-          })
-          .run();
+          }),
+        ]);
+        const row = inserted[0];
+        if (!row) throw new Error(`Inserting deck ${id} returned no row`);
         return toDeckRecord(row);
-      });
+      } catch (error) {
+        // Another request tracked the same deck since the check above.
+        if (!isUniqueViolation(error)) throw error;
+        const raced = await findBySource(ctx.db, input.source, input.externalId);
+        throw alreadyTracked(input, raced?.id ?? 'another deck', error);
+      }
     },
 
-    getById(id) {
-      const row = ctx.db
+    async getById(id) {
+      const row = await ctx.db
         .select()
         .from(decks)
         .where(and(inWorkspace, eq(decks.id, id)))
@@ -163,76 +183,77 @@ export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
       return row ? toDeckRecord(row) : null;
     },
 
-    getBySourceExternal(source, externalId) {
-      const row = ctx.db
-        .select()
-        .from(decks)
-        .where(and(inWorkspace, eq(decks.source, source), eq(decks.externalId, externalId)))
-        .get();
+    async getBySourceExternal(source, externalId) {
+      const row = await findBySource(ctx.db, source, externalId);
       return row ? toDeckRecord(row) : null;
     },
 
-    list() {
-      return ctx.db
+    async list() {
+      const rows = await ctx.db
         .select()
         .from(decks)
         .where(inWorkspace)
         .orderBy(desc(decks.updatedAt), asc(decks.name), asc(decks.id))
-        .all()
-        .map(toDeckRecord);
+        .all();
+      return rows.map(toDeckRecord);
     },
 
-    updateCachedInfo(id, info) {
-      return withTransaction(ctx, ({ db }) => {
-        const result = db
+    async updateCachedInfo(id, info) {
+      const updatedAt = ctx.now();
+      // One conditional UPDATE; only when nothing changed does telling "unchanged" from
+      // "unknown deck" take a second (read-only) query.
+      const result = await write(ctx, (db) =>
+        db
           .update(decks)
-          .set({ name: info.name, format: info.format, url: info.url, updatedAt: ctx.now() })
+          .set({ name: info.name, format: info.format, url: info.url, updatedAt })
           .where(
             and(
               inWorkspace,
               eq(decks.id, id),
               or(ne(decks.name, info.name), ne(decks.format, info.format), ne(decks.url, info.url)),
             ),
-          )
-          .run();
-        if (result.changes > 0) return true;
-        requireDeck(db, id);
-        return false;
-      });
+          ),
+      );
+      if (result.rowsAffected > 0) return true;
+      await requireDeck(ctx.db, id);
+      return false;
     },
 
-    recordFetchAttempt(id, at) {
-      const result = ctx.db
-        .update(decks)
-        .set({ lastFetchAttemptAt: at })
-        .where(and(inWorkspace, eq(decks.id, id)))
-        .run();
-      if (result.changes === 0) throw new RepositoryError('not-found', `Deck ${id} does not exist`);
+    async recordFetchAttempt(id, at) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(decks)
+          .set({ lastFetchAttemptAt: at })
+          .where(and(inWorkspace, eq(decks.id, id))),
+      );
+      if (result.rowsAffected === 0) throw new RepositoryError('not-found', `Deck ${id} does not exist`);
     },
 
-    recordFetchError(id, error) {
-      const result = ctx.db
-        .update(decks)
-        .set({ lastFetchErrorJson: error === null ? null : encodeJson(error, 'Fetch error') })
-        .where(and(inWorkspace, eq(decks.id, id)))
-        .run();
-      if (result.changes === 0) throw new RepositoryError('not-found', `Deck ${id} does not exist`);
+    async recordFetchError(id, error) {
+      const lastFetchErrorJson = error === null ? null : encodeJson(error, 'Fetch error');
+      const result = await write(ctx, (db) =>
+        db
+          .update(decks)
+          .set({ lastFetchErrorJson })
+          .where(and(inWorkspace, eq(decks.id, id))),
+      );
+      if (result.rowsAffected === 0) throw new RepositoryError('not-found', `Deck ${id} does not exist`);
     },
 
     delete(id) {
-      return withTransaction(ctx, ({ db }) => {
-        const deck = db
+      return withTransaction(ctx, async ({ db }) => {
+        const deck = await db
           .select({ id: decks.id })
           .from(decks)
           .where(and(inWorkspace, eq(decks.id, id)))
           .get();
         if (!deck) return false;
-        const fromCommits = db
+        const fromCommits = await db
           .selectDistinct({ snapshotHash: commits.snapshotHash, rawBlobHash: commits.rawBlobHash })
           .from(commits)
           .where(eq(commits.deckId, id))
           .all();
-        const fromObservations = db
+        const fromObservations = await db
           .selectDistinct({ snapshotHash: observations.snapshotHash, rawBlobHash: observations.rawBlobHash })
           .from(observations)
           .where(eq(observations.deckId, id))
@@ -240,12 +261,12 @@ export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
         const referenced = [...fromCommits, ...fromObservations];
         // Commits, branches, observations, tags and notes cascade; the commit
         // immutability trigger permits deletes once the owning deck row is gone.
-        db.delete(decks).where(eq(decks.id, id)).run();
-        deleteUnreferencedSnapshots(
+        await db.delete(decks).where(eq(decks.id, id));
+        await deleteUnreferencedSnapshots(
           db,
           referenced.map((r) => r.snapshotHash),
         );
-        deleteUnreferencedRawBlobs(
+        await deleteUnreferencedRawBlobs(
           db,
           referenced.flatMap((r) => (r.rawBlobHash === null ? [] : [r.rawBlobHash])),
         );

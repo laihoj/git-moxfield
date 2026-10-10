@@ -16,7 +16,7 @@ import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 
 import { credentials, sessions, users } from '@/server/db/schema';
 
-import { referencing, type RepositoryContext } from './context';
+import { isUniqueViolation, referencing, write, type RepositoryContext } from './context';
 import { credentialRecordColumns, type CredentialRecord } from './credentials';
 import { RepositoryError } from './errors';
 import type { UserRecord } from './users';
@@ -67,41 +67,44 @@ export interface SessionRepository {
    * @throws {RepositoryError} `not-found` for an unknown user or credential;
    * `conflict` when the token hash is already stored.
    */
-  create(input: NewSession): SessionRecord;
+  create(input: NewSession): Promise<SessionRecord>;
   /**
    * The session with this token hash and its user, when the session is not revoked, has
    * not expired at `now`, is not a pending hand-off and the user is not disabled;
    * otherwise `null`.
    */
-  findActiveByTokenHash(tokenHash: string, now: string): { session: SessionRecord; user: UserRecord } | null;
+  findActiveByTokenHash(
+    tokenHash: string,
+    now: string,
+  ): Promise<{ session: SessionRecord; user: UserRecord } | null>;
   /** One of `userId`'s sessions that is active at `now` (as {@link findActiveByTokenHash}), or `null`. */
-  getActive(userId: string, sessionId: string, now: string): SessionRecord | null;
+  getActive(userId: string, sessionId: string, now: string): Promise<SessionRecord | null>;
   /**
    * The pending hand-off with this token hash, when it is not revoked, has not expired at
    * `now`, its user is not disabled and the key that started it is not revoked;
    * otherwise `null`.
    */
-  findPendingHandoffByTokenHash(tokenHash: string, now: string): PendingHandoff | null;
+  findPendingHandoffByTokenHash(tokenHash: string, now: string): Promise<PendingHandoff | null>;
   /**
    * Turns a pending hand-off into an ordinary session expiring at `expiresAt`. One
    * conditional `UPDATE`: of concurrent promotions exactly one succeeds, and a revoked or
    * expired hand-off is never promoted.
    * @returns whether the hand-off was promoted.
    */
-  promoteHandoff(id: string, now: string, expiresAt: string): boolean;
+  promoteHandoff(id: string, now: string, expiresAt: string): Promise<boolean>;
   /** Revokes the pending hand-off with this token hash (never an ordinary session). */
-  revokePendingHandoff(tokenHash: string, at: string): boolean;
+  revokePendingHandoff(tokenHash: string, at: string): Promise<boolean>;
   /** Records activity and, when given, a new expiry. Revoked sessions are left alone. */
-  touch(id: string, update: { lastSeenAt: string; expiresAt?: string }): void;
+  touch(id: string, update: { lastSeenAt: string; expiresAt?: string }): Promise<void>;
   /** The user's sessions that are active at `now` (no pending hand-offs), most recently seen first. */
-  listActiveForUser(userId: string, now: string): SessionRecord[];
+  listActiveForUser(userId: string, now: string): Promise<SessionRecord[]>;
   /**
    * Revokes one of `userId`'s sessions; another user's session is never touched.
    * @returns whether a session that was not revoked yet got revoked.
    */
-  revoke(userId: string, sessionId: string, at: string): boolean;
+  revoke(userId: string, sessionId: string, at: string): Promise<boolean>;
   /** Revokes the session with this token hash (signing out). Returns whether one was revoked. */
-  revokeByTokenHash(tokenHash: string, at: string): boolean;
+  revokeByTokenHash(tokenHash: string, at: string): Promise<boolean>;
   /**
    * Revokes the user's sessions (pending hand-offs included) that are not revoked yet:
    * all of them, or with `credentialId` only those that descend from that credential;
@@ -112,7 +115,7 @@ export interface SessionRepository {
     userId: string,
     at: string,
     options?: { exceptSessionId?: string; credentialId?: string },
-  ): number;
+  ): Promise<number>;
 }
 
 /** Columns of a session record (everything except the token hash). */
@@ -129,37 +132,56 @@ const recordColumns = {
 };
 
 export function createSessionRepository(ctx: RepositoryContext): SessionRepository {
+  const duplicate = (cause?: unknown): RepositoryError =>
+    new RepositoryError(
+      'conflict',
+      'A session with this token already exists',
+      cause === undefined ? undefined : { cause },
+    );
+
+  /** Runs a conditional `UPDATE` of sessions; returns how many rows it changed. */
+  const update = async (
+    set: Partial<typeof sessions.$inferInsert>,
+    where: ReturnType<typeof and>,
+  ): Promise<number> => {
+    const result = await write(ctx, (db) => db.update(sessions).set(set).where(where));
+    return result.rowsAffected;
+  };
+
   return {
-    create(input) {
-      const taken = ctx.db
+    async create(input) {
+      const taken = await ctx.db
         .select({ id: sessions.id })
         .from(sessions)
         .where(eq(sessions.tokenHash, input.tokenHash))
         .get();
-      if (taken) throw new RepositoryError('conflict', 'A session with this token already exists');
+      if (taken) throw duplicate();
       const now = ctx.now();
-      return referencing(`Session of user ${input.userId}`, () =>
-        ctx.db
-          .insert(sessions)
-          .values({
-            id: ctx.newId(),
-            userId: input.userId,
-            tokenHash: input.tokenHash,
-            createdVia: input.createdVia,
-            credentialId: input.credentialId ?? null,
-            pendingHandoff: input.pendingHandoff ?? false,
-            userAgent: input.userAgent ?? null,
-            createdAt: now,
-            lastSeenAt: now,
-            expiresAt: input.expiresAt,
-          })
-          .returning(recordColumns)
-          .get(),
-      );
+      const values = {
+        id: ctx.newId(),
+        userId: input.userId,
+        tokenHash: input.tokenHash,
+        createdVia: input.createdVia,
+        credentialId: input.credentialId ?? null,
+        pendingHandoff: input.pendingHandoff ?? false,
+        userAgent: input.userAgent ?? null,
+        createdAt: now,
+        lastSeenAt: now,
+        expiresAt: input.expiresAt,
+      };
+      try {
+        return await referencing(`Session of user ${input.userId}`, () =>
+          write(ctx, (db) => db.insert(sessions).values(values).returning(recordColumns).get()),
+        );
+      } catch (error) {
+        // The same token hash stored since the check above.
+        if (isUniqueViolation(error)) throw duplicate(error);
+        throw error;
+      }
     },
 
-    findActiveByTokenHash(tokenHash, now) {
-      const row = ctx.db
+    async findActiveByTokenHash(tokenHash, now) {
+      const row = await ctx.db
         .select({ session: recordColumns, user: users })
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
@@ -176,8 +198,8 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
       return row ?? null;
     },
 
-    getActive(userId, sessionId, now) {
-      const row = ctx.db
+    async getActive(userId, sessionId, now) {
+      const row = await ctx.db
         .select(recordColumns)
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
@@ -195,8 +217,8 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
       return row ?? null;
     },
 
-    findPendingHandoffByTokenHash(tokenHash, now) {
-      const row = ctx.db
+    async findPendingHandoffByTokenHash(tokenHash, now) {
+      const row = await ctx.db
         .select({
           session: recordColumns,
           user: users,
@@ -222,47 +244,34 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
       return row ?? null;
     },
 
-    promoteHandoff(id, now, expiresAt) {
-      const result = ctx.db
-        .update(sessions)
-        .set({ pendingHandoff: false, expiresAt, lastSeenAt: now })
-        .where(
-          and(
-            eq(sessions.id, id),
-            eq(sessions.pendingHandoff, true),
-            isNull(sessions.revokedAt),
-            gt(sessions.expiresAt, now),
-          ),
-        )
-        .run();
-      return result.changes > 0;
+    async promoteHandoff(id, now, expiresAt) {
+      const changed = await update(
+        { pendingHandoff: false, expiresAt, lastSeenAt: now },
+        and(
+          eq(sessions.id, id),
+          eq(sessions.pendingHandoff, true),
+          isNull(sessions.revokedAt),
+          gt(sessions.expiresAt, now),
+        ),
+      );
+      return changed > 0;
     },
 
-    revokePendingHandoff(tokenHash, at) {
-      const result = ctx.db
-        .update(sessions)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            eq(sessions.tokenHash, tokenHash),
-            eq(sessions.pendingHandoff, true),
-            isNull(sessions.revokedAt),
-          ),
-        )
-        .run();
-      return result.changes > 0;
+    async revokePendingHandoff(tokenHash, at) {
+      const changed = await update(
+        { revokedAt: at },
+        and(eq(sessions.tokenHash, tokenHash), eq(sessions.pendingHandoff, true), isNull(sessions.revokedAt)),
+      );
+      return changed > 0;
     },
 
-    touch(id, update) {
-      ctx.db
-        .update(sessions)
-        .set(
-          update.expiresAt === undefined
-            ? { lastSeenAt: update.lastSeenAt }
-            : { lastSeenAt: update.lastSeenAt, expiresAt: update.expiresAt },
-        )
-        .where(and(eq(sessions.id, id), isNull(sessions.revokedAt)))
-        .run();
+    async touch(id, change) {
+      await update(
+        change.expiresAt === undefined
+          ? { lastSeenAt: change.lastSeenAt }
+          : { lastSeenAt: change.lastSeenAt, expiresAt: change.expiresAt },
+        and(eq(sessions.id, id), isNull(sessions.revokedAt)),
+      );
     },
 
     listActiveForUser(userId, now) {
@@ -281,38 +290,32 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
         .all();
     },
 
-    revoke(userId, sessionId, at) {
-      const result = ctx.db
-        .update(sessions)
-        .set({ revokedAt: at })
-        .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-        .run();
-      return result.changes > 0;
+    async revoke(userId, sessionId, at) {
+      const changed = await update(
+        { revokedAt: at },
+        and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)),
+      );
+      return changed > 0;
     },
 
-    revokeByTokenHash(tokenHash, at) {
-      const result = ctx.db
-        .update(sessions)
-        .set({ revokedAt: at })
-        .where(and(eq(sessions.tokenHash, tokenHash), isNull(sessions.revokedAt)))
-        .run();
-      return result.changes > 0;
+    async revokeByTokenHash(tokenHash, at) {
+      const changed = await update(
+        { revokedAt: at },
+        and(eq(sessions.tokenHash, tokenHash), isNull(sessions.revokedAt)),
+      );
+      return changed > 0;
     },
 
     revokeAllForUser(userId, at, options = {}) {
-      const result = ctx.db
-        .update(sessions)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            eq(sessions.userId, userId),
-            isNull(sessions.revokedAt),
-            options.credentialId === undefined ? undefined : eq(sessions.credentialId, options.credentialId),
-            options.exceptSessionId === undefined ? undefined : ne(sessions.id, options.exceptSessionId),
-          ),
-        )
-        .run();
-      return result.changes;
+      return update(
+        { revokedAt: at },
+        and(
+          eq(sessions.userId, userId),
+          isNull(sessions.revokedAt),
+          options.credentialId === undefined ? undefined : eq(sessions.credentialId, options.credentialId),
+          options.exceptSessionId === undefined ? undefined : ne(sessions.id, options.exceptSessionId),
+        ),
+      );
     },
   };
 }

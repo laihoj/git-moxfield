@@ -15,11 +15,10 @@ import 'server-only';
 import { hashToken, parseToken } from '@/server/auth/tokens';
 import type { Db } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
-import { createRepositories, type ShareLinkRepository } from '@/server/repositories';
+import { createRepositories, type ShareLinkRecord, type ShareLinkRepository } from '@/server/repositories';
 import type { DeckSourceRegistry } from '@/server/sources';
 
 import type { SharedDeckAccess } from './contract';
-import { settle } from './settle';
 import { createSharedDeckServices } from './shared-deck-services';
 
 /** A link's last view is recorded at most this often (it is a database write on a read path). */
@@ -39,46 +38,51 @@ export interface SharedDeckDependencies {
  * the token grants nothing (see the module comment). Records the view (at most hourly,
  * best effort: a failure to record is logged and never blocks viewing).
  */
-export function openSharedDeck(
+export async function openSharedDeck(
   token: unknown,
   deps: SharedDeckDependencies,
 ): Promise<SharedDeckAccess | null> {
-  return settle(() => {
-    const parsed = parseToken('share', token);
-    if (parsed === null) return null;
-    const now = deps.now ?? (() => new Date());
-    const accounts = createRepositories(deps.db, { now });
-    const found = accounts.shareLinks.findActive(hashToken(parsed));
-    if (found === null) return null;
-    const { link, workspaceId, ownerDisplayName } = found;
-    recordView(deps, accounts.shareLinks, link.id, now());
+  const parsed = parseToken('share', token);
+  if (parsed === null) return null;
+  const now = deps.now ?? (() => new Date());
+  const accounts = createRepositories(deps.db, { now });
+  const found = await accounts.shareLinks.findActive(hashToken(parsed));
+  if (found === null) return null;
+  const { link, workspaceId, ownerDisplayName } = found;
+  await recordView(deps, accounts.shareLinks, link, now());
 
-    const services = createSharedDeckServices({
-      repos: createRepositories(deps.db, { now, workspaceId }),
-      sources: deps.sources,
-      deckId: link.deckId,
-      includeNotes: link.includeNotes,
-      isActive: () => accounts.shareLinks.isActive(link.id),
-    });
-    return {
-      services,
-      share: { label: link.label, includeNotes: link.includeNotes, ownerDisplayName, deckId: link.deckId },
-    };
+  const services = createSharedDeckServices({
+    repos: createRepositories(deps.db, { now, workspaceId }),
+    sources: deps.sources,
+    deckId: link.deckId,
+    includeNotes: link.includeNotes,
+    isActive: () => accounts.shareLinks.isActive(link.id),
   });
+  return {
+    services,
+    share: { label: link.label, includeNotes: link.includeNotes, ownerDisplayName, deckId: link.deckId },
+  };
 }
 
-function recordView(
+/**
+ * Records a view of `link` at `at`, unless one was recorded within the last
+ * {@link SHARE_VIEW_RECORDING_INTERVAL_MS}: then there is nothing to write, and nothing is
+ * sent (a write on every view of a busy link would cost a round trip and a written row).
+ * The repository checks the interval again, so concurrent views record one view.
+ */
+async function recordView(
   deps: SharedDeckDependencies,
   shareLinks: ShareLinkRepository,
-  linkId: string,
+  link: Pick<ShareLinkRecord, 'id' | 'lastViewedAt'>,
   at: Date,
-): void {
+): Promise<void> {
   const since = new Date(at.getTime() - SHARE_VIEW_RECORDING_INTERVAL_MS).toISOString();
+  if (link.lastViewedAt !== null && link.lastViewedAt >= since) return;
   try {
-    shareLinks.touchViewed(linkId, at.toISOString(), since);
+    await shareLinks.touchViewed(link.id, at.toISOString(), since);
   } catch (error) {
     (deps.logger ?? createLogger('share-links')).warn('Could not record a share link view', {
-      linkId,
+      linkId: link.id,
       error,
     });
   }

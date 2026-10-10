@@ -16,14 +16,20 @@
  * so a broken bookmarklet is noticed. The deck goes into the authenticated user's
  * workspace.
  *
+ * A string `payload` is a capture payload (`capture-codec-protocol.ts`): compressed by the
+ * bookmarklet or the capture page, or plain JSON. It is decoded, within hard size limits,
+ * only once the request is authenticated; an object payload is used as it is.
+ *
  * Answers with the `CaptureOutcome` as JSON; `401 { error, code }` without a valid key
- * or session, `400 { error }` for unusable data, `403` for cross-origin requests, `413`
- * for oversized bodies and `415` for other content types. The payload is untrusted; the
- * service validates and normalizes it. Keys and tokens are never logged.
+ * or session, `400 { error }` for unusable data (including a payload that cannot be
+ * decoded), `403` for cross-origin requests, `413` for oversized bodies and payloads and
+ * `415` for other content types. The payload is untrusted; the service validates and
+ * normalizes it. Keys and tokens are never logged.
  */
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
 import type { CaptureErrorBody } from '@/integrations/moxfield/capture-protocol';
 import { servicesFor } from '@/server/access';
 import { getAuthService } from '@/server/auth';
@@ -34,7 +40,7 @@ import { isServiceError } from '@/server/services';
 
 import { isSameOriginRequest } from '../../request-origin';
 
-import { isUnusableCaptureError } from './errors';
+import { classifyRejectedCapture } from './errors';
 import { describeRejectedKey } from './form-guard';
 import { CAPTURE_JSON_BODY_LIMIT, declaredTooLarge, readBodyLimited } from './read-body';
 
@@ -83,7 +89,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const input = bodySchema.safeParse(json);
   if (!input.success) return errorResponse(400, 'The request is missing the deck data.');
 
-  const auth = getAuthService();
+  const auth = await getAuthService();
   const sessionToken = readRequestSessionToken(request);
   let user: SessionUser;
   let signIn: SignIn | null = null;
@@ -119,16 +125,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   return signIn === null ? response : establishSessionOnResponse(request, response, signIn.session);
 }
 
+/** Decodes the payload (after authentication: inflating costs CPU) and ingests it. */
 async function ingest(user: SessionUser, input: z.infer<typeof bodySchema>): Promise<Response> {
   try {
-    const outcome = await servicesFor(user).ingestCapture({
-      data: input.payload,
-      method: input.method,
-      track: input.track,
-    });
+    const data =
+      typeof input.payload === 'string' ? await decodeCapturePayload(input.payload) : input.payload;
+    const services = await servicesFor(user);
+    const outcome = await services.ingestCapture({ data, method: input.method, track: input.track });
     return Response.json(outcome, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    if (isUnusableCaptureError(error)) return errorResponse(400, error.message);
+    const rejected = classifyRejectedCapture(error);
+    if (rejected !== null) return errorResponse(rejected.status, rejected.message);
     if (isServiceError(error)) return errorResponse(error.code === 'not-found' ? 404 : 400, error.message);
     log.error('Capture failed', { error, userId: user.id });
     return errorResponse(500, 'Something went wrong while importing the deck. Please try again.');

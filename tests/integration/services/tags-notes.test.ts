@@ -27,7 +27,7 @@ async function twoVersions(harness: ServiceHarness): Promise<string> {
 
 describe('deck services: tags', () => {
   it('adds, lists, filters and removes normalized tags', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services } = harness;
     const deckId = await twoVersions(harness);
 
@@ -59,7 +59,7 @@ describe('deck services: tags', () => {
   });
 
   it('explains invalid tags and unknown versions', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services } = harness;
     const deckId = await twoVersions(harness);
 
@@ -83,7 +83,7 @@ describe('deck services: tags', () => {
 
 describe('deck services: notes', () => {
   it('sets, replaces and clears the free-text note of a version', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, clock } = harness;
     const deckId = await twoVersions(harness);
 
@@ -109,7 +109,7 @@ describe('deck services: notes', () => {
   });
 
   it('rejects notes on unknown versions and overlong notes', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const deckId = await twoVersions(harness);
     await expect(harness.services.setNote(deckId, 7, 'hello')).rejects.toMatchObject({
       name: 'ServiceError',

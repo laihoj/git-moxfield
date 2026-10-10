@@ -1,18 +1,22 @@
 /**
  * Test helpers for the persistence layer.
  *
- * `openTestDatabase()` opens an isolated, fully migrated in-memory database (fast
- * enough to use one per test). `createTestRepositories()` additionally binds the
- * repositories with a deterministic clock and id generator. The seeding helpers mirror
- * what the service layer does (content-addressed commit ids, next sequence, parent =
- * HEAD, branch head moved atomically), so tests can build realistic histories quickly.
+ * `openTestDatabase()` opens an isolated, fully migrated in-memory libSQL database (fast
+ * enough to use one per test) and closes it when the test finishes.
+ * `createTestRepositories()` additionally binds the repositories with a deterministic clock
+ * and id generator. The seeding helpers mirror what the service layer does
+ * (content-addressed commit ids, next sequence, parent = HEAD, branch head moved
+ * atomically), so tests can build realistic histories quickly. Everything is asynchronous,
+ * like the database.
  */
-import { expect } from 'vitest';
+import { expect, onTestFinished } from 'vitest';
 
 import { commitId } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
-import { openDatabase, type Db } from '@/server/db/client';
+import { openDatabase, type OpenDatabaseOptions } from '@/server/db/client';
+import type { LibsqlDatabase, LibsqlDb } from '@/server/db/libsql';
+import { classifySqlError, type SqlErrorClassification, type SqlErrorKind } from '@/server/db/sql-errors';
 import {
   createRepositories,
   RepositoryError,
@@ -25,11 +29,19 @@ import {
   type RepositoryOptions,
 } from '@/server/repositories';
 
-/** Asserts that `fn` throws a {@link RepositoryError} with the given code; returns it. */
-export function expectRepositoryError(fn: () => unknown, code: RepositoryErrorCode): RepositoryError {
+export { countRows } from './libsql';
+
+/**
+ * Asserts that `operation` (a promise, or a function returning one or throwing) fails with
+ * a {@link RepositoryError} with the given code; returns the error.
+ */
+export async function expectRepositoryError(
+  operation: Promise<unknown> | (() => unknown),
+  code: RepositoryErrorCode,
+): Promise<RepositoryError> {
   let caught: unknown;
   try {
-    fn();
+    await (typeof operation === 'function' ? operation() : operation);
   } catch (error) {
     caught = error;
   }
@@ -38,15 +50,60 @@ export function expectRepositoryError(fn: () => unknown, code: RepositoryErrorCo
   return caught as RepositoryError;
 }
 
-/** Number of rows in a table (raw SQL, bypassing the repositories). */
-export function countRows(db: Db, table: string): number {
-  const row = db.$client.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number };
-  return row.n;
+/**
+ * Asserts that `operation` fails with a database error of `kind` (see `classifySqlError`;
+ * Drizzle wraps driver errors, so their text is not in the message) whose driver message
+ * matches `message`; returns the classification.
+ */
+export async function expectDatabaseError(
+  operation: Promise<unknown>,
+  kind: SqlErrorKind,
+  message?: RegExp,
+): Promise<SqlErrorClassification> {
+  let caught: unknown;
+  try {
+    await operation;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(Error);
+  const failure = classifySqlError(caught);
+  expect(failure.kind).toBe(kind);
+  if (message !== undefined) expect(failure.message).toMatch(message);
+  return failure;
+}
+
+/**
+ * Closes `handle` when the current test finishes. Outside a test (in `beforeAll` or at
+ * module level) there is no test to wait for; the database then lives as long as the test
+ * file's worker.
+ */
+function closeWhenTestFinishes(handle: LibsqlDatabase): void {
+  try {
+    onTestFinished(() => {
+      handle.close();
+    });
+  } catch {
+    // Not inside a test: nothing to attach the cleanup to.
+  }
+}
+
+/**
+ * Opens a migrated database with the local workspace (default: an isolated in-memory one)
+ * and closes it when the current test finishes. For tests that need the handle itself
+ * (its client, its write lock, closing and reopening a file).
+ */
+export async function openTestDatabaseHandle(
+  options: Partial<OpenDatabaseOptions> = {},
+): Promise<LibsqlDatabase> {
+  const handle = await openDatabase({ url: ':memory:', ...options });
+  closeWhenTestFinishes(handle);
+  return handle;
 }
 
 /** Opens an isolated, migrated in-memory database with the local workspace seeded. */
-export function openTestDatabase(): Db {
-  return openDatabase(':memory:');
+export async function openTestDatabase(options: Partial<OpenDatabaseOptions> = {}): Promise<LibsqlDb> {
+  return (await openTestDatabaseHandle(options)).db;
 }
 
 /** A clock that advances by `stepMs` on every call, starting at `start`. */
@@ -66,13 +123,13 @@ export function sequentialIds(prefix = 'id'): () => string {
 }
 
 export interface TestDb {
-  db: Db;
+  db: LibsqlDb;
   repos: Repositories;
 }
 
 /** In-memory database plus repositories with a stepping clock and sequential ids. */
-export function createTestRepositories(options: RepositoryOptions = {}): TestDb {
-  const db = openTestDatabase();
+export async function createTestRepositories(options: RepositoryOptions = {}): Promise<TestDb> {
+  const db = await openTestDatabase();
   const repos = createRepositories(db, { now: steppingClock(), newId: sequentialIds(), ...options });
   return { db, repos };
 }
@@ -80,7 +137,7 @@ export function createTestRepositories(options: RepositoryOptions = {}): TestDb 
 let deckCounter = 0;
 
 /** Tracks a Moxfield-like deck with a unique external id unless one is given. */
-export function createTestDeck(repos: Repositories, overrides: Partial<NewDeck> = {}): DeckRecord {
+export function createTestDeck(repos: Repositories, overrides: Partial<NewDeck> = {}): Promise<DeckRecord> {
   const externalId = overrides.externalId ?? `TestDeck${String(++deckCounter).padStart(14, '0')}`;
   return repos.decks.create({
     source: 'moxfield',
@@ -131,13 +188,13 @@ export function commitTestSnapshot(
   deck: DeckRecord,
   snapshot: CanonicalSnapshot,
   options: TestCommitOptions = {},
-): CommitRecord {
-  return repos.transaction((tx) => {
-    const branch = tx.branches.getMain(deck.id);
+): Promise<CommitRecord> {
+  return repos.transaction(async (tx) => {
+    const branch = await tx.branches.getMain(deck.id);
     if (!branch) throw new Error(`Deck ${deck.id} has no main branch`);
-    const sequence = options.sequence ?? (tx.commits.maxSequence(deck.id) ?? 0) + 1;
+    const sequence = options.sequence ?? ((await tx.commits.maxSequence(deck.id)) ?? 0) + 1;
     const parentId = options.parentId === undefined ? branch.headCommitId : options.parentId;
-    const snapshotHash = tx.snapshots.put(snapshot);
+    const snapshotHash = await tx.snapshots.put(snapshot);
     const createdAt =
       options.createdAt ?? new Date(Date.UTC(2026, 0, 1) + sequence * 3_600_000).toISOString();
     const message = options.message ?? `Version ${sequence}`;
@@ -150,7 +207,7 @@ export function commitTestSnapshot(
       sourceVersion,
       message,
     });
-    const commit = tx.commits.insert({
+    const commit = await tx.commits.insert({
       id,
       deckId: deck.id,
       branchId: branch.id,
@@ -167,10 +224,21 @@ export function commitTestSnapshot(
       sourceMetadata: testSourceMetadata(deck, sourceVersion === null ? {} : { version: sourceVersion }),
     });
     if (options.moveHead ?? true) {
-      tx.branches.setHead(branch.id, commit.id, { expectedHeadCommitId: branch.headCommitId });
+      await tx.branches.setHead(branch.id, commit.id, { expectedHeadCommitId: branch.headCommitId });
     }
     return commit;
   });
+}
+
+/** Commits the snapshots one after another, each on top of the previous (successive versions). */
+export async function commitTestSnapshots(
+  repos: Repositories,
+  deck: DeckRecord,
+  snapshots: readonly CanonicalSnapshot[],
+): Promise<CommitRecord[]> {
+  const commits: CommitRecord[] = [];
+  for (const snapshot of snapshots) commits.push(await commitTestSnapshot(repos, deck, snapshot));
+  return commits;
 }
 
 export interface TestObservationOptions {
@@ -186,10 +254,10 @@ export function observeTestSnapshot(
   deck: DeckRecord,
   snapshot: CanonicalSnapshot,
   options: TestObservationOptions = {},
-): ObservationRecord {
-  return repos.transaction((tx) => {
-    const snapshotHash = tx.snapshots.put(snapshot);
-    const rawBlobHash = tx.rawBlobs.put({
+): Promise<ObservationRecord> {
+  return repos.transaction(async (tx) => {
+    const snapshotHash = await tx.snapshots.put(snapshot);
+    const rawBlobHash = await tx.rawBlobs.put({
       mediaType: 'application/vnd.git-moxfield.test+json',
       data: options.raw ?? { deck: deck.externalId, snapshot },
     });

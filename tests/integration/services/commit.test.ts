@@ -16,7 +16,7 @@ import {
 
 describe('deck services: commit', () => {
   it('rejects empty and overlong messages and invalid tags without touching anything', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, db } = harness;
     const deckId = await trackDeck(harness);
     const overview = defined(await services.getOverview(deckId));
@@ -39,14 +39,14 @@ describe('deck services: commit', () => {
       message: expect.stringContaining('"#!?"') as unknown,
     });
     expect(api.requests).toHaveLength(requests);
-    expect(countRows(db, 'commits')).toBe(0);
+    expect(await countRows(db, 'commits')).toBe(0);
 
     // Exactly 2000 characters is fine.
     expect(committed(await services.commit(deckId, { ...base, message: 'y'.repeat(2000) })).sequence).toBe(1);
   });
 
   it('refuses to commit before any Moxfield state is known', async () => {
-    const harness = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+    const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const deckId = await trackDeck(harness);
     expect(
       await harness.services.commit(deckId, {
@@ -58,7 +58,7 @@ describe('deck services: commit', () => {
   });
 
   it('refuses a stale review when fetch-on-commit finds new changes on Moxfield', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     const reviewed = defined(await services.getOverview(deckId));
@@ -89,7 +89,7 @@ describe('deck services: commit', () => {
   });
 
   it('refuses a stale review when a newer capture differs from it', async () => {
-    const harness = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+    const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const { services, clock } = harness;
     const capture = (spec = blueFarmSpec()) =>
       services.ingestCapture({ data: buildCaptureEnvelope(spec), method: 'browser-capture', track: true });
@@ -118,7 +118,7 @@ describe('deck services: commit', () => {
   });
 
   it('refuses a primer-less review once fetch-on-commit gets the primer, then versions primer edits', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     // Tracked while the primer endpoint fails: the working state has no primer.
     api.mode = 'primer-down';
@@ -152,7 +152,7 @@ describe('deck services: commit', () => {
   });
 
   it('versions a primer captured after a version that has none', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -181,7 +181,7 @@ describe('deck services: commit', () => {
   });
 
   it('commits the reviewed observation when newer observations are semantically identical', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services } = harness;
     const deckId = await trackDeck(harness);
     const reviewed = defined(defined(await services.getOverview(deckId)).working);
@@ -203,7 +203,7 @@ describe('deck services: commit', () => {
   });
 
   it('refuses when HEAD moved since the review, and when there is nothing to commit', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock, db } = harness;
     const deckId = await trackDeck(harness);
     const reviewed = defined(defined(await services.getOverview(deckId)).working);
@@ -213,7 +213,7 @@ describe('deck services: commit', () => {
     // refresh cooldown).
     clock.advance(60);
     const requests = api.requests.length;
-    const observations = countRows(db, 'observations');
+    const observations = await countRows(db, 'observations');
     expect(
       await services.commit(deckId, {
         message: 'Again',
@@ -234,12 +234,12 @@ describe('deck services: commit', () => {
     });
     expect(await services.listVersions(deckId)).toHaveLength(1);
     expect(api.requests).toHaveLength(requests);
-    expect(countRows(db, 'observations')).toBe(observations);
+    expect(await countRows(db, 'observations')).toBe(observations);
     expect(await services.refresh(deckId, 'manual')).toMatchObject({ ok: true });
   });
 
   it('refuses a commit from a stale second tab without asking Moxfield', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -265,7 +265,7 @@ describe('deck services: commit', () => {
   });
 
   it('reports printing-only changes as cosmetic and still allows committing them', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services } = harness;
     const deckId = await trackDeck(harness);
     committed(await commitReviewed(harness, deckId, 'Initial version'));
@@ -296,7 +296,7 @@ describe('deck services: commit', () => {
   });
 
   it('commits the reviewed state when fetch-on-commit fails, and records the failure', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api } = harness;
     const deckId = await trackDeck(harness);
     api.mode = 'down';
@@ -309,7 +309,7 @@ describe('deck services: commit', () => {
   });
 
   it('lets exactly one of two racing commits win', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const deckId = await trackDeck(harness);
     const overview = defined(await harness.services.getOverview(deckId));
     const input = {
@@ -331,7 +331,7 @@ describe('deck services: commit', () => {
   });
 
   it('serializes a refresh and a commit of the same deck', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     const deckId = await trackDeck(harness);
     const overview = defined(await services.getOverview(deckId));
@@ -355,7 +355,7 @@ describe('deck services: commit', () => {
   });
 
   it('throws a not-found service error for an unknown deck', async () => {
-    const { services } = createServiceHarness();
+    const { services } = await createServiceHarness();
     await expect(
       services.commit('missing', { message: 'v1', expectedObservationId: 'x', expectedHeadCommitId: null }),
     ).rejects.toMatchObject({ name: 'ServiceError', code: 'not-found' });

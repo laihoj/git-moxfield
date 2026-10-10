@@ -27,7 +27,8 @@ export default async function SignInPage({ searchParams }: PageProps<'/signin'>)
   const next = safeRedirectPath(rawNext, '/');
   if ((await getCurrentUser()) !== null) redirect(next as Route);
 
-  const claimable = await getAuthService().isClaimable();
+  const auth = await getAuthService();
+  const claimable = await auth.isClaimable();
   const { moxfieldSiteOrigin } = getSetupInfo();
   const moxfieldHost = new URL(moxfieldSiteOrigin).host;
 

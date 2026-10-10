@@ -19,7 +19,9 @@ mainboard?"). The options considered:
 
 Option **A**, built so that B stays a mechanical export:
 
-- SQLite (better-sqlite3 + Drizzle ORM), one file and no server.
+- SQLite (better-sqlite3 + Drizzle ORM), one file and no server. (Since
+  [ADR 0008](0008-hosting-netlify-and-turso.md): libSQL, the same SQLite dialect, as a
+  local file in development and Turso in production.)
 - `snapshots` are content-addressed: `sha256(stableStringify(canonicalSnapshot))`.
   Identical states are stored once.
 - `commits` have Git-like ids: `sha256` of a commit object with snapshot hash, parent,

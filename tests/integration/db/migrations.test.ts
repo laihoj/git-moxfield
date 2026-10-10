@@ -3,22 +3,25 @@
  * migrated empty, which hides migrations that fail or lose data on existing installs,
  * so these tests upgrade a file database that holds a deck with history.
  */
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openDatabase, type Db } from '@/server/db/client';
+import { openDatabase } from '@/server/db/client';
+import type { LibsqlDatabase, LibsqlExecutor } from '@/server/db/libsql';
 import { createRepositories } from '@/server/repositories';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   commitTestSnapshot,
   countRows,
   createTestDeck,
+  expectDatabaseError,
   observeTestSnapshot,
   openTestDatabase,
 } from '@tests/support/db';
+import { tempDir } from '@tests/support/libsql';
 
 const MIGRATIONS = join(process.cwd(), 'drizzle');
 
@@ -98,32 +101,45 @@ END;`;
 /** A migration that leaves an observation pointing at a snapshot that does not exist. */
 const DANGLING_REFERENCE = `INSERT INTO \`observations\` ("id", "deck_id", "snapshot_hash", "raw_blob_hash", "ingest_method", "fetched_at", "source_metadata_json") SELECT 'dangling', "id", 'no-such-snapshot', 'no-such-blob', 'server', '2026-01-01T00:00:00.000Z', '{}' FROM \`decks\` LIMIT 1;`;
 
-function sqliteNames(db: Db, type: 'table' | 'trigger'): string[] {
-  const rows = db.$client
-    .prepare('SELECT name FROM sqlite_master WHERE type = ? ORDER BY name')
-    .all(type) as { name: string }[];
+async function sqliteNames(db: LibsqlExecutor, type: 'table' | 'trigger' | 'index'): Promise<string[]> {
+  const rows = await db.all<{ name: string }>(
+    sql`SELECT name FROM sqlite_master WHERE type = ${type} ORDER BY name`,
+  );
   return rows.map((row) => row.name);
 }
 
-function rowCounts(db: Db): Record<string, number> {
-  return Object.fromEntries(HISTORY_TABLES.map((table) => [table, countRows(db, table)]));
+async function rowCounts(db: LibsqlExecutor): Promise<Record<string, number>> {
+  const counts = await Promise.all(HISTORY_TABLES.map(async (table) => [table, await countRows(db, table)]));
+  return Object.fromEntries(counts) as Record<string, number>;
+}
+
+async function pragma<T>(db: LibsqlExecutor, statement: string): Promise<T[]> {
+  return db.all<T>(sql.raw(`PRAGMA ${statement}`));
 }
 
 describe('database migrations', () => {
-  it('enforces foreign keys and installs the immutability triggers', () => {
-    const db = openTestDatabase();
-    expect(db.$client.pragma('foreign_keys', { simple: true })).toBe(1);
-    expect(sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+  it('enforces foreign keys and installs the immutability triggers', async () => {
+    const db = await openTestDatabase();
+    expect(await pragma(db, 'foreign_keys')).toEqual([{ foreign_keys: 1 }]);
+    expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
   });
 
   describe('upgrading a database that holds history', () => {
     let dir: string;
     let migrations: string;
-    let path: string;
+    let url: string;
     let before: Record<string, number>;
+    const open: LibsqlDatabase[] = [];
+
+    /** Opens (and migrates) a database file with the copied migrations folder. */
+    async function openFile(fileUrl: string): Promise<LibsqlDatabase> {
+      const handle = await openDatabase({ url: fileUrl, migrationsFolder: migrations });
+      open.push(handle);
+      return handle;
+    }
 
     /** Adds a migration after the shipped ones to the copied migrations folder. */
-    function addMigration(tag: string, sql: string): void {
+    function addMigration(tag: string, statements: string): void {
       const journalPath = join(migrations, 'meta', '_journal.json');
       const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
         entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[];
@@ -132,188 +148,194 @@ describe('database migrations', () => {
       if (!last) throw new Error('The migration journal is empty');
       journal.entries.push({ ...last, idx: last.idx + 1, when: last.when + 1000, tag });
       writeFileSync(journalPath, JSON.stringify(journal, null, 2));
-      writeFileSync(join(migrations, `${tag}.sql`), sql);
+      writeFileSync(join(migrations, `${tag}.sql`), statements);
     }
 
-    beforeEach(() => {
-      dir = mkdtempSync(join(tmpdir(), 'git-moxfield-migrations-'));
+    /**
+     * Truncates the copied journal before migration `tag` (the schema an older build
+     * shipped); returns a function that restores the full journal.
+     */
+    function journalBefore(tag: string): () => void {
+      const journalPath = join(migrations, 'meta', '_journal.json');
+      const full = readFileSync(journalPath, 'utf8');
+      const journal = JSON.parse(full) as { entries: { tag: string }[] };
+      const at = journal.entries.findIndex((entry) => entry.tag === tag);
+      expect(at).toBeGreaterThan(0);
+      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, at) }));
+      return () => {
+        writeFileSync(journalPath, full);
+      };
+    }
+
+    beforeEach(async () => {
+      dir = tempDir('git-moxfield-migrations-');
       migrations = join(dir, 'drizzle');
       cpSync(MIGRATIONS, migrations, { recursive: true });
-      path = join(dir, 'app.db');
+      url = `file:${join(dir, 'app.db')}`;
 
-      const db = openDatabase(path);
-      const repos = createRepositories(db);
-      const deck = createTestDeck(repos);
-      const v1 = commitTestSnapshot(repos, deck, buildSnapshot(baseDeckSpec()));
-      commitTestSnapshot(repos, deck, buildSnapshot({ ...baseDeckSpec(), primer: '# Updated\n' }));
-      observeTestSnapshot(repos, deck, buildSnapshot({ ...baseDeckSpec(), primer: null }));
-      repos.tags.add(v1.id, 'tournament');
-      repos.notes.upsert(v1.id, 'note', { text: 'Top 4' });
-      before = rowCounts(db);
-      db.$client.close();
+      const handle = await openFile(url);
+      const repos = createRepositories(handle.db);
+      const deck = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, buildSnapshot(baseDeckSpec()));
+      await commitTestSnapshot(repos, deck, buildSnapshot({ ...baseDeckSpec(), primer: '# Updated\n' }));
+      await observeTestSnapshot(repos, deck, buildSnapshot({ ...baseDeckSpec(), primer: null }));
+      await repos.tags.add(v1.id, 'tournament');
+      await repos.notes.upsert(v1.id, 'note', { text: 'Top 4' });
+      before = await rowCounts(handle.db);
+      handle.close();
       for (const count of Object.values(before)) expect(count).toBeGreaterThan(0);
     });
 
     afterEach(() => {
+      for (const handle of open.splice(0)) handle.close();
       rmSync(dir, { recursive: true, force: true });
     });
 
-    function reopen(): Db {
-      return openDatabase(path, { migrationsFolder: migrations });
+    async function reopen(): Promise<LibsqlExecutor> {
+      return (await openFile(url)).db;
     }
 
-    it('applies a drizzle-kit table rebuild without losing rows or the triggers', () => {
+    it('applies a drizzle-kit table rebuild without losing rows or the triggers', async () => {
       addMigration('9000_rebuild_snapshots', REBUILD_SNAPSHOTS);
-      const db = reopen();
-      try {
-        expect(rowCounts(db)).toEqual(before);
-        expect(sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
-        expect(sqliteNames(db, 'table')).not.toContain('__new_snapshots');
-        expect(db.$client.pragma('foreign_keys', { simple: true })).toBe(1);
-        expect(() => db.$client.prepare("UPDATE snapshots SET canonical_json = '{}'").run()).toThrow(
-          'snapshots are immutable',
-        );
-      } finally {
-        db.$client.close();
-      }
-    });
-
-    it('rebuilds a parent table without cascading deletes into the history', () => {
-      addMigration('9000_rebuild_decks', REBUILD_DECKS);
-      const db = reopen();
-      try {
-        expect(rowCounts(db)).toEqual(before);
-        expect(sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
-        expect(db.$client.pragma('foreign_key_check')).toEqual([]);
-        expect(() => db.$client.prepare('DELETE FROM commits').run()).toThrow('commits are immutable');
-      } finally {
-        db.$client.close();
-      }
-    });
-
-    it('refuses to open a database that a migration left with dangling references', () => {
-      addMigration('9000_dangling_reference', DANGLING_REFERENCE);
-      expect(reopen).toThrow(/foreign key violation.*observations/);
-    });
-
-    it('makes the card catalog per workspace, copying each fact to the workspaces that show the card (0005)', () => {
-      // Back to the schema before 0005: a shared catalog keyed by card name only.
-      const journalPath = join(migrations, 'meta', '_journal.json');
-      const full = readFileSync(journalPath, 'utf8');
-      const journal = JSON.parse(full) as { entries: { tag: string }[] };
-      const at = journal.entries.findIndex((entry) => entry.tag === '0005_security_hardening');
-      expect(at).toBeGreaterThan(0);
-      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, at) }));
-      const fresh = join(dir, 'before-0005.db');
-      const old = openDatabase(fresh, { migrationsFolder: migrations });
-      const repos = createRepositories(old);
-      const alice = repos.users.create({ displayName: 'Alice', role: 'member' });
-      const bob = repos.users.create({ displayName: 'Bob', role: 'member' });
-      const alices = createRepositories(old, { workspaceId: alice.workspaceId });
-      const bobs = createRepositories(old, { workspaceId: bob.workspaceId });
-      const deck = (zones: string[]) => buildSnapshot({ ...baseDeckSpec(), zones: { mainboard: zones } });
-      commitTestSnapshot(alices, createTestDeck(alices), deck(['Sol Ring', 'Island']));
-      observeTestSnapshot(bobs, createTestDeck(bobs), deck(['Island', 'Mana Vault']));
-      const insert = old.$client.prepare(
-        `INSERT INTO card_catalog (key, name, type_line, primary_type, mana_cost, cmc, color_identity_json, layout, scryfall_id, updated_at)
-         VALUES (?, ?, 'Artifact', 'Artifact', '{1}', 1, '[]', 'normal', NULL, '2026-01-01T00:00:00.000Z')`,
+      const db = await reopen();
+      expect(await rowCounts(db)).toEqual(before);
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+      expect(await sqliteNames(db, 'table')).not.toContain('__new_snapshots');
+      expect(await pragma(db, 'foreign_keys')).toEqual([{ foreign_keys: 1 }]);
+      await expectDatabaseError(
+        db.run(sql`UPDATE snapshots SET canonical_json = '{}'`),
+        'trigger',
+        /snapshots are immutable/,
       );
+    });
+
+    it('rebuilds a parent table without cascading deletes into the history', async () => {
+      addMigration('9000_rebuild_decks', REBUILD_DECKS);
+      const db = await reopen();
+      expect(await rowCounts(db)).toEqual(before);
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+      expect(await pragma(db, 'foreign_key_check')).toEqual([]);
+      await expectDatabaseError(db.run(sql`DELETE FROM commits`), 'trigger', /commits are immutable/);
+    });
+
+    it('refuses to open a database that a migration left with dangling references', async () => {
+      addMigration('9000_dangling_reference', DANGLING_REFERENCE);
+      await expect(reopen()).rejects.toThrow(/foreign key violation.*observations/);
+    });
+
+    it('makes the card catalog per workspace, copying each fact to the workspaces that show the card (0005)', async () => {
+      // Back to the schema before 0005: a shared catalog keyed by card name only.
+      const restoreJournal = journalBefore('0005_security_hardening');
+      const fresh = `file:${join(dir, 'before-0005.db')}`;
+      const old = await openFile(fresh);
+      const repos = createRepositories(old.db);
+      const alice = await repos.users.create({ displayName: 'Alice', role: 'member' });
+      const bob = await repos.users.create({ displayName: 'Bob', role: 'member' });
+      const alices = createRepositories(old.db, { workspaceId: alice.workspaceId });
+      const bobs = createRepositories(old.db, { workspaceId: bob.workspaceId });
+      const deck = (zones: string[]) => buildSnapshot({ ...baseDeckSpec(), zones: { mainboard: zones } });
+      await commitTestSnapshot(alices, await createTestDeck(alices), deck(['Sol Ring', 'Island']));
+      await observeTestSnapshot(bobs, await createTestDeck(bobs), deck(['Island', 'Mana Vault']));
       for (const [key, name] of [
         ['sol ring', 'Sol Ring'],
         ['island', 'Island'],
         ['mana vault', 'Mana Vault'],
         ['unused card', 'Unused Card'],
       ] as const) {
-        insert.run(key, name);
-      }
-      old.$client.close();
-
-      writeFileSync(journalPath, full);
-      const db = openDatabase(fresh, { migrationsFolder: migrations });
-      try {
-        const rows = db.$client
-          .prepare('SELECT workspace_id AS workspace, key FROM card_catalog ORDER BY workspace_id, key')
-          .all();
-        expect(rows).toEqual(
-          [
-            { workspace: alice.workspaceId, key: 'island' },
-            { workspace: alice.workspaceId, key: 'sol ring' },
-            { workspace: bob.workspaceId, key: 'island' },
-            { workspace: bob.workspaceId, key: 'mana vault' },
-          ].sort((a, b) => a.workspace.localeCompare(b.workspace) || a.key.localeCompare(b.key)),
+        await old.db.run(
+          sql`INSERT INTO card_catalog (key, name, type_line, primary_type, mana_cost, cmc, color_identity_json, layout, scryfall_id, updated_at)
+              VALUES (${key}, ${name}, 'Artifact', 'Artifact', '{1}', 1, '[]', 'normal', NULL, '2026-01-01T00:00:00.000Z')`,
         );
-        expect(db.$client.pragma('foreign_key_check')).toEqual([]);
-        const handoffColumn = (
-          db.$client.pragma('table_info(sessions)') as { name: string; dflt_value: string }[]
-        ).find((column) => column.name === 'pending_handoff');
-        expect(handoffColumn?.dflt_value).toBe('false');
-      } finally {
-        db.$client.close();
       }
+      old.close();
+
+      restoreJournal();
+      const db = (await openFile(fresh)).db;
+      const rows = await db.all(
+        sql`SELECT workspace_id AS workspace, key FROM card_catalog ORDER BY workspace_id, key`,
+      );
+      expect(rows).toEqual(
+        [
+          { workspace: alice.workspaceId, key: 'island' },
+          { workspace: alice.workspaceId, key: 'sol ring' },
+          { workspace: bob.workspaceId, key: 'island' },
+          { workspace: bob.workspaceId, key: 'mana vault' },
+        ].sort((a, b) => a.workspace.localeCompare(b.workspace) || a.key.localeCompare(b.key)),
+      );
+      expect(await pragma(db, 'foreign_key_check')).toEqual([]);
+      const columns = await pragma<{ name: string; dflt_value: string }>(db, 'table_info(sessions)');
+      expect(columns.find((column) => column.name === 'pending_handoff')?.dflt_value).toBe('false');
     });
 
-    it('records the key a share link descends from, keeping existing links (0006, 0007)', () => {
-      const journalPath = join(migrations, 'meta', '_journal.json');
-      const full = readFileSync(journalPath, 'utf8');
-      const journal = JSON.parse(full) as { entries: { tag: string }[] };
-      const at = journal.entries.findIndex((entry) => entry.tag === '0006_share_links');
-      expect(at).toBeGreaterThan(0);
-      writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, at) }));
-      const fresh = join(dir, 'before-0006.db');
-      const old = openDatabase(fresh, { migrationsFolder: migrations });
-      const owner = createRepositories(old).users.create({ displayName: 'Mikko', role: 'member' });
-      const deck = createTestDeck(createRepositories(old, { workspaceId: owner.workspaceId }));
-      old.$client
-        .prepare(
-          `INSERT INTO share_links (id, deck_id, token_hash, label, include_notes, created_by_user_id, created_at)
-           VALUES ('link-1', ?, ?, 'For Pekka', 1, ?, '2026-10-01T00:00:00.000Z')`,
-        )
-        .run(deck.id, 'a'.repeat(64), owner.id);
-      old.$client.close();
+    it('records the key a share link descends from, keeping existing links (0006, 0007)', async () => {
+      const restoreJournal = journalBefore('0006_share_links');
+      const fresh = `file:${join(dir, 'before-0006.db')}`;
+      const old = await openFile(fresh);
+      const owner = await createRepositories(old.db).users.create({ displayName: 'Mikko', role: 'member' });
+      const deck = await createTestDeck(createRepositories(old.db, { workspaceId: owner.workspaceId }));
+      await old.db.run(
+        sql`INSERT INTO share_links (id, deck_id, token_hash, label, include_notes, created_by_user_id, created_at)
+            VALUES ('link-1', ${deck.id}, ${'a'.repeat(64)}, 'For Pekka', 1, ${owner.id}, '2026-10-01T00:00:00.000Z')`,
+      );
+      old.close();
 
-      writeFileSync(journalPath, full);
-      const db = openDatabase(fresh, { migrationsFolder: migrations });
-      try {
-        const link = createRepositories(db).shareLinks.findActive('a'.repeat(64));
-        expect(link?.link).toMatchObject({
-          id: 'link-1',
-          label: 'For Pekka',
-          includeNotes: true,
-          credentialId: null,
-        });
-        const keyReference = (
-          db.$client.pragma('foreign_key_list(share_links)') as {
-            table: string;
-            from: string;
-            on_delete: string;
-          }[]
-        ).find((reference) => reference.from === 'credential_id');
-        expect(keyReference).toMatchObject({ table: 'credentials', on_delete: 'SET NULL' });
-        const indexes = (db.$client.pragma('index_list(share_links)') as { name: string }[]).map(
-          (i) => i.name,
-        );
-        expect(indexes).toEqual(
-          expect.arrayContaining([
-            'share_links_credential_idx',
-            'share_links_deck_idx',
-            'share_links_token_hash_unique',
-          ]),
-        );
-        expect(sqliteNames(db, 'table')).not.toContain('__new_share_links');
-        expect(sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
-        expect(db.$client.pragma('foreign_key_check')).toEqual([]);
-      } finally {
-        db.$client.close();
-      }
+      restoreJournal();
+      const db = (await openFile(fresh)).db;
+      const link = await createRepositories(db).shareLinks.findActive('a'.repeat(64));
+      expect(link?.link).toMatchObject({
+        id: 'link-1',
+        label: 'For Pekka',
+        includeNotes: true,
+        credentialId: null,
+      });
+      const references = await pragma<{ table: string; from: string; on_delete: string }>(
+        db,
+        'foreign_key_list(share_links)',
+      );
+      expect(references.find((reference) => reference.from === 'credential_id')).toMatchObject({
+        table: 'credentials',
+        on_delete: 'SET NULL',
+      });
+      const indexes = (await pragma<{ name: string }>(db, 'index_list(share_links)')).map((i) => i.name);
+      expect(indexes).toEqual(
+        expect.arrayContaining([
+          'share_links_credential_idx',
+          'share_links_deck_idx',
+          'share_links_token_hash_unique',
+        ]),
+      );
+      expect(await sqliteNames(db, 'table')).not.toContain('__new_share_links');
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+      expect(await pragma(db, 'foreign_key_check')).toEqual([]);
     });
 
-    it('opens an up-to-date database unchanged', () => {
-      const db = reopen();
-      try {
-        expect(rowCounts(db)).toEqual(before);
-      } finally {
-        db.$client.close();
-      }
+    it('indexes the card index by card and snapshot, keeping its rows (0008)', async () => {
+      const restoreJournal = journalBefore('0008_card_key_snapshot_index');
+      const fresh = `file:${join(dir, 'before-0008.db')}`;
+      const old = await openFile(fresh);
+      const repos = createRepositories(old.db);
+      const deck = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, buildSnapshot(baseDeckSpec()));
+      expect(await sqliteNames(old.db, 'index')).toContain('snapshot_cards_card_key_idx');
+      const cards = await countRows(old.db, 'snapshot_cards');
+      old.close();
+
+      restoreJournal();
+      const db = (await openFile(fresh)).db;
+      const indexes = await sqliteNames(db, 'index');
+      expect(indexes).toContain('snapshot_cards_card_key_snapshot_idx');
+      expect(indexes).not.toContain('snapshot_cards_card_key_idx');
+      const columns = await pragma<{ name: string }>(db, 'index_info(snapshot_cards_card_key_snapshot_idx)');
+      expect(columns.map((column) => column.name)).toEqual(['card_key', 'snapshot_hash']);
+      expect(await countRows(db, 'snapshot_cards')).toBe(cards);
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+      const history = await createRepositories(db).cardIndex.versionsContainingCard(deck.id, 'Sol Ring');
+      expect(history.map((version) => version.commitId)).toEqual([v1.id]);
+    });
+
+    it('opens an up-to-date database unchanged', async () => {
+      const db = await reopen();
+      expect(await rowCounts(db)).toEqual(before);
     });
   });
 });

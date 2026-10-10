@@ -78,7 +78,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const input = bodySchema.safeParse(json);
   if (!input.success) return badRequest('Expected { displayName?, role?, bookmarkletLabel? }.');
 
-  const auth = getAuthService();
+  const auth = await getAuthService();
   const invite = await auth.createInvite(SYSTEM_ACTOR, { role: input.data.role ?? 'member', note: 'e2e' });
   const token = parseToken('invite', invite.path.split('/').at(-1));
   const displayName = input.data.displayName ?? `Tester ${randomBytes(3).toString('hex')}`;

@@ -12,8 +12,9 @@
 #                          in aws-us-east-2, next to the functions)
 #   TURSO_AUTH_TOKEN       from `turso db tokens create <database>`
 #   PUBLIC_APP_URL         https://<site>.netlify.app, or the custom domain
-#   MOXFIELD_SERVER_FETCH  off (Cloudflare blocks Moxfield requests from cloud IPs, so
-#                          decks only arrive through the bookmarklet)
+#
+# MOXFIELD_SERVER_FETCH need not be set: on Netlify it defaults to off (Cloudflare blocks
+# Moxfield requests from cloud IPs, so decks only arrive through the bookmarklet).
 #
 # Never set these on Netlify:
 #

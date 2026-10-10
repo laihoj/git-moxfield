@@ -70,7 +70,8 @@ export async function createShareLinkAction(
   const appUrl = publicAppUrl(await headers());
   if (appUrl === null) return { status: 'error', message: NO_APP_URL };
   try {
-    const created = await shareLinkServicesFor(user).createShareLink(
+    const shareLinks = await shareLinkServicesFor(user);
+    const created = await shareLinks.createShareLink(
       id.data,
       { label: label.slice(0, MAX_LABEL_INPUT_LENGTH), includeNotes },
       appUrl,
@@ -92,7 +93,8 @@ export async function revokeShareLinkAction(deckId: string, linkId: string): Pro
   const user = await requireUser({ next: id.success ? routes.deckShare(id.data) : routes.home() });
   if (!id.success || !link.success) return { ok: false, message: INVALID_REQUEST };
   try {
-    const revoked = await shareLinkServicesFor(user).revokeShareLink(id.data, link.data);
+    const shareLinks = await shareLinkServicesFor(user);
+    const revoked = await shareLinks.revokeShareLink(id.data, link.data);
     revalidateShareLinks(id.data);
     return revoked ? { ok: true } : { ok: false, message: 'This link was already revoked.' };
   } catch (error) {

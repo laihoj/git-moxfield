@@ -3,6 +3,7 @@
  * and stored hashed; running a bookmarklet signs the browser in without duplicating an
  * existing session; sessions slide, end, and end with a revoked key or a disabled user.
  */
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { HANDOFF_LIFETIME_MS, SESSION_LIFETIME_MS } from '@/server/auth/service';
@@ -22,14 +23,16 @@ async function withKey(harness: ServiceHarness, name = 'Mikko') {
   return { signIn, created, key: keyOfBookmarklet(created.bookmarklets.popup) };
 }
 
-function allRowsText(harness: ServiceHarness): string {
+async function allRowsText(harness: ServiceHarness): Promise<string> {
   const tables = ['users', 'credentials', 'sessions', 'login_links', 'invites', 'app_settings'];
-  return JSON.stringify(tables.map((table) => harness.db.$client.prepare(`SELECT * FROM "${table}"`).all()));
+  return JSON.stringify(
+    await Promise.all(tables.map((table) => harness.db.all(sql`SELECT * FROM ${sql.identifier(table)}`))),
+  );
 }
 
 describe('bookmarklet keys', () => {
   it('embeds a new key in both bookmarklets and stores only its hash', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn, created, key } = await withKey(harness);
 
     expect(created.key).toEqual({
@@ -44,26 +47,26 @@ describe('bookmarklet keys', () => {
     });
     expect(keyOfBookmarklet(created.bookmarklets.sameTab)).toBe(key);
     expect(decodeURIComponent(created.bookmarklets.popup)).toContain(`"app":"${APP_URL}"`);
-    expect(harness.db.$client.prepare('SELECT secret_hash AS hash FROM credentials').all()).toEqual([
+    expect(await harness.db.all(sql`SELECT secret_hash AS hash FROM credentials`)).toEqual([
       { hash: hashToken(key) },
     ]);
-    expect(allRowsText(harness)).not.toContain(key);
+    expect(await allRowsText(harness)).not.toContain(key);
     expect(JSON.stringify(harness.logger.entries)).not.toContain(key);
     expect(await harness.auth.listKeys(signIn.user)).toEqual([created.key]);
   });
 
   it('validates the label and the app URL before storing anything', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { user } = await signUp(harness.auth, 'Mikko');
     await expectServiceError(harness.auth.createBookmarkletKey(user, '   ', APP_URL), 'invalid-input');
     await expect(harness.auth.createBookmarkletKey(user, 'Phone', 'localhost:3000')).rejects.toThrow(
       TypeError,
     );
-    expect(countRows(harness.db, 'credentials')).toBe(0);
+    expect(await countRows(harness.db, 'credentials')).toBe(0);
   });
 
   it('signs a browser in, recording the key’s use', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, created, key } = await withKey(harness);
     harness.clock.advance(60);
 
@@ -83,16 +86,16 @@ describe('bookmarklet keys', () => {
   });
 
   it('keeps the browser’s session of the same user instead of starting another', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, key } = await withKey(harness);
-    const sessions = countRows(harness.db, 'sessions');
+    const sessions = await countRows(harness.db, 'sessions');
 
     const again = defined(
       await harness.auth.signInWithKey(key, 'Firefox', { currentSessionToken: owner.session.token }),
     );
     expect(again.session.token).toBe(owner.session.token);
     expect(again.session.id).toBe(owner.session.id);
-    expect(countRows(harness.db, 'sessions')).toBe(sessions);
+    expect(await countRows(harness.db, 'sessions')).toBe(sessions);
 
     // Another user's session is not reused: the key's owner gets a session of their own.
     const other = await signUp(harness.auth, 'Anna');
@@ -109,14 +112,14 @@ describe('bookmarklet keys', () => {
     ['another kind of token', () => `gms_${'Q'.repeat(43)}`],
     ['not a string', () => 42],
   ])('refuses a %s key', async (_case, key) => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     await withKey(harness);
     expect(await harness.auth.signInWithKey(key(), 'Firefox')).toBeNull();
     expect(await harness.auth.startKeyHandoff(key(), 'Firefox')).toBeNull();
   });
 
   it('stops signing in with a revoked key, and ends the sessions it started except the current one', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, created, key } = await withKey(harness);
     const viaKey1 = defined(await harness.auth.signInWithKey(key, 'Phone'));
     const viaKey2 = defined(await harness.auth.signInWithKey(key, 'Tablet'));
@@ -136,36 +139,36 @@ describe('bookmarklet keys', () => {
   });
 
   it('refuses the keys of a disabled user', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn, key } = await withKey(harness);
-    harness.repos.users.setDisabled(signIn.user.id, true);
+    await harness.repos.users.setDisabled(signIn.user.id, true);
     expect(await harness.auth.signInWithKey(key, 'Firefox')).toBeNull();
   });
 });
 
 describe('sessions', () => {
   it('renew their expiry at most once a day and record the user’s activity at most hourly', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { session, user } = await signUp(harness.auth, 'Mikko');
     const initialExpiry = session.expiresAt;
-    const userSeen = () => harness.repos.users.getById(user.id)?.lastSeenAt;
+    const userSeen = async () => (await harness.repos.users.getById(user.id))?.lastSeenAt;
     const current = async () =>
       defined(
         (await harness.auth.listSessions({ ...user, sessionId: session.id })).find((entry) => entry.current),
       );
 
     await harness.auth.resolveSession(session.token);
-    const firstSeen = userSeen();
+    const firstSeen = await userSeen();
     expect(firstSeen).toBe(harness.clock.iso());
 
     harness.clock.advance(30 * 60);
     await harness.auth.resolveSession(session.token);
-    expect(userSeen()).toBe(firstSeen);
+    expect(await userSeen()).toBe(firstSeen);
     expect((await current()).expiresAt).toBe(initialExpiry);
 
     harness.clock.advance(31 * 60);
     await harness.auth.resolveSession(session.token);
-    expect(userSeen()).toBe(harness.clock.iso());
+    expect(await userSeen()).toBe(harness.clock.iso());
     expect((await current()).expiresAt).toBe(initialExpiry);
 
     harness.clock.advance(DAY_S);
@@ -176,7 +179,7 @@ describe('sessions', () => {
   });
 
   it('expire after 400 days without use', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { session } = await signUp(harness.auth, 'Mikko');
     harness.clock.advance(399 * DAY_S);
     expect(await harness.auth.resolveSession(session.token)).not.toBeNull();
@@ -189,14 +192,14 @@ describe('sessions', () => {
   it.each([null, undefined, '', 'gms_short', `gmk_${'A'.repeat(43)}`, `gms_${'A'.repeat(43)}`])(
     'resolve no user for %j',
     async (token) => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       await signUp(harness.auth, 'Mikko');
       expect(await harness.auth.resolveSession(token)).toBeNull();
     },
   );
 
   it('end one at a time, all at once, and only the user’s own', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const laptop = await signUp(harness.auth, 'Mikko');
     const created = await harness.auth.createBookmarkletKey(laptop.user, 'Phone', APP_URL);
     const key = keyOfBookmarklet(created.bookmarklets.popup);
@@ -228,7 +231,7 @@ describe('sessions', () => {
 
 describe('signing out other devices and everywhere', () => {
   it('withdraws unused device links, which would sign another device in after it', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const laptop = await signUp(harness.auth, 'Mikko');
     const beforeAll = tokenOfPath((await harness.auth.createDeviceLink(laptop.user)).path);
     expect(await harness.auth.endAllSessions(laptop.user)).toBe(1);
@@ -238,7 +241,7 @@ describe('signing out other devices and everywhere', () => {
   });
 
   it('signs out every other device and withdraws device links, keeping the asking one', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const laptop = await signUp(harness.auth, 'Mikko');
     const phoneLink = tokenOfPath((await harness.auth.createDeviceLink(laptop.user)).path);
     const phone = defined(await harness.auth.consumeLoginLink(phoneLink, 'Phone'));
@@ -255,7 +258,7 @@ describe('signing out other devices and everywhere', () => {
 
 describe('same-tab hand-off', () => {
   it('is no session: its token signs nobody in, and an ordinary session token is no hand-off', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, key } = await withKey(harness);
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari on iPhone'));
     expect(started.user.id).toBe(owner.user.id);
@@ -273,7 +276,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('asks a signed-out browser first, and signs it in only when confirmed', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, created, key } = await withKey(harness);
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari on iPhone'));
 
@@ -313,7 +316,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('keeps the browser’s session of the same user without asking, and ends the hand-off', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: current, key } = await withKey(harness);
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
 
@@ -328,7 +331,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('never touches the session of another user the browser holds: it asks, naming both accounts', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, key } = await withKey(harness);
     const anna = await signUp(harness.auth, 'Anna');
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
@@ -350,7 +353,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('confirming keeps the browser’s session when it is the key owner’s by then', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, key } = await withKey(harness);
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
     const signIn = defined(await harness.auth.confirmHandoff(started.handoff.token, owner.session.token));
@@ -359,7 +362,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('can be cancelled, signing nobody in and leaving the browser’s session alone', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { key } = await withKey(harness);
     const anna = await signUp(harness.auth, 'Anna');
     const started = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
@@ -375,7 +378,7 @@ describe('same-tab hand-off', () => {
   });
 
   it('expires when it is not completed in time, and dies with its key', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn: owner, created, key } = await withKey(harness);
     const expiring = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
     const revokedKey = defined(await harness.auth.startKeyHandoff(key, 'Safari'));
@@ -415,7 +418,7 @@ describe('what a key signed in, and what was made there', () => {
   }
 
   it('lists a key’s lineage: what it was made with, and what was made through it', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { owner, stolen, minted } = await stolenKeyScenario(harness);
     const own = await harness.auth.createBookmarkletKey(owner.user, 'Desktop', APP_URL);
 
@@ -432,7 +435,7 @@ describe('what a key signed in, and what was made there', () => {
   });
 
   it('revoking a stolen key ends the sessions it signed in, also through device links, and their links', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { owner, stolen, thief, thiefPhone, pendingLink, mintedKey } = await stolenKeyScenario(harness);
 
     expect(await harness.auth.revokeKey(owner.user, stolen.id)).toBe(true);
@@ -448,7 +451,7 @@ describe('what a key signed in, and what was made there', () => {
   });
 
   it('revokes the keys made through it too when asked, and the sessions those signed in', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { owner, stolen, mintedKey } = await stolenKeyScenario(harness);
     const viaMinted = defined(await harness.auth.signInWithKey(mintedKey, 'Thief tablet'));
     // A key made through the minted one: revoked transitively.
@@ -465,7 +468,7 @@ describe('what a key signed in, and what was made there', () => {
   });
 
   it('keeps the revoking session, even when it descends from the key', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { stolen, thief, thiefPhone } = await stolenKeyScenario(harness);
     expect(await harness.auth.revokeKey(thiefPhone.user, stolen.id)).toBe(true);
     expect(await harness.auth.resolveSession(thiefPhone.session.token)).not.toBeNull();
@@ -501,7 +504,7 @@ describe('what a key signed in, and what was made there', () => {
     }
 
     it('are counted on the key their browser descends from, and on the key it was made through', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner } = await withShareLinks(harness);
       const keys = await harness.auth.listKeys(owner.user);
       expect(keys.map((key) => [key.label, key.shareLinkCount, key.derivedShareLinkCount])).toEqual([
@@ -512,14 +515,14 @@ describe('what a key signed in, and what was made there', () => {
     });
 
     it('keep working when the key is revoked without them: they may be the owner’s own', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, links } = await withShareLinks(harness);
       expect(await harness.auth.revokeKey(owner.user, stolen.id)).toBe(true);
       for (const token of Object.values(links)) expect(await working(harness, token)).toBe(true);
     });
 
     it('are revoked with the key when asked, and with the keys made through it too', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, links } = await withShareLinks(harness);
       expect(await harness.auth.revokeKey(owner.user, stolen.id, { includeShareLinks: true })).toBe(true);
       expect(await working(harness, links.thief)).toBe(false);
@@ -529,7 +532,7 @@ describe('what a key signed in, and what was made there', () => {
     });
 
     it('reach the keys made through it when both options are chosen', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, links } = await withShareLinks(harness);
       expect(
         await harness.auth.revokeKey(owner.user, stolen.id, {
@@ -545,7 +548,7 @@ describe('what a key signed in, and what was made there', () => {
     });
 
     it('are not touched when the key cannot be revoked (another user’s or already revoked)', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, links } = await withShareLinks(harness);
       const stranger = await signUp(harness.auth, 'Stranger');
       expect(await harness.auth.revokeKey(stranger.user, stolen.id, { includeShareLinks: true })).toBe(false);
@@ -557,7 +560,7 @@ describe('what a key signed in, and what was made there', () => {
     });
 
     it('stay listed, and revocable, after the key was revoked without them', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, minted, links } = await withShareLinks(harness);
       expect(await harness.auth.listRevokedKeyShareLinks(owner.user)).toEqual([]);
       harness.clock.advance(60);
@@ -594,7 +597,7 @@ describe('what a key signed in, and what was made there', () => {
     });
 
     it('of an active key are revoked the same way, leaving the key working', async () => {
-      const harness = createServiceHarness();
+      const harness = await createServiceHarness();
       const { owner, stolen, thief, links } = await withShareLinks(harness);
       expect(await harness.auth.revokeKeyShareLinks(owner.user, stolen.id)).toBe(2);
       expect(await working(harness, links.thief)).toBe(false);
@@ -606,12 +609,12 @@ describe('what a key signed in, and what was made there', () => {
   });
 
   it('makes nothing for a session that has ended meanwhile', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { signIn } = await withKey(harness);
     await harness.auth.endAllSessions(signIn.user);
     await expectServiceError(harness.auth.createDeviceLink(signIn.user), 'forbidden');
     await expectServiceError(harness.auth.createBookmarkletKey(signIn.user, 'Late', APP_URL), 'forbidden');
-    expect(countRows(harness.db, 'login_links')).toBe(0);
-    expect(countRows(harness.db, 'credentials')).toBe(1);
+    expect(await countRows(harness.db, 'login_links')).toBe(0);
+    expect(await countRows(harness.db, 'credentials')).toBe(1);
   });
 });

@@ -6,4 +6,5 @@ data
 playwright-report
 test-results
 coverage
+.netlify
 next-env.d.ts

@@ -13,6 +13,7 @@
  *   unknown tokens, and malformed tokens never reach the database.
  * - Read-only by type and at runtime; the token is never logged or stored.
  */
+import { sql } from 'drizzle-orm';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { restoreText } from '@/app/restore-download';
@@ -75,7 +76,7 @@ function expectNoUncommittedState(value: unknown): void {
 
 describe('opening a share link', () => {
   it('grants one deck, naming its owner and what the link includes', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const created = await history.shareLinks.createShareLink(
       history.deckId,
@@ -92,7 +93,7 @@ describe('opening a share link', () => {
   });
 
   it('rejects malformed tokens before any database lookup', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const untouchable = new Proxy({} as Db, {
       get(_target, property) {
         throw new Error(`The database was used (${String(property)})`);
@@ -121,14 +122,16 @@ describe('opening a share link', () => {
   });
 
   it('never logs or stores the token, also when recording the view fails', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { token, viewer } = await share(harness, history);
     await viewer.getOverview();
     await viewer.compare('v1', 'v2');
     await viewer.restoreExport(1);
-    harness.db.$client.exec(
-      "CREATE TRIGGER refuse_views BEFORE UPDATE ON share_links BEGIN SELECT RAISE(ABORT, 'no writes'); END",
+    await harness.db.run(
+      sql.raw(
+        "CREATE TRIGGER refuse_views BEFORE UPDATE ON share_links BEGIN SELECT RAISE(ABORT, 'no writes'); END",
+      ),
     );
     harness.clock.advance(2 * 3600);
     const again = defined(await openShared(harness, token), 'viewing despite a failed view record');
@@ -139,14 +142,14 @@ describe('opening a share link', () => {
     expect(JSON.stringify(harness.logger.entries)).not.toContain(token);
     const tables = ['share_links', 'sessions', 'credentials', 'app_settings'];
     for (const table of tables) {
-      expect(JSON.stringify(harness.db.$client.prepare(`SELECT * FROM "${table}"`).all())).not.toContain(
+      expect(JSON.stringify(await harness.db.all(sql`SELECT * FROM ${sql.identifier(table)}`))).not.toContain(
         token,
       );
     }
   });
 
   it('records views at most hourly', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { token } = await share(harness, history);
     const firstView = harness.clock.iso();
@@ -159,11 +162,31 @@ describe('opening a share link', () => {
     await openShared(harness, token);
     expect(await lastViewed()).toBe(harness.clock.iso());
   });
+
+  it('sends no write at all for a view within the hour', async () => {
+    const harness = await createServiceHarness();
+    const history = await sharedHistory(harness);
+    const { token } = await share(harness, history);
+    // From now on, any write to the link fails (and is logged).
+    await harness.db.run(
+      sql.raw(
+        "CREATE TRIGGER refuse_views BEFORE UPDATE ON share_links BEGIN SELECT RAISE(ABORT, 'no writes'); END",
+      ),
+    );
+    const failedRecords = () =>
+      harness.logger.entries.filter((entry) => entry.message === 'Could not record a share link view');
+    harness.clock.advance(30 * 60);
+    expect(await openShared(harness, token)).not.toBeNull();
+    expect(failedRecords()).toEqual([]);
+    harness.clock.advance(31 * 60);
+    expect(await openShared(harness, token)).not.toBeNull();
+    expect(failedRecords()).toHaveLength(1);
+  });
 });
 
 describe('the shared deck', () => {
   it('shows the committed deck only: name, format and commanders of the latest version', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     const owners = defined(await history.services.getOverview(history.deckId));
@@ -189,7 +212,7 @@ describe('the shared deck', () => {
   });
 
   it('lists versions, also by tag', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     expect(await viewer.listVersions()).toEqual(await history.services.listVersions(history.deckId));
@@ -201,7 +224,7 @@ describe('the shared deck', () => {
   });
 
   it('shows versions as the owner sees them, without notes unless the link includes them', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const owners = defined(await history.services.getVersion(history.deckId, 1));
     expect(owners.notes).toHaveLength(1);
@@ -229,7 +252,7 @@ describe('the shared deck', () => {
   });
 
   it('compares committed states and refuses the working state', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     const [v2, v1] = await history.services.listVersions(history.deckId);
@@ -258,7 +281,7 @@ describe('the shared deck', () => {
   });
 
   it('resolves no commit of another deck, in its own workspace or another', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     const sibling = await otherDeck(harness, history.services, 'OtherDeckTestDeck00001', ['Lightning Bolt']);
@@ -283,7 +306,7 @@ describe('the shared deck', () => {
   });
 
   it('searches the committed versions’ cards only', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     expect((await history.services.searchCards(history.deckId, 'Mystic')).map((hit) => hit.name)).toEqual([
@@ -303,7 +326,7 @@ describe('the shared deck', () => {
   });
 
   it('shows card history over the committed versions, never the working state', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     // The owner sees Pyroclasm cut in the working state; viewers only see v1 and v2.
@@ -322,7 +345,7 @@ describe('the shared deck', () => {
   });
 
   it('exports committed versions for restoring', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     const owners = defined(await history.services.restoreExport(history.deckId, 1));
@@ -342,7 +365,7 @@ describe('the shared deck', () => {
   it('never says where the deck lives on Moxfield, nor whose Moxfield account it is', async () => {
     // The deck's Moxfield URL opens its live state, uncommitted changes included, and for an
     // unlisted deck it is the only key to it; it would also outlive the share link.
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history, { includeNotes: true });
     const owners = defined(await history.services.getVersion(history.deckId, 2));
@@ -373,7 +396,7 @@ describe('the shared deck', () => {
   });
 
   it('converts primers like the owner’s services', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
     const primer = '===panel: Mulligans\nKeep fast mana.\n===endpanel';
@@ -390,7 +413,7 @@ describe('the shared deck', () => {
     expectTypeOf<SharedDeckServices>().not.toHaveProperty('untrackDeck');
     expectTypeOf<SharedDeckServices['getVersion']>().parameters.toEqualTypeOf<[sequence: number]>();
 
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history, { includeNotes: true });
     const writes = [
@@ -416,8 +439,9 @@ describe('the shared deck', () => {
       'commit_notes',
       'card_catalog',
     ];
-    const dump = () => tables.map((table) => harness.db.$client.prepare(`SELECT * FROM "${table}"`).all());
-    const before = dump();
+    const dump = () =>
+      Promise.all(tables.map((table) => harness.db.all(sql`SELECT * FROM ${sql.identifier(table)}`)));
+    const before = await dump();
     harness.clock.advance(3600);
     await viewer.getOverview();
     await viewer.listVersions({ tag: 'tournament' });
@@ -427,7 +451,7 @@ describe('the shared deck', () => {
     await viewer.cardHistory('Dress Down');
     await viewer.restoreExport(2);
     await viewer.listTags();
-    expect(dump()).toEqual(before);
+    expect(await dump()).toEqual(before);
   });
 });
 
@@ -446,7 +470,7 @@ describe('ending access', () => {
   }
 
   it('revoking the link ends it at once, for services obtained before too', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { token, viewer, linkId } = await share(harness, history);
     expect(await viewer.isAvailable()).toBe(true);
@@ -457,13 +481,13 @@ describe('ending access', () => {
   });
 
   it('untracking the deck ends every link to it', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { token, viewer } = await share(harness, history);
     await history.services.untrackDeck(history.deckId);
     expect(await openShared(harness, token)).toBeNull();
     await expectNoAccess(viewer);
-    expect(countRows(harness.db, 'share_links')).toBe(0);
+    expect(await countRows(harness.db, 'share_links')).toBe(0);
 
     // Tracking the same Moxfield deck again starts a new deck: old links stay dead.
     await history.services.trackDeck('https://moxfield.com/decks/' + blueFarmSpec().publicId);
@@ -471,7 +495,7 @@ describe('ending access', () => {
   });
 
   it('disabling the owner suspends their links until they are enabled again', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { token, viewer } = await share(harness, history);
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });

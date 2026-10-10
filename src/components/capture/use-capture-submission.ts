@@ -3,7 +3,6 @@
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 
-import type { CaptureRequestBody } from '@/integrations/moxfield/capture-protocol';
 import { routes } from '@/lib/routes';
 
 import {
@@ -12,6 +11,7 @@ import {
   type CaptureMethod,
   type CaptureResponse,
 } from './capture-api';
+import { prepareCapturePayload } from './capture-payload';
 
 export type SubmissionPhase =
   | { kind: 'idle' }
@@ -25,30 +25,31 @@ export type SubmissionPhase =
 export interface CaptureSubmission {
   phase: SubmissionPhase;
   /**
-   * Sends a capture without tracking unknown decks. Resolves with the server's answer.
+   * Sends capture text (JSON, or a payload the bookmarklet already compressed) without
+   * tracking unknown decks, compressed when the browser can (`prepareCapturePayload`).
+   * Resolves with the server's answer, or with the reason it was not sent (too large).
    * `key` is the bookmarklet key that came with a bookmarklet's deck (see `postCapture`).
    */
-  submit: (
-    payload: CaptureRequestBody['payload'],
-    method: CaptureMethod,
-    key?: string,
-  ) => Promise<CaptureResponse>;
+  submit: (text: string, method: CaptureMethod, key?: string) => Promise<CaptureResponse>;
   /** Confirms tracking the untracked deck from the last submission and sends it again. */
   track: () => Promise<void>;
   reset: () => void;
 }
 
 interface PendingCapture {
-  payload: CaptureRequestBody['payload'];
+  /** The prepared (compressed when possible) payload. */
+  payload: string;
   method: CaptureMethod;
   key: string | undefined;
 }
 
 /**
- * Submission flow shared by the bookmarklet receiver and the paste form: submit
- * (`track: false`), ask before tracking an unknown deck, then open the deck page. The
- * payload (and a bookmarklet key) is kept in a ref, never in rendered state: the payload
- * can be megabytes, and the key is a secret.
+ * Submission flow shared by the bookmarklet receiver and the paste form: compress,
+ * submit (`track: false`), ask before tracking an unknown deck, then open the deck page.
+ * The payload (and a bookmarklet key) is kept in a ref, never in rendered state: the
+ * payload can be megabytes, and the key is a secret. Tracking sends the same compressed
+ * payload again. Only the latest submission counts: the answer to one that was reset or
+ * replaced in the meantime is ignored.
  *
  * A capture sent with a key has signed this browser in (possibly as another user than
  * the page was rendered for), so the deck page is then opened with a full page load:
@@ -58,6 +59,8 @@ export function useCaptureSubmission(): CaptureSubmission {
   const router = useRouter();
   const [phase, setPhase] = useState<SubmissionPhase>({ kind: 'idle' });
   const last = useRef<PendingCapture | null>(null);
+  /** Incremented by every submission and reset, so that stale answers are ignored. */
+  const generation = useRef(0);
 
   function apply(result: CaptureResponse, signedIn: boolean): void {
     if (!result.ok) {
@@ -80,26 +83,33 @@ export function useCaptureSubmission(): CaptureSubmission {
     else router.replace(deckPage);
   }
 
-  async function submit(
-    payload: CaptureRequestBody['payload'],
-    method: CaptureMethod,
-    key?: string,
-  ): Promise<CaptureResponse> {
-    last.current = { payload, method, key };
+  async function submit(text: string, method: CaptureMethod, key?: string): Promise<CaptureResponse> {
+    const current = ++generation.current;
+    last.current = null;
     setPhase({ kind: 'submitting' });
-    const result = await postCapture(payload, method, false, key);
-    apply(result, key !== undefined);
+    const prepared = await prepareCapturePayload(text);
+    if (!prepared.ok) {
+      const refused: CaptureResponse = { ok: false, message: prepared.message };
+      if (current === generation.current) apply(refused, false);
+      return refused;
+    }
+    if (current === generation.current) last.current = { payload: prepared.payload, method, key };
+    const result = await postCapture(prepared.payload, method, false, key);
+    if (current === generation.current) apply(result, key !== undefined);
     return result;
   }
 
   async function track(): Promise<void> {
     const pending = last.current;
     if (pending === null || phase.kind !== 'untracked') return;
+    const current = ++generation.current;
     setPhase({ kind: 'tracking', name: phase.name });
-    apply(await postCapture(pending.payload, pending.method, true, pending.key), pending.key !== undefined);
+    const result = await postCapture(pending.payload, pending.method, true, pending.key);
+    if (current === generation.current) apply(result, pending.key !== undefined);
   }
 
   function reset(): void {
+    generation.current += 1;
     last.current = null;
     setPhase({ kind: 'idle' });
   }

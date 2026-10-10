@@ -5,6 +5,25 @@
  * This module is imported by client components: it must stay dependency-free and
  * browser-safe (no Node built-ins, no zod, no imports at all).
  *
+ * ## Payloads and their transport encoding (ADR 0008)
+ *
+ * What travels is the **capture payload**: the {@link CaptureEnvelope} JSON string,
+ * gzip-compressed and tagged (`gm-gzip-base64url:…`) by the bookmarklet, or the plain
+ * JSON in browsers without `CompressionStream` and from bookmarklets made before
+ * compression. The wire format, its size limits and the encoders live in
+ * `./capture-codec-protocol`, the server's decoder in `./capture-codec`. The payload is
+ * the same text on every path: the PAYLOAD message's `json`, the clipboard fallback, the
+ * same-tab form's {@link CAPTURE_FORM_FIELD} and the `payload` of {@link CaptureRequestBody}.
+ * The capture endpoints decode it before anything parses it; a typical 0.8 MB deck
+ * travels as about 0.15 MB, far below the hosting platform's request limit (6 MB on
+ * Netlify).
+ *
+ * Compression needs no new envelope version: the tag makes the transport encoding
+ * self-describing, and untagged payloads are still plain JSON. Version-2 bookmarklets
+ * made before compression therefore keep working: the capture page and the paste form
+ * compress what they hand over before sending it, and only their same-tab form posts
+ * arrive plain, within the plain-payload limit (`MAX_PLAIN_CAPTURE_BYTES`, 1.4 MB).
+ *
  * ## Version 2 (accounts, ADR 0006)
  *
  * Every bookmarklet belongs to one user: it embeds that user's **bookmarklet key**
@@ -30,7 +49,8 @@
  * 3. The bookmarklet fetches `GET {apiBase}/v3/decks/all/{publicId}` and then
  *    `GET {apiBase}/v1/decks/{deck.id}/primer` with the user's browser. A primer failure
  *    never aborts the capture: it yields `primer: null` and a `primerError` message.
- *    The result is serialized as a {@link CaptureEnvelope} JSON string.
+ *    The result is serialized as a {@link CaptureEnvelope} JSON string and encoded as the
+ *    capture payload (compressed when the browser can).
  * 4. The capture page reads the nonce from `location.hash` ({@link readCaptureNonce}),
  *    and posts `{ t: READY, n }` to `window.opener` with `targetOrigin` = the Moxfield
  *    site origin, every {@link CAPTURE_READY_INTERVAL_MS} ms until it receives an
@@ -38,15 +58,16 @@
  *    page loads before the bookmarklet's listener is ready.
  * 5. The bookmarklet accepts a message only if `event.source === popup`,
  *    `event.origin === appOrigin` and `event.data.n === nonce`. On the first READY it
- *    waits for step 3 and replies `{ t: PAYLOAD, n, json, key }` (`json` = the envelope
- *    string, `key` = the bookmarklet key) via `popup.postMessage(…, appOrigin)` — never
+ *    waits for step 3 and replies `{ t: PAYLOAD, n, json, key }` (`json` = the capture
+ *    payload, `key` = the bookmarklet key) via `popup.postMessage(…, appOrigin)` — never
  *    with `'*'`, so the key only ever reaches the exact git-moxfield origin. If capturing
  *    failed it replies `{ t: ERROR, n, message }` instead. Later READYs are ignored.
  * 6. The capture page accepts PAYLOAD/ERROR only if `event.source === window.opener`,
  *    `event.origin` is an allowed Moxfield origin and `event.data.n` equals its nonce.
- *    It checks `json.length <= MAX_CAPTURE_BYTES`, submits the envelope and the key to
- *    the git-moxfield server (same-origin `POST` {@link CAPTURE_API_PATH}, body
- *    {@link CaptureRequestBody}), stops sending READY and posts `{ t: DONE, n }` to the
+ *    It compresses a plain payload (one from a bookmarklet made before compression),
+ *    checks the payload against the size limits (`exceedsCapturePayloadLimit`), submits
+ *    it and the key to the git-moxfield server (same-origin `POST` {@link CAPTURE_API_PATH},
+ *    body {@link CaptureRequestBody}), stops sending READY and posts `{ t: DONE, n }` to the
  *    opener (`targetOrigin` = Moxfield site origin). If the server rejects the capture,
  *    it posts `{ t: ERROR, n, message }` to the opener instead of DONE. The key is kept
  *    in memory only for these requests (never stored, rendered or logged).
@@ -55,14 +76,16 @@
  *
  * ## Fallbacks
  *
- * - Popup blocked (`window.open` returned `null`): the bookmarklet copies the envelope
- *   JSON to the clipboard and asks the user to paste it at
- *   `{appUrl}{CAPTURE_PAGE_PATH}?{CAPTURE_PASTE_QUERY}`.
+ * - Popup blocked (`window.open` returned `null`): the bookmarklet copies the capture
+ *   payload to the clipboard and asks the user to paste it at
+ *   `{appUrl}{CAPTURE_PAGE_PATH}?{CAPTURE_PASTE_QUERY}`, whose paste form reads compressed
+ *   payloads as well as plain JSON.
  * - Same-tab mode (mobile / in-app browsers, no popups): after fetching, the bookmarklet
  *   submits a hidden `<form method="POST" action="{appUrl}{CAPTURE_FORM_PATH}"
  *   target="_self">` (browser-default `application/x-www-form-urlencoded`) with two
  *   fields: {@link CAPTURE_FORM_TOKEN_FIELD}, the user's bookmarklet key, and
- *   {@link CAPTURE_FORM_FIELD}, the envelope JSON string.
+ *   {@link CAPTURE_FORM_FIELD}, the capture payload. Compressed, a payload is base64url,
+ *   which form encoding leaves as it is.
  *
  *   The key is what authenticates the post. Its `Origin` header cannot: browsers send
  *   `Origin: null` for this cross-site form post from https://moxfield.com to an
@@ -79,7 +102,9 @@
  * It authenticates the `key` when one is sent (a wrong or revoked key is an error, never
  * silently replaced by the session), otherwise the session cookie; without either it
  * answers 401 ({@link CaptureErrorBody} with code `unauthenticated`). Manual paste sends
- * no key and so requires a signed-in session.
+ * no key and so requires a signed-in session. A payload over the size limits is answered
+ * with 413, one that cannot be decoded or parsed with 400; the same-tab endpoint
+ * redirects to the paste form with `error=too-large` or `error=invalid` instead.
  */
 
 /** `kind` of a {@link CaptureEnvelope}. */
@@ -90,7 +115,7 @@ export const CAPTURE_PROTOCOL_VERSION = 2;
 
 /** Capture page → opener: "I am loaded; send the payload". `{ t, n }`. */
 export const READY = 'git-moxfield:ready';
-/** Opener → capture page: the captured deck. `{ t, n, json }`. */
+/** Opener → capture page: the captured deck. `{ t, n, json, key }`. */
 export const PAYLOAD = 'git-moxfield:payload';
 /**
  * Capturing or importing failed. `{ t, n, message }`. Sent by the opener when it could
@@ -106,7 +131,11 @@ export const CAPTURE_MESSAGE_TYPES = { READY, PAYLOAD, ERROR, DONE } as const;
 /** One-time nonce: 128 bits as 32 lowercase hex characters. */
 export const NONCE_PATTERN = /^[0-9a-f]{32}$/;
 
-/** Upper bound for an envelope JSON string (characters / bytes) accepted by git-moxfield. */
+/**
+ * Upper bound for the capture's JSON text (characters / bytes) accepted by git-moxfield:
+ * the envelope once decoded. Compressed payloads are inflated up to this size at most;
+ * what may travel is limited by `./capture-codec-protocol`.
+ */
 export const MAX_CAPTURE_BYTES = 8_000_000;
 
 /** Interval at which the capture page repeats READY. */
@@ -124,7 +153,7 @@ export const CAPTURE_PASTE_QUERY = 'mode=paste';
 /** Route receiving same-tab form posts. */
 export const CAPTURE_FORM_PATH = '/api/capture/form';
 
-/** Form field holding the envelope JSON in same-tab mode. */
+/** Form field holding the capture payload (compressed or plain envelope JSON) in same-tab mode. */
 export const CAPTURE_FORM_FIELD = 'payload';
 
 /** Form field holding the user's bookmarklet key in same-tab mode. */
@@ -144,7 +173,11 @@ export type CaptureRequestMethod = 'browser-capture' | 'manual-paste';
 
 /** JSON body of `POST {@link CAPTURE_API_PATH}`. */
 export interface CaptureRequestBody {
-  /** The envelope JSON string, or `{ deck, primer }` from the paste form. */
+  /**
+   * The capture payload (`./capture-codec-protocol`): the envelope JSON or the paste
+   * form's JSON (a deck, or `{ deck, primer }` with both as JSON strings), compressed or
+   * plain. An object (`{ deck, primer }`) is accepted as it is, never decoded.
+   */
   payload: string | Record<string, unknown>;
   method: CaptureRequestMethod;
   /** `false`: an untracked deck is answered with `status: 'untracked'` instead of being tracked. */
@@ -174,7 +207,7 @@ export interface CaptureReadyMessage {
 export interface CapturePayloadMessage {
   t: typeof PAYLOAD;
   n: string;
-  /** {@link CaptureEnvelope} serialized as JSON. */
+  /** The capture payload: the {@link CaptureEnvelope} JSON, compressed or plain. */
   json: string;
   /**
    * The bookmarklet key ({@link BOOKMARKLET_KEY_PATTERN}); absent from version-1

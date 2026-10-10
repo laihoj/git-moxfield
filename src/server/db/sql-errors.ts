@@ -11,14 +11,13 @@
  *   failure is in the message: `'SQLITE_CONSTRAINT: SQLite error: FOREIGN KEY constraint
  *   failed'`, with the code prefix doubled (`'SQLITE_CONSTRAINT: SQLITE_CONSTRAINT: ...'`)
  *   for statements in a transaction or batch.
- * - **better-sqlite3** (until it is removed): a bare `SqliteError` whose `code` is the
- *   extended code.
  * - Drizzle query builders wrap the driver error in a `DrizzleQueryError` (`cause`);
  *   `db.batch()` and raw client calls throw the driver error itself. App errors may wrap
  *   either again (`RepositoryError`, `TransactionAbortedError`, ...).
  *
  * The classifier walks the `cause` chain and uses the first link that identifies the
- * failure. Two consequences of the remote protocol are deliberate:
+ * failure (a native `SqliteError` alone, without its `LibsqlError`, is classified too).
+ * Two consequences of the remote protocol are deliberate:
  *
  * - A PRIMARY KEY violation is reported as `'unique'` everywhere. Remotely it is
  *   indistinguishable from a UNIQUE index violation (both read `UNIQUE constraint failed:

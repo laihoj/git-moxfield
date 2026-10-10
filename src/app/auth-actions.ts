@@ -51,7 +51,8 @@ export async function claimAction(_previous: SignInFormState, formData: FormData
   const name = formString(formData, 'name');
   let welcome: WelcomeReason;
   try {
-    const outcome = await getAuthService().claim(code, name, await userAgent());
+    const auth = await getAuthService();
+    const outcome = await auth.claim(code, name, await userAgent());
     if (!outcome.ok) {
       return {
         status: 'error',
@@ -78,7 +79,8 @@ export async function acceptInviteAction(
   const token = formString(formData, 'token');
   const name = formString(formData, 'name');
   try {
-    const outcome = await getAuthService().acceptInvite(token, name, await userAgent());
+    const auth = await getAuthService();
+    const outcome = await auth.acceptInvite(token, name, await userAgent());
     if (!outcome.ok) {
       return {
         status: 'error',
@@ -107,7 +109,7 @@ export async function signInWithLinkAction(
   const token = formString(formData, 'token');
   let recovery: boolean;
   try {
-    const auth = getAuthService();
+    const auth = await getAuthService();
     const link = await auth.getLoginLink(token);
     const signIn = link.status === 'valid' ? await auth.consumeLoginLink(token, await userAgent()) : null;
     if (link.status !== 'valid' || signIn === null) {

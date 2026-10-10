@@ -29,7 +29,9 @@
  *
  * Every multi-step change (accepting an invite, consuming a link, claiming, revoking)
  * runs in one `IMMEDIATE` transaction, so one-time things stay one-time across
- * concurrent requests and processes.
+ * concurrent requests and processes. Transaction callbacks may run more than once (see
+ * `runInTransaction`), so they only read and write through the transaction; what happened
+ * is logged after the commit.
  */
 import 'server-only';
 
@@ -40,8 +42,8 @@ import { createLogger, type Logger } from '@/server/logger';
 import {
   createRepositories,
   type CredentialRecord,
-  type DbExecutor,
   type InviteRecord,
+  type LibsqlExecutor,
   type LoginLinkPurpose,
   type PendingHandoff,
   type Repositories,
@@ -52,7 +54,6 @@ import {
   type UserRole,
 } from '@/server/repositories';
 import { ServiceError } from '@/server/services/errors';
-import { settle } from '@/server/services/settle';
 
 import { SESSION_MAX_AGE_S } from './cookie-spec';
 import { CLAIM_PATH, invitePath, loginLinkPath } from './paths';
@@ -348,7 +349,8 @@ export interface AuthService {
 }
 
 export interface AuthServiceDependencies {
-  db: DbExecutor;
+  /** The database (or, in tests, any executor opened by `createLibsqlDatabase`). */
+  db: LibsqlExecutor;
   config: AppConfig;
   /** Clock for every timestamp and expiry. Default: system time. */
   now?: () => Date;
@@ -391,709 +393,698 @@ class DefaultAuthService implements AuthService {
   // Sessions
   // -------------------------------------------------------------------------
 
-  signInWithKey(
+  async signInWithKey(
     key: unknown,
     userAgent: string | null,
     options: { currentSessionToken?: string | null } = {},
   ): Promise<SignIn | null> {
-    return settle(() => {
-      const holder = this.keyHolder(key);
-      if (!holder) return null;
-      const now = this.now();
-      const currentToken = options.currentSessionToken ?? null;
-      const current = this.findSession(currentToken, now);
-      if (current !== null && currentToken !== null && current.user.id === holder.user.id) {
-        return this.continueSession(current, currentToken, now);
-      }
-      const signIn = this.issueSession(this.repos, holder.user, {
-        createdVia: 'bookmarklet',
-        credentialId: holder.credential.id,
-        userAgent,
-      });
-      this.logger.info('Signed in with a bookmarklet key', {
-        userId: holder.user.id,
-        keyId: holder.credential.id,
-        sessionId: signIn.session.id,
-      });
-      return signIn;
+    const holder = await this.keyHolder(key);
+    if (!holder) return null;
+    const now = this.now();
+    const currentToken = options.currentSessionToken ?? null;
+    const current = await this.findSession(this.repos, currentToken, now);
+    if (current !== null && currentToken !== null && current.user.id === holder.user.id) {
+      return this.continueSession(this.repos, current, currentToken, now);
+    }
+    const signIn = await this.issueSession(this.repos, holder.user, {
+      createdVia: 'bookmarklet',
+      credentialId: holder.credential.id,
+      userAgent,
     });
+    this.logger.info('Signed in with a bookmarklet key', {
+      userId: holder.user.id,
+      keyId: holder.credential.id,
+      sessionId: signIn.session.id,
+    });
+    return signIn;
   }
 
-  startKeyHandoff(key: unknown, userAgent: string | null): Promise<StartedHandoff | null> {
-    return settle(() => {
-      const holder = this.keyHolder(key);
-      if (!holder) return null;
-      const started = this.issueSession(
-        this.repos,
-        holder.user,
-        { createdVia: 'bookmarklet', credentialId: holder.credential.id, userAgent, pendingHandoff: true },
-        HANDOFF_LIFETIME_MS,
-      );
-      return { user: started.user, handoff: started.session };
-    });
+  async startKeyHandoff(key: unknown, userAgent: string | null): Promise<StartedHandoff | null> {
+    const holder = await this.keyHolder(key);
+    if (!holder) return null;
+    const started = await this.issueSession(
+      this.repos,
+      holder.user,
+      { createdVia: 'bookmarklet', credentialId: holder.credential.id, userAgent, pendingHandoff: true },
+      HANDOFF_LIFETIME_MS,
+    );
+    return { user: started.user, handoff: started.session };
   }
 
   completeHandoff(handoffToken: unknown, currentSessionToken: string | null): Promise<HandoffOutcome | null> {
-    return settle(() =>
-      this.repos.transaction((tx): HandoffOutcome | null => {
-        const now = this.now();
-        const handoff = this.findHandoff(tx, handoffToken, now);
-        if (handoff === null) return null;
-        const current = this.findSession(currentSessionToken, now);
-        if (current !== null && currentSessionToken !== null && current.user.id === handoff.user.id) {
-          // The browser is already signed in as the key's owner: nothing to ask.
-          tx.sessions.revoke(handoff.user.id, handoff.session.id, now.toISOString());
-          return { kind: 'kept', signIn: this.continueSession(current, currentSessionToken, now) };
-        }
-        return { kind: 'confirm', confirmation: toHandoffConfirmation(handoff, current) };
-      }),
-    );
+    return this.repos.transaction(async (tx): Promise<HandoffOutcome | null> => {
+      const now = this.now();
+      const handoff = await this.findHandoff(tx, handoffToken, now);
+      if (handoff === null) return null;
+      const current = await this.findSession(tx, currentSessionToken, now);
+      if (current !== null && currentSessionToken !== null && current.user.id === handoff.user.id) {
+        // The browser is already signed in as the key's owner: nothing to ask.
+        await tx.sessions.revoke(handoff.user.id, handoff.session.id, now.toISOString());
+        return { kind: 'kept', signIn: await this.continueSession(tx, current, currentSessionToken, now) };
+      }
+      return { kind: 'confirm', confirmation: toHandoffConfirmation(handoff, current) };
+    });
   }
 
-  describeHandoff(
+  async describeHandoff(
     handoffToken: unknown,
     currentSessionToken: string | null,
   ): Promise<HandoffConfirmationDTO | null> {
-    return settle(() => {
-      const now = this.now();
-      const handoff = this.findHandoff(this.repos, handoffToken, now);
-      if (handoff === null) return null;
-      return toHandoffConfirmation(handoff, this.findSession(currentSessionToken, now));
-    });
+    const now = this.now();
+    const [handoff, current] = await Promise.all([
+      this.findHandoff(this.repos, handoffToken, now),
+      this.findSession(this.repos, currentSessionToken, now),
+    ]);
+    if (handoff === null) return null;
+    return toHandoffConfirmation(handoff, current);
   }
 
-  confirmHandoff(handoffToken: unknown, currentSessionToken: string | null): Promise<SignIn | null> {
-    return settle(() =>
-      this.repos.transaction((tx): SignIn | null => {
+  async confirmHandoff(handoffToken: unknown, currentSessionToken: string | null): Promise<SignIn | null> {
+    const confirmed = await this.repos.transaction(
+      async (tx): Promise<{ signIn: SignIn; promoted?: Record<string, unknown> } | null> => {
         const now = this.now();
         const at = now.toISOString();
-        const handoff = this.findHandoff(tx, handoffToken, now);
+        const handoff = await this.findHandoff(tx, handoffToken, now);
         if (handoff === null || typeof handoffToken !== 'string') return null;
-        const current = this.findSession(currentSessionToken, now);
+        const current = await this.findSession(tx, currentSessionToken, now);
         if (current !== null && currentSessionToken !== null && current.user.id === handoff.user.id) {
-          tx.sessions.revoke(handoff.user.id, handoff.session.id, at);
-          return this.continueSession(current, currentSessionToken, now);
+          await tx.sessions.revoke(handoff.user.id, handoff.session.id, at);
+          return { signIn: await this.continueSession(tx, current, currentSessionToken, now) };
         }
         const expiresAt = new Date(now.getTime() + SESSION_LIFETIME_MS).toISOString();
-        if (!tx.sessions.promoteHandoff(handoff.session.id, at, expiresAt)) return null;
-        this.logger.info('Signed in with a bookmarklet key', {
-          userId: handoff.user.id,
-          keyId: handoff.credential.id,
-          sessionId: handoff.session.id,
-          replacedSessionOfAnotherUser: current !== null,
-        });
+        if (!(await tx.sessions.promoteHandoff(handoff.session.id, at, expiresAt))) return null;
         return {
-          user: toSessionUser(handoff.user, handoff.session.id),
-          session: { id: handoff.session.id, token: handoffToken, expiresAt },
+          signIn: {
+            user: toSessionUser(handoff.user, handoff.session.id),
+            session: { id: handoff.session.id, token: handoffToken, expiresAt },
+          },
+          promoted: {
+            userId: handoff.user.id,
+            keyId: handoff.credential.id,
+            sessionId: handoff.session.id,
+            replacedSessionOfAnotherUser: current !== null,
+          },
         };
-      }),
+      },
     );
+    if (confirmed?.promoted !== undefined)
+      this.logger.info('Signed in with a bookmarklet key', confirmed.promoted);
+    return confirmed?.signIn ?? null;
   }
 
-  cancelHandoff(handoffToken: unknown): Promise<void> {
-    return settle(() => {
-      const parsed = parseToken('session', handoffToken);
-      if (parsed === null) return;
-      if (this.repos.sessions.revokePendingHandoff(hashToken(parsed), this.now().toISOString())) {
-        this.logger.info('A bookmarklet sign-in was declined');
-      }
+  async cancelHandoff(handoffToken: unknown): Promise<void> {
+    const parsed = parseToken('session', handoffToken);
+    if (parsed === null) return;
+    if (await this.repos.sessions.revokePendingHandoff(hashToken(parsed), this.now().toISOString())) {
+      this.logger.info('A bookmarklet sign-in was declined');
+    }
+  }
+
+  async resolveSession(token: string | null | undefined): Promise<SessionUser | null> {
+    const now = this.now();
+    const found = await this.findSession(this.repos, token, now);
+    if (!found) return null;
+    await this.recordActivity(this.repos, found, now);
+    return toSessionUser(found.user, found.session.id);
+  }
+
+  async endSession(token: string | null | undefined): Promise<void> {
+    const parsed = parseToken('session', token);
+    if (parsed === null) return;
+    await this.repos.sessions.revokeByTokenHash(hashToken(parsed), this.now().toISOString());
+  }
+
+  async endAllSessions(user: SessionUser): Promise<number> {
+    const { sessions, deviceLinks } = await this.repos.transaction(async (tx) => {
+      const at = this.now().toISOString();
+      return {
+        sessions: await tx.sessions.revokeAllForUser(user.id, at),
+        deviceLinks: await tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at),
+      };
     });
+    this.logger.info('Signed out everywhere', { userId: user.id, sessions, deviceLinks });
+    return sessions;
   }
 
-  resolveSession(token: string | null | undefined): Promise<SessionUser | null> {
-    return settle(() => {
-      const now = this.now();
-      const found = this.findSession(token, now);
-      if (!found) return null;
-      this.recordActivity(found, now);
-      return toSessionUser(found.user, found.session.id);
+  async endOtherSessions(user: SessionUser): Promise<number> {
+    const { sessions, deviceLinks } = await this.repos.transaction(async (tx) => {
+      const at = this.now().toISOString();
+      return {
+        sessions: await tx.sessions.revokeAllForUser(user.id, at, { exceptSessionId: user.sessionId }),
+        deviceLinks: await tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at),
+      };
     });
+    this.logger.info('Signed out other devices', { userId: user.id, sessions, deviceLinks });
+    return sessions;
   }
 
-  endSession(token: string | null | undefined): Promise<void> {
-    return settle(() => {
-      const parsed = parseToken('session', token);
-      if (parsed === null) return;
-      this.repos.sessions.revokeByTokenHash(hashToken(parsed), this.now().toISOString());
-    });
-  }
-
-  endAllSessions(user: SessionUser): Promise<number> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const at = this.now().toISOString();
-        const ended = tx.sessions.revokeAllForUser(user.id, at);
-        const links = tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at);
-        this.logger.info('Signed out everywhere', { userId: user.id, sessions: ended, deviceLinks: links });
-        return ended;
-      }),
-    );
-  }
-
-  endOtherSessions(user: SessionUser): Promise<number> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const at = this.now().toISOString();
-        const ended = tx.sessions.revokeAllForUser(user.id, at, { exceptSessionId: user.sessionId });
-        const links = tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at);
-        this.logger.info('Signed out other devices', {
-          userId: user.id,
-          sessions: ended,
-          deviceLinks: links,
-        });
-        return ended;
-      }),
-    );
-  }
-
-  listSessions(user: SessionUser): Promise<SessionDTO[]> {
-    return settle(() =>
-      this.repos.sessions.listActiveForUser(user.id, this.now().toISOString()).map((session) => ({
-        id: session.id,
-        createdVia: session.createdVia,
-        userAgent: session.userAgent,
-        createdAt: session.createdAt,
-        lastSeenAt: session.lastSeenAt,
-        expiresAt: session.expiresAt,
-        current: session.id === user.sessionId,
-      })),
-    );
+  async listSessions(user: SessionUser): Promise<SessionDTO[]> {
+    const sessions = await this.repos.sessions.listActiveForUser(user.id, this.now().toISOString());
+    return sessions.map((session) => ({
+      id: session.id,
+      createdVia: session.createdVia,
+      userAgent: session.userAgent,
+      createdAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt,
+      expiresAt: session.expiresAt,
+      current: session.id === user.sessionId,
+    }));
   }
 
   revokeSession(user: SessionUser, sessionId: string): Promise<boolean> {
-    return settle(() => this.repos.sessions.revoke(user.id, sessionId, this.now().toISOString()));
+    return this.repos.sessions.revoke(user.id, sessionId, this.now().toISOString());
   }
 
   // -------------------------------------------------------------------------
   // Bookmarklet keys
   // -------------------------------------------------------------------------
 
-  createBookmarkletKey(user: SessionUser, label: string, appUrl: string): Promise<CreatedBookmarkletKey> {
-    return settle(() => {
-      const validation = validateKeyLabel(label);
-      if (!validation.ok) throw new ServiceError('invalid-input', validation.message);
-      const key = generateToken('key');
-      // Built before anything is stored: an unusable app URL must not leave a key behind.
-      const bookmarklets = this.bookmarklets(key, appUrl);
-      return this.repos.transaction((tx) => {
-        const session = this.requireOwnSession(tx, user);
-        const record = tx.credentials.createKey({
-          userId: user.id,
-          label: validation.value,
-          secretHash: hashToken(key),
-          createdByCredentialId: session.credentialId,
-        });
-        this.logger.info('Bookmarklet key created', {
-          userId: user.id,
-          keyId: record.id,
-          madeFromKeyId: record.createdByCredentialId,
-        });
-        const all = tx.credentials.listForUser(user.id, { includeRevoked: true });
-        return { key: toKeyDTO(record, all, shareLinkCounts(tx, user.id, all)), bookmarklets };
+  async createBookmarkletKey(
+    user: SessionUser,
+    label: string,
+    appUrl: string,
+  ): Promise<CreatedBookmarkletKey> {
+    const validation = validateKeyLabel(label);
+    if (!validation.ok) throw new ServiceError('invalid-input', validation.message);
+    const key = generateToken('key');
+    // Built before anything is stored: an unusable app URL must not leave a key behind.
+    const bookmarklets = this.bookmarklets(key, appUrl);
+    const { record, dto } = await this.repos.transaction(async (tx) => {
+      const session = await this.requireOwnSession(tx, user);
+      const created = await tx.credentials.createKey({
+        userId: user.id,
+        label: validation.value,
+        secretHash: hashToken(key),
+        createdByCredentialId: session.credentialId,
       });
+      const all = await tx.credentials.listForUser(user.id, { includeRevoked: true });
+      return { record: created, dto: toKeyDTO(created, all, await shareLinkCounts(tx, user.id, all)) };
     });
+    this.logger.info('Bookmarklet key created', {
+      userId: user.id,
+      keyId: record.id,
+      madeFromKeyId: record.createdByCredentialId,
+    });
+    return { key: dto, bookmarklets };
   }
 
-  listKeys(user: SessionUser): Promise<BookmarkletKeyDTO[]> {
-    return settle(() => {
-      const all = this.repos.credentials.listForUser(user.id, { includeRevoked: true });
-      const links = shareLinkCounts(this.repos, user.id, all);
-      return all.filter((key) => key.revokedAt === null).map((key) => toKeyDTO(key, all, links));
-    });
+  async listKeys(user: SessionUser): Promise<BookmarkletKeyDTO[]> {
+    const all = await this.repos.credentials.listForUser(user.id, { includeRevoked: true });
+    const links = await shareLinkCounts(this.repos, user.id, all);
+    return all.filter((key) => key.revokedAt === null).map((key) => toKeyDTO(key, all, links));
   }
 
-  revokeKey(
+  async revokeKey(
     user: SessionUser,
     keyId: string,
     options: { includeDerived?: boolean; includeShareLinks?: boolean } = {},
   ): Promise<boolean> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const at = this.now().toISOString();
-        const derived =
-          options.includeDerived === true
-            ? descendantKeyIds(tx.credentials.listForUser(user.id, { includeRevoked: true }), keyId)
-            : [];
-        if (!tx.credentials.revoke(user.id, keyId, at)) return false;
-        const keys = [keyId, ...derived];
-        let derivedKeys = 0;
-        let sessions = 0;
-        let deviceLinks = 0;
-        for (const id of keys) {
-          if (id !== keyId && tx.credentials.revoke(user.id, id, at)) derivedKeys += 1;
-          sessions += tx.sessions.revokeAllForUser(user.id, at, {
-            credentialId: id,
-            exceptSessionId: user.sessionId,
-          });
-          deviceLinks += tx.loginLinks.revokeUnused({ userId: user.id, credentialId: id }, at);
-        }
-        const shareLinks =
-          options.includeShareLinks === true ? tx.shareLinks.revokeByCredential(user.id, keys, at) : 0;
-        this.logger.info('Bookmarklet key revoked', {
-          userId: user.id,
-          keyId,
-          derivedKeys,
-          endedSessions: sessions,
-          deviceLinks,
-          shareLinks,
+    const revoked = await this.repos.transaction(async (tx) => {
+      const at = this.now().toISOString();
+      const derived =
+        options.includeDerived === true
+          ? descendantKeyIds(await tx.credentials.listForUser(user.id, { includeRevoked: true }), keyId)
+          : [];
+      if (!(await tx.credentials.revoke(user.id, keyId, at))) return null;
+      const keys = [keyId, ...derived];
+      let derivedKeys = 0;
+      let endedSessions = 0;
+      let deviceLinks = 0;
+      for (const id of keys) {
+        if (id !== keyId && (await tx.credentials.revoke(user.id, id, at))) derivedKeys += 1;
+        endedSessions += await tx.sessions.revokeAllForUser(user.id, at, {
+          credentialId: id,
+          exceptSessionId: user.sessionId,
         });
-        return true;
-      }),
-    );
-  }
-
-  listRevokedKeyShareLinks(user: SessionUser): Promise<RevokedKeyShareLinksDTO[]> {
-    return settle(() => {
-      const revoked = this.repos.credentials
-        .listForUser(user.id, { includeRevoked: true })
-        .filter((key): key is CredentialRecord & { revokedAt: string } => key.revokedAt !== null);
-      const links = shareLinkCounts(this.repos, user.id, revoked);
-      return revoked
-        .flatMap((key) => {
-          const shareLinkCount = links.get(key.id) ?? 0;
-          return shareLinkCount === 0
-            ? []
-            : [{ id: key.id, label: key.label, revokedAt: key.revokedAt, shareLinkCount }];
-        })
-        .sort((a, b) => b.revokedAt.localeCompare(a.revokedAt));
+        deviceLinks += await tx.loginLinks.revokeUnused({ userId: user.id, credentialId: id }, at);
+      }
+      const shareLinks =
+        options.includeShareLinks === true ? await tx.shareLinks.revokeByCredential(user.id, keys, at) : 0;
+      return { derivedKeys, endedSessions, deviceLinks, shareLinks };
     });
+    if (revoked === null) return false;
+    this.logger.info('Bookmarklet key revoked', { userId: user.id, keyId, ...revoked });
+    return true;
   }
 
-  revokeKeyShareLinks(user: SessionUser, keyId: string): Promise<number> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const own = tx.credentials
-          .listForUser(user.id, { includeRevoked: true })
-          .some((key) => key.id === keyId);
-        if (!own) return 0;
-        const shareLinks = tx.shareLinks.revokeByCredential(user.id, [keyId], this.now().toISOString());
-        if (shareLinks > 0) {
-          this.logger.info('Share links of a bookmarklet key revoked', {
-            userId: user.id,
-            keyId,
-            shareLinks,
-          });
-        }
-        return shareLinks;
-      }),
+  async listRevokedKeyShareLinks(user: SessionUser): Promise<RevokedKeyShareLinksDTO[]> {
+    const revoked = (await this.repos.credentials.listForUser(user.id, { includeRevoked: true })).filter(
+      (key): key is CredentialRecord & { revokedAt: string } => key.revokedAt !== null,
     );
+    const links = await shareLinkCounts(this.repos, user.id, revoked);
+    return revoked
+      .flatMap((key) => {
+        const shareLinkCount = links.get(key.id) ?? 0;
+        return shareLinkCount === 0
+          ? []
+          : [{ id: key.id, label: key.label, revokedAt: key.revokedAt, shareLinkCount }];
+      })
+      .sort((a, b) => b.revokedAt.localeCompare(a.revokedAt));
+  }
+
+  async revokeKeyShareLinks(user: SessionUser, keyId: string): Promise<number> {
+    const shareLinks = await this.repos.transaction(async (tx) => {
+      const own = (await tx.credentials.listForUser(user.id, { includeRevoked: true })).some(
+        (key) => key.id === keyId,
+      );
+      if (!own) return 0;
+      return tx.shareLinks.revokeByCredential(user.id, [keyId], this.now().toISOString());
+    });
+    if (shareLinks > 0) {
+      this.logger.info('Share links of a bookmarklet key revoked', { userId: user.id, keyId, shareLinks });
+    }
+    return shareLinks;
   }
 
   // -------------------------------------------------------------------------
   // One-time sign-in links
   // -------------------------------------------------------------------------
 
-  createDeviceLink(user: SessionUser): Promise<IssuedLink> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const session = this.requireOwnSession(tx, user);
-        const link = this.issueLoginLink(tx, {
-          userId: user.id,
-          purpose: 'device',
-          createdByUserId: user.id,
-          credentialId: session.credentialId,
-          lifetimeMs: DEVICE_LINK_LIFETIME_MS,
-        });
-        this.logger.info('Device link created', { userId: user.id });
-        return link;
-      }),
-    );
-  }
-
-  createRecoveryLink(actor: Actor, userId: string): Promise<IssuedLink> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const actorId = this.requireAdmin(tx, actor);
-        if (actorId === userId) {
-          throw new ServiceError(
-            'invalid-input',
-            'You can’t make a recovery link for yourself. On a device where you’re signed in, use “Sign in on another device” in Account instead.',
-          );
-        }
-        const target = tx.users.getById(userId);
-        if (!target) throw new ServiceError('not-found', 'This user does not exist.');
-        if (target.disabledAt !== null) {
-          throw new ServiceError(
-            'invalid-input',
-            `${target.displayName} is disabled. Enable the account before creating a recovery link.`,
-          );
-        }
-        // Only the newest recovery link of a user works.
-        const replaced = tx.loginLinks.revokeUnused(
-          { userId, purpose: 'recovery' },
-          this.now().toISOString(),
-        );
-        const link = this.issueLoginLink(tx, {
-          userId,
-          purpose: 'recovery',
-          createdByUserId: actorId,
-          credentialId: null,
-          lifetimeMs: RECOVERY_LINK_LIFETIME_MS,
-        });
-        this.logger.info('Recovery link created', {
-          userId,
-          createdBy: actorId ?? 'command line',
-          replacedLinks: replaced,
-        });
-        return link;
-      }),
-    );
-  }
-
-  listRecoveryLinks(actor: Actor): Promise<RecoveryLinkDTO[]> {
-    return settle(() => {
-      this.requireAdmin(this.repos, actor);
-      const people = this.repos.users.list();
-      const names = new Map(people.map((person) => [person.id, person.displayName]));
-      return this.repos.loginLinks
-        .listPending('recovery', this.now().toISOString())
-        .filter((link) => this.repos.loginLinks.hasActiveCreator(link))
-        .map((link) => ({
-          id: link.id,
-          user: { id: link.userId, displayName: names.get(link.userId) ?? '' },
-          createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
-          createdAt: link.createdAt,
-          expiresAt: link.expiresAt,
-        }));
-    });
-  }
-
-  revokeRecoveryLink(actor: Actor, linkId: string): Promise<boolean> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const actorId = this.requireAdmin(tx, actor);
-        const revoked = tx.loginLinks.revoke(linkId, this.now().toISOString(), { purpose: 'recovery' });
-        if (revoked) {
-          this.logger.info('Recovery link withdrawn', { linkId, revokedBy: actorId ?? 'command line' });
-        }
-        return revoked;
-      }),
-    );
-  }
-
-  listRecoveryUses(user: SessionUser): Promise<RecoveryUseDTO[]> {
-    return settle(() => {
-      const names = userNames(this.repos);
-      return this.repos.loginLinks.listUsedForUser(user.id, 'recovery').flatMap((link) =>
-        link.usedAt === null
-          ? []
-          : [
-              {
-                createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
-                createdAt: link.createdAt,
-                usedAt: link.usedAt,
-              },
-            ],
-      );
-    });
-  }
-
-  getLoginLink(token: unknown): Promise<LoginLinkStatusDTO> {
-    return settle((): LoginLinkStatusDTO => {
-      const parsed = parseToken('login', token);
-      const link = parsed === null ? null : this.repos.loginLinks.getByTokenHash(hashToken(parsed));
-      if (!link) return { status: 'invalid' };
-      if (link.usedAt !== null) return { status: 'used' };
-      if (link.revokedAt !== null || !this.repos.loginLinks.hasActiveCreator(link))
-        return { status: 'revoked' };
-      if (link.expiresAt <= this.now().toISOString()) return { status: 'expired' };
-      const user = this.repos.users.getById(link.userId);
-      if (user?.disabledAt !== null) return { status: 'invalid' };
-      return {
-        status: 'valid',
-        purpose: link.purpose,
-        displayName: user.displayName,
-        expiresAt: link.expiresAt,
-      };
-    });
-  }
-
-  consumeLoginLink(token: unknown, userAgent: string | null): Promise<SignIn | null> {
-    return settle(() => {
-      const parsed = parseToken('login', token);
-      if (parsed === null) return null;
-      return this.repos.transaction((tx) => {
-        const at = this.now().toISOString();
-        const consumed = tx.loginLinks.consume(hashToken(parsed), at);
-        if (!consumed) return null;
-        const { link, user } = consumed;
-        if (link.purpose === 'recovery') {
-          // Recovery is for someone who lost every way in: whatever else still signs in as
-          // them (a lost or stolen device, an old bookmarklet) stops working now, and so
-          // does every share link to their decks (ADR 0007). Whoever held a lost device,
-          // or an earlier recovery link, could have made those, and nothing tells them
-          // apart from the person's own: the read access they grant would outlive the
-          // recovery, unnoticed.
-          const endedSessions = tx.sessions.revokeAllForUser(user.id, at);
-          const revokedKeys = tx.credentials.revokeAllForUser(user.id, at);
-          const revokedLinks = tx.loginLinks.revokeUnused({ userId: user.id }, at);
-          const revokedShareLinks = tx.shareLinks.revokeAllForWorkspace(user.workspaceId, at);
-          this.logger.info('Recovery link used: other sessions ended, keys and share links revoked', {
-            userId: user.id,
-            createdBy: link.createdByUserId ?? 'command line',
-            endedSessions,
-            revokedKeys,
-            revokedLinks,
-            revokedShareLinks,
-          });
-        }
-        const signIn = this.issueSession(tx, user, {
-          createdVia: link.purpose === 'device' ? 'device-link' : 'recovery-link',
-          // A device link's session descends from the key its creating session descends from.
-          credentialId: link.purpose === 'device' ? link.credentialId : null,
-          userAgent,
-        });
-        this.logger.info('Signed in with a one-time link', {
-          userId: user.id,
-          purpose: link.purpose,
-          sessionId: signIn.session.id,
-        });
-        return signIn;
+  async createDeviceLink(user: SessionUser): Promise<IssuedLink> {
+    const link = await this.repos.transaction(async (tx) => {
+      const session = await this.requireOwnSession(tx, user);
+      return this.issueLoginLink(tx, {
+        userId: user.id,
+        purpose: 'device',
+        createdByUserId: user.id,
+        credentialId: session.credentialId,
+        lifetimeMs: DEVICE_LINK_LIFETIME_MS,
       });
     });
+    this.logger.info('Device link created', { userId: user.id });
+    return link;
+  }
+
+  async createRecoveryLink(actor: Actor, userId: string): Promise<IssuedLink> {
+    const { link, actorId, replaced } = await this.repos.transaction(async (tx) => {
+      const admin = await this.requireAdmin(tx, actor);
+      if (admin === userId) {
+        throw new ServiceError(
+          'invalid-input',
+          'You can’t make a recovery link for yourself. On a device where you’re signed in, use “Sign in on another device” in Account instead.',
+        );
+      }
+      const target = await tx.users.getById(userId);
+      if (!target) throw new ServiceError('not-found', 'This user does not exist.');
+      if (target.disabledAt !== null) {
+        throw new ServiceError(
+          'invalid-input',
+          `${target.displayName} is disabled. Enable the account before creating a recovery link.`,
+        );
+      }
+      // Only the newest recovery link of a user works.
+      const withdrawn = await tx.loginLinks.revokeUnused(
+        { userId, purpose: 'recovery' },
+        this.now().toISOString(),
+      );
+      const issued = await this.issueLoginLink(tx, {
+        userId,
+        purpose: 'recovery',
+        createdByUserId: admin,
+        credentialId: null,
+        lifetimeMs: RECOVERY_LINK_LIFETIME_MS,
+      });
+      return { link: issued, actorId: admin, replaced: withdrawn };
+    });
+    this.logger.info('Recovery link created', {
+      userId,
+      createdBy: actorId ?? 'command line',
+      replacedLinks: replaced,
+    });
+    return link;
+  }
+
+  async listRecoveryLinks(actor: Actor): Promise<RecoveryLinkDTO[]> {
+    await this.requireAdmin(this.repos, actor);
+    const [people, pending] = await Promise.all([
+      this.repos.users.list(),
+      this.repos.loginLinks.listPending('recovery', this.now().toISOString()),
+    ]);
+    const names = new Map(people.map((person) => [person.id, person.displayName]));
+    const active = await Promise.all(pending.map((link) => this.repos.loginLinks.hasActiveCreator(link)));
+    return pending
+      .filter((_, index) => active[index] === true)
+      .map((link) => ({
+        id: link.id,
+        user: { id: link.userId, displayName: names.get(link.userId) ?? '' },
+        createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
+        createdAt: link.createdAt,
+        expiresAt: link.expiresAt,
+      }));
+  }
+
+  async revokeRecoveryLink(actor: Actor, linkId: string): Promise<boolean> {
+    const { revoked, actorId } = await this.repos.transaction(async (tx) => {
+      const admin = await this.requireAdmin(tx, actor);
+      return {
+        actorId: admin,
+        revoked: await tx.loginLinks.revoke(linkId, this.now().toISOString(), { purpose: 'recovery' }),
+      };
+    });
+    if (revoked)
+      this.logger.info('Recovery link withdrawn', { linkId, revokedBy: actorId ?? 'command line' });
+    return revoked;
+  }
+
+  async listRecoveryUses(user: SessionUser): Promise<RecoveryUseDTO[]> {
+    const [names, used] = await Promise.all([
+      userNames(this.repos),
+      this.repos.loginLinks.listUsedForUser(user.id, 'recovery'),
+    ]);
+    return used.flatMap((link) =>
+      link.usedAt === null
+        ? []
+        : [
+            {
+              createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
+              createdAt: link.createdAt,
+              usedAt: link.usedAt,
+            },
+          ],
+    );
+  }
+
+  async getLoginLink(token: unknown): Promise<LoginLinkStatusDTO> {
+    const parsed = parseToken('login', token);
+    const link = parsed === null ? null : await this.repos.loginLinks.getByTokenHash(hashToken(parsed));
+    if (!link) return { status: 'invalid' };
+    if (link.usedAt !== null) return { status: 'used' };
+    const [creatorActive, user] = await Promise.all([
+      this.repos.loginLinks.hasActiveCreator(link),
+      this.repos.users.getById(link.userId),
+    ]);
+    if (link.revokedAt !== null || !creatorActive) return { status: 'revoked' };
+    if (link.expiresAt <= this.now().toISOString()) return { status: 'expired' };
+    if (user?.disabledAt !== null) return { status: 'invalid' };
+    return {
+      status: 'valid',
+      purpose: link.purpose,
+      displayName: user.displayName,
+      expiresAt: link.expiresAt,
+    };
+  }
+
+  async consumeLoginLink(token: unknown, userAgent: string | null): Promise<SignIn | null> {
+    const parsed = parseToken('login', token);
+    if (parsed === null) return null;
+    const consumed = await this.repos.transaction(async (tx) => {
+      const at = this.now().toISOString();
+      const found = await tx.loginLinks.consume(hashToken(parsed), at);
+      if (!found) return null;
+      const { link, user } = found;
+      let recovery: Record<string, unknown> | null = null;
+      if (link.purpose === 'recovery') {
+        // Recovery is for someone who lost every way in: whatever else still signs in as
+        // them (a lost or stolen device, an old bookmarklet) stops working now, and so
+        // does every share link to their decks (ADR 0007). Whoever held a lost device,
+        // or an earlier recovery link, could have made those, and nothing tells them
+        // apart from the person's own: the read access they grant would outlive the
+        // recovery, unnoticed.
+        recovery = {
+          userId: user.id,
+          createdBy: link.createdByUserId ?? 'command line',
+          endedSessions: await tx.sessions.revokeAllForUser(user.id, at),
+          revokedKeys: await tx.credentials.revokeAllForUser(user.id, at),
+          revokedLinks: await tx.loginLinks.revokeUnused({ userId: user.id }, at),
+          revokedShareLinks: await tx.shareLinks.revokeAllForWorkspace(user.workspaceId, at),
+        };
+      }
+      const signIn = await this.issueSession(tx, user, {
+        createdVia: link.purpose === 'device' ? 'device-link' : 'recovery-link',
+        // A device link's session descends from the key its creating session descends from.
+        credentialId: link.purpose === 'device' ? link.credentialId : null,
+        userAgent,
+      });
+      return { signIn, purpose: link.purpose, recovery };
+    });
+    if (consumed === null) return null;
+    const { signIn, purpose, recovery } = consumed;
+    if (recovery !== null) {
+      this.logger.info('Recovery link used: other sessions ended, keys and share links revoked', recovery);
+    }
+    this.logger.info('Signed in with a one-time link', {
+      userId: signIn.user.id,
+      purpose,
+      sessionId: signIn.session.id,
+    });
+    return signIn;
   }
 
   // -------------------------------------------------------------------------
   // Invites
   // -------------------------------------------------------------------------
 
-  createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite> {
-    return settle(() => {
-      // Checked at runtime too: callers may pass a role straight from a form.
-      if (!USER_ROLES.includes(input.role)) {
-        throw new ServiceError('invalid-input', 'An invite is for a member or an admin.');
+  async createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite> {
+    // Checked at runtime too: callers may pass a role straight from a form.
+    if (!USER_ROLES.includes(input.role)) {
+      throw new ServiceError('invalid-input', 'An invite is for a member or an admin.');
+    }
+    const note = validateInviteNote(input.note ?? '');
+    if (!note.ok) throw new ServiceError('invalid-input', note.message);
+    const { issued, actorId } = await this.repos.transaction(async (tx) => {
+      const admin = await this.requireAdmin(tx, actor);
+      const token = generateToken('invite');
+      const expiresAt = this.expiry(INVITE_LIFETIME_MS);
+      const record = await tx.invites.create({
+        tokenHash: hashToken(token),
+        role: input.role,
+        note: note.value,
+        createdByUserId: admin,
+        expiresAt,
+      });
+      const invite = this.toInviteDTO(record, await userNames(tx), true);
+      return { issued: { invite, path: invitePath(token), expiresAt }, actorId: admin };
+    });
+    this.logger.info('Invite created', {
+      inviteId: issued.invite.id,
+      role: issued.invite.role,
+      createdBy: actorId ?? 'command line',
+    });
+    return issued;
+  }
+
+  async getInvite(token: unknown): Promise<InviteLinkStatusDTO> {
+    const parsed = parseToken('invite', token);
+    const invite = parsed === null ? null : await this.repos.invites.getByTokenHash(hashToken(parsed));
+    if (!invite) return { status: 'invalid' };
+    const status = this.inviteStatus(invite, await this.repos.invites.hasActiveCreator(invite));
+    return status === 'pending'
+      ? { status: 'valid', role: invite.role, expiresAt: invite.expiresAt }
+      : { status };
+  }
+
+  async acceptInvite(
+    token: unknown,
+    displayName: string,
+    userAgent: string | null,
+  ): Promise<AcceptInviteOutcome> {
+    const name = validateDisplayName(displayName);
+    if (!name.ok) return { ok: false, reason: 'invalid-name', message: name.message };
+    const parsed = parseToken('invite', token);
+    if (parsed === null) return { ok: false, reason: 'invalid', message: INVITE_PROBLEMS.invalid };
+    const tokenHash = hashToken(parsed);
+    const result = await this.repos.transaction(async (tx) => {
+      const adopt =
+        (await tx.invites.getByTokenHash(tokenHash))?.role === 'admin' && (await hasUnownedLocalHistory(tx));
+      const accepted = await tx.invites.accept(tokenHash, this.now().toISOString(), {
+        displayName: name.value,
+        ...(adopt ? { adoptWorkspaceId: LOCAL_WORKSPACE_ID } : {}),
+      });
+      if (!accepted) {
+        const invite = await tx.invites.getByTokenHash(tokenHash);
+        const status = invite
+          ? this.inviteStatus(invite, await tx.invites.hasActiveCreator(invite))
+          : 'invalid';
+        const reason = status === 'pending' ? 'invalid' : status;
+        return {
+          outcome: { ok: false, reason, message: INVITE_PROBLEMS[reason] } satisfies AcceptInviteOutcome,
+        };
       }
-      const note = validateInviteNote(input.note ?? '');
-      if (!note.ok) throw new ServiceError('invalid-input', note.message);
-      return this.repos.transaction((tx) => {
-        const actorId = this.requireAdmin(tx, actor);
-        const token = generateToken('invite');
-        const expiresAt = this.expiry(INVITE_LIFETIME_MS);
-        const record = tx.invites.create({
-          tokenHash: hashToken(token),
-          role: input.role,
-          note: note.value,
-          createdByUserId: actorId,
-          expiresAt,
-        });
-        this.logger.info('Invite created', {
-          inviteId: record.id,
-          role: record.role,
-          createdBy: actorId ?? 'command line',
-        });
-        return { invite: this.toInviteDTO(record, userNames(tx), true), path: invitePath(token), expiresAt };
+      const signIn = await this.issueSession(tx, accepted.user, { createdVia: 'invite', userAgent });
+      return { outcome: { ok: true, signIn } satisfies AcceptInviteOutcome, accepted, adopt };
+    });
+    if (result.accepted !== undefined) {
+      this.logger.info('Invite accepted', {
+        inviteId: result.accepted.invite.id,
+        userId: result.accepted.user.id,
+        role: result.accepted.user.role,
+        adoptedLocalWorkspace: result.adopt,
       });
-    });
+    }
+    return result.outcome;
   }
 
-  getInvite(token: unknown): Promise<InviteLinkStatusDTO> {
-    return settle((): InviteLinkStatusDTO => {
-      const parsed = parseToken('invite', token);
-      const invite = parsed === null ? null : this.repos.invites.getByTokenHash(hashToken(parsed));
-      if (!invite) return { status: 'invalid' };
-      const status = this.inviteStatus(invite, this.repos.invites.hasActiveCreator(invite));
-      return status === 'pending'
-        ? { status: 'valid', role: invite.role, expiresAt: invite.expiresAt }
-        : { status };
-    });
-  }
-
-  acceptInvite(token: unknown, displayName: string, userAgent: string | null): Promise<AcceptInviteOutcome> {
-    return settle((): AcceptInviteOutcome => {
-      const name = validateDisplayName(displayName);
-      if (!name.ok) return { ok: false, reason: 'invalid-name', message: name.message };
-      const parsed = parseToken('invite', token);
-      if (parsed === null) return { ok: false, reason: 'invalid', message: INVITE_PROBLEMS.invalid };
-      const tokenHash = hashToken(parsed);
-      return this.repos.transaction((tx): AcceptInviteOutcome => {
-        const adopt = tx.invites.getByTokenHash(tokenHash)?.role === 'admin' && hasUnownedLocalHistory(tx);
-        const accepted = tx.invites.accept(tokenHash, this.now().toISOString(), {
-          displayName: name.value,
-          ...(adopt ? { adoptWorkspaceId: LOCAL_WORKSPACE_ID } : {}),
-        });
-        if (!accepted) {
-          const invite = tx.invites.getByTokenHash(tokenHash);
-          const status = invite ? this.inviteStatus(invite, tx.invites.hasActiveCreator(invite)) : 'invalid';
-          const reason = status === 'pending' ? 'invalid' : status;
-          return { ok: false, reason, message: INVITE_PROBLEMS[reason] };
-        }
-        const signIn = this.issueSession(tx, accepted.user, { createdVia: 'invite', userAgent });
-        this.logger.info('Invite accepted', {
-          inviteId: accepted.invite.id,
-          userId: accepted.user.id,
-          role: accepted.user.role,
-          adoptedLocalWorkspace: adopt,
-        });
-        return { ok: true, signIn };
-      });
-    });
-  }
-
-  listInvites(actor: Actor): Promise<InviteDTO[]> {
-    return settle(() => {
-      this.requireAdmin(this.repos, actor);
-      const people = this.repos.users.list();
-      const names = new Map(people.map((person) => [person.id, person.displayName]));
-      const activeAdmins = new Set(
-        people.filter((person) => person.role === 'admin' && person.disabledAt === null).map((p) => p.id),
-      );
-      return this.repos.invites
-        .list()
-        .map((invite) =>
-          this.toInviteDTO(
-            invite,
-            names,
-            invite.createdByUserId === null || activeAdmins.has(invite.createdByUserId),
-          ),
-        );
-    });
-  }
-
-  revokeInvite(actor: Actor, inviteId: string): Promise<boolean> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        const actorId = this.requireAdmin(tx, actor);
-        const revoked = tx.invites.revoke(inviteId, this.now().toISOString());
-        if (revoked) this.logger.info('Invite revoked', { inviteId, revokedBy: actorId ?? 'command line' });
-        return revoked;
-      }),
+  async listInvites(actor: Actor): Promise<InviteDTO[]> {
+    await this.requireAdmin(this.repos, actor);
+    const [people, invites] = await Promise.all([this.repos.users.list(), this.repos.invites.list()]);
+    const names = new Map(people.map((person) => [person.id, person.displayName]));
+    const activeAdmins = new Set(
+      people.filter((person) => person.role === 'admin' && person.disabledAt === null).map((p) => p.id),
     );
+    return invites.map((invite) =>
+      this.toInviteDTO(
+        invite,
+        names,
+        invite.createdByUserId === null || activeAdmins.has(invite.createdByUserId),
+      ),
+    );
+  }
+
+  async revokeInvite(actor: Actor, inviteId: string): Promise<boolean> {
+    const { revoked, actorId } = await this.repos.transaction(async (tx) => {
+      const admin = await this.requireAdmin(tx, actor);
+      return { actorId: admin, revoked: await tx.invites.revoke(inviteId, this.now().toISOString()) };
+    });
+    if (revoked) this.logger.info('Invite revoked', { inviteId, revokedBy: actorId ?? 'command line' });
+    return revoked;
   }
 
   // -------------------------------------------------------------------------
   // Users
   // -------------------------------------------------------------------------
 
-  listUsers(actor: Actor): Promise<UserDTO[]> {
-    return settle(() => {
-      this.requireAdmin(this.repos, actor);
-      return this.repos.users.list().map(toUserDTO);
-    });
+  async listUsers(actor: Actor): Promise<UserDTO[]> {
+    await this.requireAdmin(this.repos, actor);
+    return (await this.repos.users.list()).map(toUserDTO);
   }
 
-  disableUser(actor: Actor, userId: string): Promise<UserOutcome> {
-    return settle(() =>
-      this.repos.transaction((tx): UserOutcome => {
-        const actorId = this.requireAdmin(tx, actor);
+  async disableUser(actor: Actor, userId: string): Promise<UserOutcome> {
+    const result = await this.repos.transaction(
+      async (tx): Promise<{ outcome: UserOutcome; log?: Record<string, unknown> }> => {
+        const actorId = await this.requireAdmin(tx, actor);
         if (actorId === userId) {
-          return { ok: false, reason: 'self', message: 'You cannot disable your own account.' };
+          return { outcome: { ok: false, reason: 'self', message: 'You cannot disable your own account.' } };
         }
-        const target = tx.users.getById(userId);
-        if (!target) return userNotFound();
-        if (target.role === 'admin' && target.disabledAt === null && tx.users.countActiveAdmins() <= 1) {
-          return { ok: false, reason: 'last-admin', message: 'The last admin cannot be disabled.' };
+        const target = await tx.users.getById(userId);
+        if (!target) return { outcome: userNotFound() };
+        if (
+          target.role === 'admin' &&
+          target.disabledAt === null &&
+          (await tx.users.countActiveAdmins()) <= 1
+        ) {
+          return {
+            outcome: { ok: false, reason: 'last-admin', message: 'The last admin cannot be disabled.' },
+          };
         }
         const at = this.now().toISOString();
-        tx.users.setDisabled(userId, true);
-        const ended = tx.sessions.revokeAllForUser(userId, at);
+        await tx.users.setDisabled(userId, true);
+        const ended = await tx.sessions.revokeAllForUser(userId, at);
         // Withdrawn for good, so enabling the user again revives none of it: links that
         // sign them in, and what they made as an admin (invites, recovery links).
-        const linksForThem = tx.loginLinks.revokeUnused({ userId }, at);
-        const linksByThem = tx.loginLinks.revokeUnused({ createdByUserId: userId }, at);
-        const invites = tx.invites.revokePendingCreatedBy(userId, at);
-        this.logger.info('User disabled', {
-          userId,
-          disabledBy: actorId ?? 'command line',
-          endedSessions: ended,
-          revokedLinks: linksForThem + linksByThem,
-          revokedInvites: invites,
-        });
-        return { ok: true, user: this.userDTO(tx, userId) };
-      }),
+        const linksForThem = await tx.loginLinks.revokeUnused({ userId }, at);
+        const linksByThem = await tx.loginLinks.revokeUnused({ createdByUserId: userId }, at);
+        const invites = await tx.invites.revokePendingCreatedBy(userId, at);
+        return {
+          outcome: { ok: true, user: await this.userDTO(tx, userId) },
+          log: {
+            userId,
+            disabledBy: actorId ?? 'command line',
+            endedSessions: ended,
+            revokedLinks: linksForThem + linksByThem,
+            revokedInvites: invites,
+          },
+        };
+      },
     );
+    if (result.log !== undefined) this.logger.info('User disabled', result.log);
+    return result.outcome;
   }
 
-  enableUser(actor: Actor, userId: string): Promise<UserOutcome> {
-    return settle(() =>
-      this.repos.transaction((tx): UserOutcome => {
-        const actorId = this.requireAdmin(tx, actor);
-        if (!tx.users.getById(userId)) return userNotFound();
-        tx.users.setDisabled(userId, false);
-        this.logger.info('User enabled', { userId, enabledBy: actorId ?? 'command line' });
-        return { ok: true, user: this.userDTO(tx, userId) };
-      }),
+  async enableUser(actor: Actor, userId: string): Promise<UserOutcome> {
+    const result = await this.repos.transaction(
+      async (tx): Promise<{ outcome: UserOutcome; actorId?: string | null }> => {
+        const actorId = await this.requireAdmin(tx, actor);
+        if (!(await tx.users.getById(userId))) return { outcome: userNotFound() };
+        await tx.users.setDisabled(userId, false);
+        return { outcome: { ok: true, user: await this.userDTO(tx, userId) }, actorId };
+      },
     );
+    if (result.actorId !== undefined) {
+      this.logger.info('User enabled', { userId, enabledBy: result.actorId ?? 'command line' });
+    }
+    return result.outcome;
   }
 
   renameUser(actor: Actor, userId: string, displayName: string): Promise<UserOutcome> {
-    return settle(() =>
-      this.repos.transaction((tx) => {
-        this.requireAdmin(tx, actor);
-        return this.rename(tx, userId, displayName);
-      }),
-    );
+    return this.repos.transaction(async (tx) => {
+      await this.requireAdmin(tx, actor);
+      return this.rename(tx, userId, displayName);
+    });
   }
 
   renameSelf(user: SessionUser, displayName: string): Promise<UserOutcome> {
-    return settle(() => this.repos.transaction((tx) => this.rename(tx, user.id, displayName)));
+    return this.repos.transaction((tx) => this.rename(tx, user.id, displayName));
   }
 
   // -------------------------------------------------------------------------
   // First run
   // -------------------------------------------------------------------------
 
-  isClaimable(): Promise<boolean> {
-    return settle(() => this.repos.users.count() === 0);
+  async isClaimable(): Promise<boolean> {
+    return (await this.repos.users.count()) === 0;
   }
 
-  claimStatus(): Promise<ClaimStatusDTO> {
-    return settle(() => {
-      if (this.repos.users.count() > 0) return { claimable: false };
-      const code = this.ensureSetupCode();
-      const where =
-        this.config.PUBLIC_APP_URL === undefined
-          ? CLAIM_PATH
-          : new URL(CLAIM_PATH, this.config.PUBLIC_APP_URL).href;
-      this.logger.warn(
-        `git-moxfield has no admin yet. To claim it, open ${where} and enter the setup code ${code}`,
-        { path: CLAIM_PATH },
-      );
-      return { claimable: true };
+  async claimStatus(): Promise<ClaimStatusDTO> {
+    if ((await this.repos.users.count()) > 0) return { claimable: false };
+    const code = await this.ensureSetupCode();
+    const where =
+      this.config.PUBLIC_APP_URL === undefined
+        ? CLAIM_PATH
+        : new URL(CLAIM_PATH, this.config.PUBLIC_APP_URL).href;
+    this.logger.warn(
+      `git-moxfield has no admin yet. To claim it, open ${where} and enter the setup code ${code}`,
+      { path: CLAIM_PATH },
+    );
+    return { claimable: true };
+  }
+
+  async setupCode(): Promise<string | null> {
+    return (await this.repos.users.count()) > 0 ? null : this.ensureSetupCode();
+  }
+
+  async claim(code: string, displayName: string, userAgent: string | null): Promise<ClaimOutcome> {
+    const name = validateDisplayName(displayName);
+    if (!name.ok) return { ok: false, reason: 'invalid-name', message: name.message };
+    const typed = normalizeSetupCode(code);
+    const outcome = await this.repos.transaction(async (tx): Promise<ClaimOutcome> => {
+      // Inside one IMMEDIATE transaction: a concurrent claim either committed before
+      // (and this one sees its user) or waits until this one has committed.
+      if ((await tx.users.count()) > 0) {
+        return {
+          ok: false,
+          reason: 'claimed',
+          message: 'git-moxfield already has an admin. Ask them for an invite.',
+        };
+      }
+      const stored = await tx.settings.get(SETUP_CODE_SETTING);
+      if (stored === null || typed === null || !setupCodesEqual(typed, stored)) {
+        return {
+          ok: false,
+          reason: 'invalid-code',
+          message: 'That is not the setup code. Copy it from the server log and try again.',
+        };
+      }
+      const adopt = await hasUnownedLocalHistory(tx);
+      const user = adopt
+        ? await tx.users.createForWorkspace({
+            displayName: name.value,
+            role: 'admin',
+            workspaceId: LOCAL_WORKSPACE_ID,
+          })
+        : await tx.users.create({ displayName: name.value, role: 'admin' });
+      await tx.settings.delete(SETUP_CODE_SETTING);
+      const signIn = await this.issueSession(tx, user, { createdVia: 'claim', userAgent });
+      return { ok: true, signIn, adoptedLocalWorkspace: adopt };
     });
-  }
-
-  setupCode(): Promise<string | null> {
-    return settle(() => (this.repos.users.count() > 0 ? null : this.ensureSetupCode()));
-  }
-
-  claim(code: string, displayName: string, userAgent: string | null): Promise<ClaimOutcome> {
-    return settle((): ClaimOutcome => {
-      const name = validateDisplayName(displayName);
-      if (!name.ok) return { ok: false, reason: 'invalid-name', message: name.message };
-      const typed = normalizeSetupCode(code);
-      return this.repos.transaction((tx): ClaimOutcome => {
-        // Inside one IMMEDIATE transaction: a concurrent claim either committed before
-        // (and this one sees its user) or waits until this one has committed.
-        if (tx.users.count() > 0) {
-          return {
-            ok: false,
-            reason: 'claimed',
-            message: 'git-moxfield already has an admin. Ask them for an invite.',
-          };
-        }
-        const stored = tx.settings.get(SETUP_CODE_SETTING);
-        if (stored === null || typed === null || !setupCodesEqual(typed, stored)) {
-          this.logger.warn('Rejected a claim with a wrong setup code');
-          return {
-            ok: false,
-            reason: 'invalid-code',
-            message: 'That is not the setup code. Copy it from the server log and try again.',
-          };
-        }
-        const adopt = hasUnownedLocalHistory(tx);
-        const user = adopt
-          ? tx.users.createForWorkspace({
-              displayName: name.value,
-              role: 'admin',
-              workspaceId: LOCAL_WORKSPACE_ID,
-            })
-          : tx.users.create({ displayName: name.value, role: 'admin' });
-        tx.settings.delete(SETUP_CODE_SETTING);
-        const signIn = this.issueSession(tx, user, { createdVia: 'claim', userAgent });
-        this.logger.info('git-moxfield claimed', { userId: user.id, adoptedLocalWorkspace: adopt });
-        return { ok: true, signIn, adoptedLocalWorkspace: adopt };
+    if (outcome.ok) {
+      this.logger.info('git-moxfield claimed', {
+        userId: outcome.signIn.user.id,
+        adoptedLocalWorkspace: outcome.adoptedLocalWorkspace,
       });
-    });
+    } else if (outcome.reason === 'invalid-code') {
+      this.logger.warn('Rejected a claim with a wrong setup code');
+    }
+    return outcome;
   }
 
   // -------------------------------------------------------------------------
@@ -1101,24 +1092,24 @@ class DefaultAuthService implements AuthService {
   // -------------------------------------------------------------------------
 
   /** The active key `key` and its (enabled) owner, recording the key's use; `null` otherwise. */
-  private keyHolder(key: unknown): { credential: CredentialRecord; user: UserRecord } | null {
+  private async keyHolder(key: unknown): Promise<{ credential: CredentialRecord; user: UserRecord } | null> {
     const parsed = parseToken('key', key);
     if (parsed === null) return null;
-    const found = this.repos.credentials.findActiveBySecretHash(hashToken(parsed));
+    const found = await this.repos.credentials.findActiveBySecretHash(hashToken(parsed));
     if (found?.credential.kind !== 'bookmarklet-key') return null;
-    this.repos.credentials.touchLastUsed(found.credential.id, this.now().toISOString());
+    await this.repos.credentials.touchLastUsed(found.credential.id, this.now().toISOString());
     return found;
   }
 
   /** The active session of a session token (format checked before any lookup). */
-  private findSession(token: unknown, now: Date): ActiveSession | null {
+  private async findSession(repos: Repositories, token: unknown, now: Date): Promise<ActiveSession | null> {
     const parsed = parseToken('session', token);
     if (parsed === null) return null;
-    return this.repos.sessions.findActiveByTokenHash(hashToken(parsed), now.toISOString());
+    return repos.sessions.findActiveByTokenHash(hashToken(parsed), now.toISOString());
   }
 
   /** The pending hand-off of a hand-off token (format checked before any lookup). */
-  private findHandoff(repos: Repositories, token: unknown, now: Date): PendingHandoff | null {
+  private async findHandoff(repos: Repositories, token: unknown, now: Date): Promise<PendingHandoff | null> {
     const parsed = parseToken('session', token);
     if (parsed === null) return null;
     return repos.sessions.findPendingHandoffByTokenHash(hashToken(parsed), now.toISOString());
@@ -1129,15 +1120,20 @@ class DefaultAuthService implements AuthService {
    * session (keys, device links) inherits its lineage, and nothing is made for a session
    * that ended meanwhile (signed out everywhere, revoked key).
    */
-  private requireOwnSession(repos: Repositories, user: SessionUser): SessionRecord {
-    const session = repos.sessions.getActive(user.id, user.sessionId, this.now().toISOString());
+  private async requireOwnSession(repos: Repositories, user: SessionUser): Promise<SessionRecord> {
+    const session = await repos.sessions.getActive(user.id, user.sessionId, this.now().toISOString());
     if (session === null) throw new ServiceError('forbidden', 'You were signed out. Sign in again.');
     return session;
   }
 
   /** Keeps an existing session: records activity and returns it with its current expiry. */
-  private continueSession(found: ActiveSession, token: string, now: Date): SignIn {
-    const expiresAt = this.recordActivity(found, now);
+  private async continueSession(
+    repos: Repositories,
+    found: ActiveSession,
+    token: string,
+    now: Date,
+  ): Promise<SignIn> {
+    const expiresAt = await this.recordActivity(repos, found, now);
     return {
       user: toSessionUser(found.user, found.session.id),
       session: { id: found.session.id, token, expiresAt },
@@ -1147,23 +1143,30 @@ class DefaultAuthService implements AuthService {
   /**
    * Sliding expiry and activity: renews the session to {@link SESSION_LIFETIME_MS} from
    * now once its expiry is more than {@link SESSION_RENEWAL_INTERVAL_MS} older than that,
-   * and records the user's activity at most every {@link USER_SEEN_INTERVAL_MS}.
+   * and records the user's activity at most every {@link USER_SEEN_INTERVAL_MS}. Most
+   * requests write nothing.
    * @returns the session's expiry after the update.
    */
-  private recordActivity({ session, user }: ActiveSession, now: Date): string {
+  private async recordActivity(
+    repos: Repositories,
+    { session, user }: ActiveSession,
+    now: Date,
+  ): Promise<string> {
     const renewed = now.getTime() + SESSION_LIFETIME_MS;
     let { expiresAt } = session;
+    const writes: Promise<void>[] = [];
     if (Date.parse(expiresAt) <= renewed - SESSION_RENEWAL_INTERVAL_MS) {
       expiresAt = new Date(renewed).toISOString();
-      this.repos.sessions.touch(session.id, { lastSeenAt: now.toISOString(), expiresAt });
+      writes.push(repos.sessions.touch(session.id, { lastSeenAt: now.toISOString(), expiresAt }));
     }
     if (user.lastSeenAt === null || now.getTime() - Date.parse(user.lastSeenAt) >= USER_SEEN_INTERVAL_MS) {
-      this.repos.users.touchLastSeen(user.id, now.toISOString());
+      writes.push(repos.users.touchLastSeen(user.id, now.toISOString()));
     }
+    await Promise.all(writes);
     return expiresAt;
   }
 
-  private issueSession(
+  private async issueSession(
     repos: Repositories,
     user: UserRecord,
     origin: {
@@ -1173,10 +1176,10 @@ class DefaultAuthService implements AuthService {
       pendingHandoff?: boolean;
     },
     lifetimeMs = SESSION_LIFETIME_MS,
-  ): SignIn {
+  ): Promise<SignIn> {
     const token = generateToken('session');
     const expiresAt = this.expiry(lifetimeMs);
-    const session = repos.sessions.create({
+    const session = await repos.sessions.create({
       userId: user.id,
       tokenHash: hashToken(token),
       createdVia: origin.createdVia,
@@ -1188,7 +1191,7 @@ class DefaultAuthService implements AuthService {
     return { user: toSessionUser(user, session.id), session: { id: session.id, token, expiresAt } };
   }
 
-  private issueLoginLink(
+  private async issueLoginLink(
     repos: Repositories,
     link: {
       userId: string;
@@ -1197,10 +1200,10 @@ class DefaultAuthService implements AuthService {
       credentialId: string | null;
       lifetimeMs: number;
     },
-  ): IssuedLink {
+  ): Promise<IssuedLink> {
     const token = generateToken('login');
     const expiresAt = this.expiry(link.lifetimeMs);
-    repos.loginLinks.create({
+    await repos.loginLinks.create({
       userId: link.userId,
       tokenHash: hashToken(token),
       purpose: link.purpose,
@@ -1215,31 +1218,31 @@ class DefaultAuthService implements AuthService {
    * Checks that `actor` may administer users and invites, against the database (a
    * session's role may be stale). @returns the admin's user id, `null` for the command line.
    */
-  private requireAdmin(repos: Repositories, actor: Actor): string | null {
+  private async requireAdmin(repos: Repositories, actor: Actor): Promise<string | null> {
     if (actor === SYSTEM_ACTOR) return null;
-    const current = repos.users.getById(actor.id);
+    const current = await repos.users.getById(actor.id);
     if (current?.role !== 'admin' || current.disabledAt !== null) {
       throw new ServiceError('forbidden', 'Only admins can manage users and invites.');
     }
     return current.id;
   }
 
-  private rename(repos: Repositories, userId: string, displayName: string): UserOutcome {
+  private async rename(repos: Repositories, userId: string, displayName: string): Promise<UserOutcome> {
     const name = validateDisplayName(displayName);
     if (!name.ok) return { ok: false, reason: 'invalid-name', message: name.message };
-    if (!repos.users.getById(userId)) return userNotFound();
-    repos.users.rename(userId, name.value);
-    return { ok: true, user: this.userDTO(repos, userId) };
+    if (!(await repos.users.getById(userId))) return userNotFound();
+    await repos.users.rename(userId, name.value);
+    return { ok: true, user: await this.userDTO(repos, userId) };
   }
 
-  private userDTO(repos: Repositories, userId: string): UserDTO {
-    const listed = repos.users.list().find((user) => user.id === userId);
+  private async userDTO(repos: Repositories, userId: string): Promise<UserDTO> {
+    const listed = (await repos.users.list()).find((user) => user.id === userId);
     if (!listed) throw new Error(`User ${userId} vanished while being updated`);
     return toUserDTO(listed);
   }
 
-  private ensureSetupCode(): string {
-    const code = this.repos.settings.getOrCreate(SETUP_CODE_SETTING, generateSetupCode);
+  private async ensureSetupCode(): Promise<string> {
+    const code = await this.repos.settings.getOrCreate(SETUP_CODE_SETTING, generateSetupCode);
     if (!SETUP_CODE_PATTERN.test(code)) {
       throw new Error(
         `The stored setup code is malformed. Delete the "${SETUP_CODE_SETTING}" row of the app_settings table; a new code is created on the next start.`,
@@ -1339,13 +1342,13 @@ function toKeyDTO(
 }
 
 /** The user's share links that are not revoked, counted by the key their creating session descends from. */
-function shareLinkCounts(
+async function shareLinkCounts(
   repos: Repositories,
   userId: string,
   keys: readonly CredentialRecord[],
-): Map<string, number> {
+): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  const links = repos.shareLinks.listByCredential(
+  const links = await repos.shareLinks.listByCredential(
     userId,
     keys.map((key) => key.id),
   );
@@ -1414,8 +1417,8 @@ function toUserDTO(user: UserListItem): UserDTO {
   };
 }
 
-function userNames(repos: Repositories): Map<string, string> {
-  return new Map(repos.users.list().map((user) => [user.id, user.displayName]));
+async function userNames(repos: Repositories): Promise<Map<string, string>> {
+  return new Map((await repos.users.list()).map((user) => [user.id, user.displayName]));
 }
 
 /**
@@ -1424,10 +1427,12 @@ function userNames(repos: Repositories): Map<string, string> {
  * workspace (it is seeded when the database opens), so on a fresh installation it exists
  * but is empty; adopting that would greet the admin with history that is not there.
  */
-function hasUnownedLocalHistory(repos: Repositories): boolean {
-  return (
-    repos.workspaces.hasDecks(LOCAL_WORKSPACE_ID) && repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID) === null
-  );
+async function hasUnownedLocalHistory(repos: Repositories): Promise<boolean> {
+  const [hasDecks, owner] = await Promise.all([
+    repos.workspaces.hasDecks(LOCAL_WORKSPACE_ID),
+    repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID),
+  ]);
+  return hasDecks && owner === null;
 }
 
 function userNotFound(): UserOutcome {

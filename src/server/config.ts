@@ -5,16 +5,40 @@
  */
 import 'server-only';
 
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { z } from 'zod';
 
 import { invalidAllowedHosts } from './host-guard';
+import { runsOnNetlify } from './platform';
 
 const boolish = z
   .enum(['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'])
   .transform((v) => ['true', '1', 'yes', 'on'].includes(v));
 
+/** URL schemes the libSQL client accepts (see `src/server/db/libsql.ts`). */
+const DATABASE_URL = /^(?:(?:libsql|https?|wss?|file):|:memory:$)/i;
+
 const schema = z.object({
+  /** Local SQLite database file, used when `TURSO_DATABASE_URL` is not set. */
   DATABASE_PATH: z.string().min(1).default('data/git-moxfield.db'),
+  /**
+   * libSQL URL of the database: `libsql://<db>-<org>.turso.io` (Turso, in production),
+   * `http://127.0.0.1:8080` (a local libSQL server such as `turso dev`) or `file:path.db`.
+   * When unset, the database is the file at `DATABASE_PATH`. The value is never echoed in
+   * errors or logs (a URL may carry an `authToken` query parameter).
+   */
+  TURSO_DATABASE_URL: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .refine((value) => value === undefined || DATABASE_URL.test(value), {
+      message: 'expected a libsql:, https:, http:, wss:, ws: or file: URL',
+    }),
+  /** Auth token for `TURSO_DATABASE_URL` (Turso). Secret: only reachable through {@link AppConfig.database}. */
+  TURSO_AUTH_TOKEN: z.string().trim().min(1).optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
   /** Base URL of the Moxfield API. Overridden in tests to point at the mock server. */
@@ -23,8 +47,12 @@ const schema = z.object({
   MOXFIELD_SITE_ORIGIN: z.url().default('https://moxfield.com'),
   /** User-Agent issued by Moxfield for approved projects. Server-side only. */
   MOXFIELD_USER_AGENT: z.string().trim().min(1).optional(),
-  /** `auto`: try server fetches, back off when blocked. `off`: browser capture only. */
-  MOXFIELD_SERVER_FETCH: z.enum(['auto', 'off']).default('auto'),
+  /**
+   * `auto`: try server fetches, back off when blocked. `off`: browser capture only.
+   * Default: `off` on Netlify (Cloudflare blocks Moxfield requests from cloud IPs, so every
+   * attempt would only cost a request and a block backoff), `auto` everywhere else.
+   */
+  MOXFIELD_SERVER_FETCH: z.enum(['auto', 'off']).optional(),
   MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
   /** Minimum spacing between any two requests to Moxfield from this process. */
   MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).max(60_000).default(1_000),
@@ -70,14 +98,68 @@ const schema = z.object({
   NODE_ENV: z.string().optional(),
 });
 
-export type AppConfig = z.infer<typeof schema> & {
+/** Which setting names the database. */
+export type DatabaseLocationSource = 'TURSO_DATABASE_URL' | 'DATABASE_PATH';
+
+/**
+ * Where the database is: `TURSO_DATABASE_URL` (with `TURSO_AUTH_TOKEN`) when set, else the
+ * file at `DATABASE_PATH`. The URL and the token are private fields, so they never show up
+ * when the configuration is logged, serialized or inspected; log
+ * `describeDatabaseUrl(location.url)` (`src/server/db/libsql.ts`) instead.
+ */
+export class DatabaseLocation {
+  readonly #url: string;
+  readonly #authToken: string | undefined;
+  /** The setting the location comes from. */
+  readonly source: DatabaseLocationSource;
+
+  constructor(source: DatabaseLocationSource, url: string, authToken?: string) {
+    this.source = source;
+    this.#url = url;
+    this.#authToken = authToken;
+  }
+
+  /** A `file:` location for a database file (relative paths resolve against the working directory). */
+  static file(path: string): DatabaseLocation {
+    return new DatabaseLocation('DATABASE_PATH', pathToFileURL(resolve(path)).href);
+  }
+
+  /** The libSQL URL to open. May carry credentials: never log it. */
+  get url(): string {
+    return this.#url;
+  }
+
+  /** Auth token for a remote database (`TURSO_AUTH_TOKEN`), if any. Secret. */
+  get authToken(): string | undefined {
+    return this.#authToken;
+  }
+
+  /** What `JSON.stringify` (and so the logger) shows: never the URL or the token. */
+  toJSON(): { source: DatabaseLocationSource } {
+    return { source: this.source };
+  }
+}
+
+type ParsedEnv = z.infer<typeof schema>;
+
+export type AppConfig = Omit<
+  ParsedEnv,
+  'TURSO_DATABASE_URL' | 'TURSO_AUTH_TOKEN' | 'MOXFIELD_SERVER_FETCH'
+> & {
+  /** `MOXFIELD_SERVER_FETCH`, or its platform default (see the schema). */
+  MOXFIELD_SERVER_FETCH: NonNullable<ParsedEnv['MOXFIELD_SERVER_FETCH']>;
   captureAllowedOrigins: string[];
   moxfieldSiteOrigin: string;
+  /** The database to open (see {@link DatabaseLocation}). */
+  database: DatabaseLocation;
 };
 
 let cached: AppConfig | undefined;
 
-/** Parses configuration from an environment object. Exposed for tests. */
+/**
+ * Parses configuration from an environment object. Exposed for tests. Platform defaults
+ * (see `./platform`) are derived from the same object.
+ */
 export function parseConfig(env: Record<string, string | undefined>): AppConfig {
   const cleaned = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== undefined && v !== ''));
   const result = schema.safeParse(cleaned);
@@ -85,7 +167,13 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     throw new Error(`Invalid git-moxfield configuration: ${issues}`);
   }
-  const config = result.data;
+  const { TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, MOXFIELD_SERVER_FETCH, ...config } = result.data;
+  if (TURSO_AUTH_TOKEN !== undefined && TURSO_DATABASE_URL === undefined) {
+    // Otherwise the app would silently use the local file at DATABASE_PATH.
+    throw new Error(
+      'Invalid git-moxfield configuration: TURSO_AUTH_TOKEN is set but TURSO_DATABASE_URL is not',
+    );
+  }
   if (config.GIT_MOXFIELD_E2E === true && config.NODE_ENV === 'production') {
     // The test-only endpoints mint admin sessions for anyone who asks.
     throw new Error(
@@ -98,7 +186,17 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     .map((o) => o.trim())
     .filter(Boolean)
     .map((o) => new URL(o).origin);
-  return { ...config, moxfieldSiteOrigin, captureAllowedOrigins };
+  const database =
+    TURSO_DATABASE_URL === undefined
+      ? DatabaseLocation.file(config.DATABASE_PATH)
+      : new DatabaseLocation('TURSO_DATABASE_URL', TURSO_DATABASE_URL, TURSO_AUTH_TOKEN);
+  return {
+    ...config,
+    MOXFIELD_SERVER_FETCH: MOXFIELD_SERVER_FETCH ?? (runsOnNetlify(env) ? 'off' : 'auto'),
+    moxfieldSiteOrigin,
+    captureAllowedOrigins,
+    database,
+  };
 }
 
 export function getConfig(): AppConfig {

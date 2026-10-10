@@ -20,7 +20,8 @@ import type { SessionUser } from './types';
  * `cache`, so a layout and its page resolve the session once.
  */
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
-  return getAuthService().resolveSession(await readSessionToken());
+  const [auth, token] = await Promise.all([getAuthService(), readSessionToken()]);
+  return auth.resolveSession(token);
 });
 
 export interface RequireUserOptions {

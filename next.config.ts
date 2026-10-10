@@ -38,10 +38,11 @@ const nextConfig: NextConfig = {
     incomingRequests: { ignore: [...UNLOGGED_REQUEST_PATTERNS] },
   },
   experimental: {
-    // `src/proxy.ts` makes Next buffer request bodies; captured decks are posted as JSON
-    // strings inside JSON (escaping can double them) or form-encoded (up to triple), so
-    // allow comfortably more than MAX_CAPTURE_BYTES. The capture routes enforce their own
-    // exact limits, which stay below this one (see src/app/api/capture/read-body.ts).
+    // Self-hosting only (`next start`, `next dev`): `src/proxy.ts` makes Next buffer
+    // request bodies, and it silently truncates them at this size. The capture routes
+    // enforce their own, smaller limits (a few MB; src/app/api/capture/read-body.ts), so a
+    // truncated body is still reported as too large. On Netlify the proxy runs as an edge
+    // function, this setting does not apply, and the platform caps bodies at 6 MB.
     proxyClientMaxBodySize: PROXY_BODY_BUFFER_LIMIT,
   },
   headers() {

@@ -72,7 +72,7 @@ export async function establishSessionOnResponse(
   session: IssuedSession,
 ): Promise<Response> {
   const previous = readRequestSessionToken(request);
-  if (previous !== null && previous !== session.token) await getAuthService().endSession(previous);
+  if (previous !== null && previous !== session.token) await endSessionToken(previous);
   const secure = requestCookieSecurity(request);
   appendCookie(response, sessionCookie(session, new Date(), secure));
   return appendCookie(response, freshMarkerCookie(secure));
@@ -111,7 +111,7 @@ async function readContextCookie(which: 'session' | 'handoff'): Promise<string |
  */
 export async function establishSession(session: IssuedSession): Promise<void> {
   const previous = await readSessionToken();
-  if (previous !== null && previous !== session.token) await getAuthService().endSession(previous);
+  if (previous !== null && previous !== session.token) await endSessionToken(previous);
   const secure = contextSecurity(await headers());
   const store = await cookies();
   store.set(sessionCookie(session, new Date(), secure));
@@ -120,7 +120,7 @@ export async function establishSession(session: IssuedSession): Promise<void> {
 
 /** Signs this browser out (call from a server action only): ends its session and deletes the cookie. */
 export async function endBrowserSession(): Promise<void> {
-  await getAuthService().endSession(await readSessionToken());
+  await endSessionToken(await readSessionToken());
   const secure = contextSecurity(await headers());
   const store = await cookies();
   store.set(expiredSessionCookie(secure));
@@ -129,4 +129,11 @@ export async function endBrowserSession(): Promise<void> {
 
 function contextSecurity(requestHeaders: { get(name: string): string | null }): boolean {
   return isSecureCookieContext(requestHeaders, getConfig().PUBLIC_APP_URL);
+}
+
+/** Ends the session of a session cookie value (a no-op for `null`). */
+async function endSessionToken(token: string | null): Promise<void> {
+  if (token === null) return;
+  const auth = await getAuthService();
+  await auth.endSession(token);
 }

@@ -19,6 +19,7 @@ import {
 import {
   createLibsqlDatabase,
   DatabaseConfigError,
+  databaseFileOf,
   databaseKindOf,
   describeDatabaseUrl,
   type LibsqlDatabase,
@@ -203,6 +204,24 @@ describe('databaseKindOf and describeDatabaseUrl', () => {
   it('throws for other schemes', () => {
     expect(() => databaseKindOf('mysql://host/db')).toThrow(DatabaseConfigError);
     expect(() => databaseKindOf('data/app.db')).toThrow(/Unsupported database URL/);
+  });
+});
+
+describe('databaseFileOf', () => {
+  it.each([
+    ['file:/data/app.db', '/data/app.db'],
+    ['file:///data/my%20decks.db', '/data/my decks.db'],
+    ['file:data/app.db', join(process.cwd(), 'data/app.db')],
+    [':memory:', undefined],
+    ['file::memory:', undefined],
+    ['libsql://app-org.turso.io', undefined],
+    ['http://127.0.0.1:8080', undefined],
+  ])('%s → %s', (url, file) => {
+    expect(databaseFileOf(url)).toBe(file);
+  });
+
+  it('throws for other schemes', () => {
+    expect(() => databaseFileOf('data/app.db')).toThrow(DatabaseConfigError);
   });
 });
 

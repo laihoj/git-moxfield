@@ -70,7 +70,8 @@ export async function createInviteAction(
   const appUrl = publicAppUrl(await headers());
   if (appUrl === null) return { status: 'error', message: NO_APP_URL, values };
   try {
-    const issued = await getAuthService().createInvite(user, { role: role.data, note });
+    const auth = await getAuthService();
+    const issued = await auth.createInvite(user, { role: role.data, note });
     revalidatePath('/admin');
     return {
       status: 'created',
@@ -90,7 +91,8 @@ export async function revokeInviteAction(inviteId: string): Promise<AccountActio
   const id = idSchema.safeParse(inviteId);
   if (!id.success) return { ok: false, message: 'Invalid request.' };
   try {
-    const revoked = await getAuthService().revokeInvite(user, id.data);
+    const auth = await getAuthService();
+    const revoked = await auth.revokeInvite(user, id.data);
     revalidatePath('/admin');
     return revoked ? { ok: true } : { ok: false, message: 'This invite was already used or withdrawn.' };
   } catch (error) {
@@ -104,7 +106,7 @@ export async function setUserDisabledAction(userId: string, disabled: boolean): 
   const id = idSchema.safeParse(userId);
   if (!id.success || typeof disabled !== 'boolean') return { ok: false, message: 'Invalid request.' };
   try {
-    const auth = getAuthService();
+    const auth = await getAuthService();
     const outcome = disabled ? await auth.disableUser(user, id.data) : await auth.enableUser(user, id.data);
     revalidatePath('/admin');
     return outcome.ok ? { ok: true } : { ok: false, message: outcome.message };
@@ -121,7 +123,8 @@ export async function createRecoveryLinkAction(userId: string): Promise<IssuedLi
   const appUrl = publicAppUrl(await headers());
   if (appUrl === null) return { status: 'error', message: NO_APP_URL };
   try {
-    const link = await getAuthService().createRecoveryLink(user, id.data);
+    const auth = await getAuthService();
+    const link = await auth.createRecoveryLink(user, id.data);
     // The page lists the recovery links that can still be used.
     revalidatePath('/admin');
     return { status: 'created', url: new URL(link.path, appUrl).href, expiresAt: link.expiresAt };
@@ -136,7 +139,8 @@ export async function revokeRecoveryLinkAction(linkId: string): Promise<AccountA
   const id = idSchema.safeParse(linkId);
   if (!id.success) return { ok: false, message: 'Invalid request.' };
   try {
-    const revoked = await getAuthService().revokeRecoveryLink(user, id.data);
+    const auth = await getAuthService();
+    const revoked = await auth.revokeRecoveryLink(user, id.data);
     revalidatePath('/admin');
     return revoked
       ? { ok: true }

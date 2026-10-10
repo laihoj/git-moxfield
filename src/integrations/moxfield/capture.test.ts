@@ -1,10 +1,16 @@
 import { createContext, runInContext, Script } from 'node:vm';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DeckSourceError } from '../deck-source';
 
 import { buildBookmarklet, parseMoxfieldCapture, type BookmarkletOptions } from './capture';
+import { decodeCapturePayload } from './capture-codec';
+import {
+  CAPTURE_GZIP_TAG,
+  ENCODE_CAPTURE_PAYLOAD_SOURCE,
+  isEncodedCapturePayload,
+} from './capture-codec-protocol';
 import {
   BOOKMARKLET_KEY_PATTERN,
   CAPTURE_ENVELOPE_KIND,
@@ -199,12 +205,36 @@ class FakeClipboardItem {
   constructor(readonly items: Record<string, Promise<Blob>>) {}
 }
 
+/**
+ * The browser's compression: `native` gives the sandbox Node's `CompressionStream` (the
+ * same Web API browsers have), `broken` one that fails. Without it, the sandbox is a
+ * browser without `CompressionStream`, whose bookmarklet sends plain JSON.
+ */
+type Compression = 'none' | 'native' | 'broken';
+
+/** A `CompressionStream` that cannot be constructed (`new` on a function that throws). */
+function brokenCompressionStream(): never {
+  throw new TypeError('CompressionStream is broken');
+}
+
+function compressionGlobals(compression: Compression): Record<string, unknown> {
+  switch (compression) {
+    case 'none':
+      return {};
+    case 'native':
+      return { CompressionStream, Response, btoa };
+    case 'broken':
+      return { CompressionStream: brokenCompressionStream, Response, btoa };
+  }
+}
+
 function browser(
   options: {
     href?: string;
     popupBlocked?: boolean;
     clipboardWrite?: 'ok' | 'reject';
     respond?: (url: string) => FakeResponse;
+    compression?: Compression;
   } = {},
 ) {
   const url = new URL(options.href ?? DECK_PAGE);
@@ -280,6 +310,7 @@ function browser(
     },
     ClipboardItem: FakeClipboardItem,
     Blob,
+    ...compressionGlobals(options.compression ?? 'none'),
     alert(message: string): void {
       alerts.push(message);
     },
@@ -332,6 +363,14 @@ describe('buildBookmarklet', () => {
   ])('%s mode decodes to valid, self-contained JavaScript', (_mode, bookmarklet) => {
     const body = bookmarkletBody(bookmarklet);
     expect(() => new Script(body)).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- parsing (not running) our own bookmarklet
+    expect(() => new Function(body)).not.toThrow();
+    // The payload encoder, as the builder compacts it (lines trimmed).
+    expect(body).toContain(
+      `const encode = ${ENCODE_CAPTURE_PAYLOAD_SOURCE.split('\n')
+        .map((line) => line.trim())
+        .join('\n')};`,
+    );
     expect(body).toContain('"app":"http://localhost:3000"');
     expect(body).toContain('"site":"https://moxfield.com"');
     expect(body).toContain('"api":"https://api2.moxfield.com"');
@@ -421,6 +460,8 @@ describe('bookmarklet — popup mode', () => {
     expect(message?.data.n).toBe(NONCE);
     // The key travels with the deck, only to the exact app origin (targetOrigin above).
     expect(message?.data.key).toBe(KEY);
+    // This sandbox is a browser without CompressionStream: the payload is plain JSON.
+    expect(isEncodedCapturePayload(String(message?.data.json))).toBe(false);
     const parsed: unknown = JSON.parse(String(message?.data.json));
     expect(isCaptureEnvelope(parsed)).toBe(true);
     expect(parsed).toEqual({
@@ -580,5 +621,66 @@ describe('bookmarklet — same-tab mode', () => {
     await flush();
     expect(env.created.some((element) => element.tagName === 'form')).toBe(false);
     expect(env.alerts[0]).toContain('could not read the deck: Moxfield answered HTTP 404');
+  });
+});
+
+describe('bookmarklet — compressed payloads', () => {
+  /** The envelope a payload carries, decoded as the capture endpoints decode it. */
+  async function envelopeOf(payload: unknown): Promise<unknown> {
+    expect(typeof payload).toBe('string');
+    expect(String(payload).startsWith(CAPTURE_GZIP_TAG)).toBe(true);
+    return JSON.parse(await decodeCapturePayload(String(payload)));
+  }
+
+  const expected = { deck: v3Deck(), primer: v1Primer() };
+
+  it('popup mode hands over the envelope compressed', async () => {
+    const env = browser({ compression: 'native' });
+    env.run(popupBookmarklet);
+    env.dispatch({ source: env.popup, origin: APP_URL, data: { t: READY, n: NONCE } });
+    await vi.waitFor(() => {
+      expect(env.posted).toHaveLength(1);
+    });
+    const [message] = env.posted;
+    expect(message?.data).toMatchObject({ t: PAYLOAD, n: NONCE, key: KEY });
+    const envelope = await envelopeOf(message?.data.json);
+    expect(isCaptureEnvelope(envelope)).toBe(true);
+    expect(parseMoxfieldCapture(envelope)).toEqual(expected);
+  });
+
+  it('same-tab mode posts the envelope compressed', async () => {
+    const env = browser({ compression: 'native' });
+    env.run(sameTabBookmarklet);
+    await vi.waitFor(() => {
+      expect(env.created.find((element) => element.tagName === 'form')?.submitted).toBe(true);
+    });
+    const form = env.created.find((element) => element.tagName === 'form');
+    const payload = form?.children.find((field) => field.name === CAPTURE_FORM_FIELD)?.value;
+    expect(parseMoxfieldCapture(await envelopeOf(payload))).toEqual(expected);
+  });
+
+  it('copies the compressed envelope when the popup is blocked', async () => {
+    const env = browser({ compression: 'native', popupBlocked: true });
+    env.run(popupBookmarklet);
+    const blob = await env.clipboard.items[0]?.items['text/plain'];
+    expect(parseMoxfieldCapture(await envelopeOf(await blob?.text()))).toEqual(expected);
+    await vi.waitFor(() => {
+      expect(env.alerts).toHaveLength(1);
+    });
+    expect(env.alerts[0]).toContain('copied to your clipboard');
+  });
+
+  it('sends plain JSON when compressing fails', async () => {
+    const env = browser({ compression: 'broken' });
+    env.run(sameTabBookmarklet);
+    await vi.waitFor(() => {
+      expect(env.created.find((element) => element.tagName === 'form')?.submitted).toBe(true);
+    });
+    const payload = env.created
+      .find((element) => element.tagName === 'form')
+      ?.children.find((field) => field.name === CAPTURE_FORM_FIELD)?.value;
+    expect(isEncodedCapturePayload(payload ?? '')).toBe(false);
+    expect(parseMoxfieldCapture(payload)).toEqual(expected);
+    expect(env.alerts).toEqual([]);
   });
 });

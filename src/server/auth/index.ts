@@ -14,7 +14,7 @@
 import 'server-only';
 
 import { getConfig } from '@/server/config';
-import { getDb } from '@/server/db/client';
+import { getDb, type Db } from '@/server/db/client';
 import { createLogger } from '@/server/logger';
 
 import { createAuthService, type AuthService } from './service';
@@ -42,25 +42,32 @@ export {
 
 const globalForAuth = globalThis as unknown as { __gitMoxfieldSetupCodeAnnounced?: boolean };
 
-let service: AuthService | undefined;
+/** The service of the database it was built for: {@link getDb} may reopen the database. */
+let current: { db: Db; service: AuthService } | undefined;
 
 /**
- * The process-wide auth service over the configured database.
+ * The process-wide auth service over the configured database (opened on first use, see
+ * `getDb`).
  *
  * On first use in a process, an unclaimed installation prints its setup code to the
  * server log (ADR 0006: the code is printed on every start). The flag lives on
  * `globalThis`, so dev-server reloads, which re-evaluate this module, do not repeat it.
+ *
+ * @throws what `getDb` throws when the database cannot be opened.
  */
-export function getAuthService(): AuthService {
-  if (service === undefined) {
+export async function getAuthService(): Promise<AuthService> {
+  const db = await getDb();
+  if (current?.db !== db) {
     const logger = createLogger('auth');
-    service = createAuthService({ db: getDb(), config: getConfig(), logger });
+    current = { db, service: createAuthService({ db, config: getConfig(), logger }) };
     if (globalForAuth.__gitMoxfieldSetupCodeAnnounced !== true) {
       globalForAuth.__gitMoxfieldSetupCodeAnnounced = true;
-      service.claimStatus().catch((error: unknown) => {
+      // Awaited: on a serverless platform, work left running after the response may never
+      // finish. A failure is logged and never fails the request that happened to come first.
+      await current.service.claimStatus().catch((error: unknown) => {
         logger.error('Could not check whether git-moxfield is claimed', { error });
       });
     }
   }
-  return service;
+  return current.service;
 }

@@ -11,8 +11,8 @@ import { recordingLogger } from '@tests/support/services';
 
 import { runUsersCommand, USAGE } from '../../../scripts/users';
 
-function cli(env: Record<string, string> = {}) {
-  const db = openTestDatabase();
+async function cli(env: Record<string, string> = {}) {
+  const db = await openTestDatabase();
   const config: AppConfig = parseConfig(env);
   const auth = createAuthService({ db, config, logger: recordingLogger() });
   const run = async (...argv: string[]) => {
@@ -37,7 +37,7 @@ function printedUrl(lines: string[]): URL {
 
 describe('pnpm users', () => {
   it('prints invite links that create members or admins', async () => {
-    const { auth, run } = cli();
+    const { auth, run } = await cli();
     const member = await run('invite', '--note', 'for Mikko');
     expect(member.code).toBe(0);
     expect(member.out[0]).toContain('new member (for Mikko)');
@@ -53,12 +53,12 @@ describe('pnpm users', () => {
   });
 
   it('uses PUBLIC_APP_URL as the base of printed links', async () => {
-    const { run } = cli({ PUBLIC_APP_URL: 'http://192.168.1.20:3000' });
+    const { run } = await cli({ PUBLIC_APP_URL: 'http://192.168.1.20:3000' });
     expect(printedUrl((await run('invite')).out).origin).toBe('http://192.168.1.20:3000');
   });
 
   it('lists users', async () => {
-    const { auth, run } = cli();
+    const { auth, run } = await cli();
     expect((await run('list')).out[0]).toContain('No users yet');
     const invite = await auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
     await auth.acceptInvite(invite.path.split('/').at(-1), 'Mikko', null);
@@ -70,7 +70,7 @@ describe('pnpm users', () => {
   });
 
   it('prints a recovery link for a user found by name or id, and refuses ambiguous names', async () => {
-    const { auth, run } = cli();
+    const { auth, run } = await cli();
     const create = async (name: string) => {
       const invite = await auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
       const outcome = await auth.acceptInvite(invite.path.split('/').at(-1), name, null);
@@ -97,7 +97,7 @@ describe('pnpm users', () => {
   });
 
   it('prints the setup code until the installation is claimed', async () => {
-    const { auth, run } = cli();
+    const { auth, run } = await cli();
     const first = await run('claim-code');
     expect(first.code).toBe(0);
     expect(first.out[0]).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
@@ -110,7 +110,7 @@ describe('pnpm users', () => {
   });
 
   it('explains its usage', async () => {
-    const { run } = cli();
+    const { run } = await cli();
     expect(await run()).toMatchObject({ code: 2, err: [USAGE] });
     expect(await run('--help')).toMatchObject({ code: 0, out: [USAGE] });
     for (const argv of [

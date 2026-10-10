@@ -17,7 +17,7 @@ describe('demo seed', () => {
     const end = Date.parse('2026-10-09T19:00:00.000Z');
     const clock = new DemoClock(end);
     // Like the script: server fetching is off, so seeding never contacts Moxfield.
-    const { db, sources, config, logger, api } = createServiceHarness({
+    const { db, sources, config, logger, api } = await createServiceHarness({
       env: { MOXFIELD_SERVER_FETCH: 'off' },
     });
     const services = createServices({
@@ -74,16 +74,16 @@ describe('demo seed', () => {
 });
 
 describe('demo user', () => {
-  it('creates an admin with a workspace of its own once, and reuses it afterwards', () => {
-    const { repos } = createServiceHarness();
-    const demo = ensureDemoUser(repos);
+  it('creates an admin with a workspace of its own once, and reuses it afterwards', async () => {
+    const { repos } = await createServiceHarness();
+    const demo = await ensureDemoUser(repos);
     expect(demo).toMatchObject({ displayName: DEMO_USER_NAME, role: 'admin', disabledAt: null });
     // Never the `local` workspace: seeding a real database must not take over its history.
     expect(demo.workspaceId).not.toBe(LOCAL_WORKSPACE_ID);
 
-    repos.users.setDisabled(demo.id, true);
-    expect(ensureDemoUser(repos)).toMatchObject({ id: demo.id });
-    expect(repos.users.getById(demo.id)?.disabledAt).toBeNull();
-    expect(repos.users.count()).toBe(1);
+    await repos.users.setDisabled(demo.id, true);
+    expect(await ensureDemoUser(repos)).toMatchObject({ id: demo.id });
+    expect((await repos.users.getById(demo.id))?.disabledAt).toBeNull();
+    expect(await repos.users.count()).toBe(1);
   });
 });

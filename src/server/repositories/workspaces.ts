@@ -12,7 +12,7 @@ import { and, asc, eq } from 'drizzle-orm';
 
 import { decks, users, workspaces } from '@/server/db/schema';
 
-import type { DbExecutor, RepositoryContext } from './context';
+import { write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export interface WorkspaceRecord {
@@ -37,19 +37,19 @@ export interface WorkspaceRepository {
    * Creates a workspace with a fresh id.
    * @throws {RepositoryError} `invalid-input` for an empty name.
    */
-  create(name: string): WorkspaceRecord;
-  getById(id: string): WorkspaceRecord | null;
+  create(name: string): Promise<WorkspaceRecord>;
+  getById(id: string): Promise<WorkspaceRecord | null>;
   /**
    * Whether the workspace holds any deck. For deciding about a workspace as a whole (the
    * first admin adopts the `local` workspace only when it has history); reveals no deck.
    */
-  hasDecks(id: string): boolean;
+  hasDecks(id: string): Promise<boolean>;
   /** Operator tools only: the deck with this git-moxfield id, in any workspace. */
-  locateDeck(deckId: string): DeckLocation | null;
+  locateDeck(deckId: string): Promise<DeckLocation | null>;
   /** Operator tools only: every workspace's deck tracking this source deck, oldest first. */
-  locateDecksBySource(source: string, externalId: string): DeckLocation[];
+  locateDecksBySource(source: string, externalId: string): Promise<DeckLocation[]>;
   /** Operator tools only: every deck of every workspace, by owner, then name. */
-  locateAllDecks(): DeckLocation[];
+  locateAllDecks(): Promise<DeckLocation[]>;
 }
 
 export function createWorkspaceRepository(ctx: RepositoryContext): WorkspaceRepository {
@@ -67,23 +67,29 @@ export function createWorkspaceRepository(ctx: RepositoryContext): WorkspaceRepo
       .leftJoin(users, eq(users.workspaceId, decks.workspaceId));
 
   return {
-    create(name) {
-      return insertWorkspace(ctx.db, ctx, name);
+    async create(name) {
+      const row = newWorkspaceRow(ctx, name);
+      return write(ctx, (db) => db.insert(workspaces).values(row).returning().get());
     },
 
-    getById(id) {
-      return ctx.db.select().from(workspaces).where(eq(workspaces.id, id)).get() ?? null;
+    async getById(id) {
+      const row = await ctx.db.select().from(workspaces).where(eq(workspaces.id, id)).get();
+      return row ?? null;
     },
 
-    hasDecks(id) {
-      return (
-        ctx.db.select({ id: decks.id }).from(decks).where(eq(decks.workspaceId, id)).limit(1).get() !==
-        undefined
-      );
+    async hasDecks(id) {
+      const row = await ctx.db
+        .select({ id: decks.id })
+        .from(decks)
+        .where(eq(decks.workspaceId, id))
+        .limit(1)
+        .get();
+      return row !== undefined;
     },
 
-    locateDeck(deckId) {
-      return locations().where(eq(decks.id, deckId)).get() ?? null;
+    async locateDeck(deckId) {
+      const row = await locations().where(eq(decks.id, deckId)).get();
+      return row ?? null;
     },
 
     locateDecksBySource(source, externalId) {
@@ -99,17 +105,16 @@ export function createWorkspaceRepository(ctx: RepositoryContext): WorkspaceRepo
   };
 }
 
-/** Inserts a workspace on `db` (the caller's transaction, if any). Shared with `./users`. */
-export function insertWorkspace(
-  db: DbExecutor,
+/**
+ * The row of a new workspace with a fresh id. Shared with `./users`, which inserts it
+ * together with the workspace's owner.
+ * @throws {RepositoryError} `invalid-input` for an empty name.
+ */
+export function newWorkspaceRow(
   ctx: Pick<RepositoryContext, 'now' | 'newId'>,
   name: string,
-): WorkspaceRecord {
+): typeof workspaces.$inferInsert & WorkspaceRecord {
   const trimmed = name.trim();
   if (trimmed === '') throw new RepositoryError('invalid-input', 'A workspace needs a name');
-  return db
-    .insert(workspaces)
-    .values({ id: ctx.newId(), name: trimmed, createdAt: ctx.now() })
-    .returning()
-    .get();
+  return { id: ctx.newId(), name: trimmed, createdAt: ctx.now() };
 }

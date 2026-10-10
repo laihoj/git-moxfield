@@ -1,7 +1,8 @@
 # Native/prebuilt packages in this stack work without running their install scripts:
-# better-sqlite3 13 ships N-API prebuilds, esbuild and unrs-resolver ship platform packages.
+# esbuild and unrs-resolver ship platform packages. libSQL (`libsql`, the local driver of
+# @libsql/client) ships its prebuilt binary as optional platform packages
+# (`@libsql/<platform>`) and has no install script at all.
 allowBuilds:
-  better-sqlite3: false
   esbuild: false
   unrs-resolver: false
 

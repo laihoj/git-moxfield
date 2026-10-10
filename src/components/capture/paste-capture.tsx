@@ -70,7 +70,9 @@ function primerProblem(value: PastedContent | null): string | null {
 
 /**
  * Manual import: open Moxfield's deck data URL in the browser, copy, paste here (and
- * optionally the primer). Large JSON is held in memory, never rendered.
+ * optionally the primer). Large JSON is held in memory, never rendered, and sent
+ * compressed. A bookmarklet's capture (copied when its popup was blocked) can be pasted
+ * here too.
  */
 export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCaptureProps) {
   const urlId = useId();
@@ -92,8 +94,11 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
 
   function importDeck(): void {
     if (deck === null) return;
-    const payload = primer === null || isEnvelope ? deck.text : { deck: deck.text, primer: primer.text };
-    void submission.submit(payload, isEnvelope ? 'browser-capture' : 'manual-paste');
+    // One JSON text either way, which the submission compresses: the deck (or capture)
+    // alone, or deck and primer as JSON strings in `{ deck, primer }`.
+    const text =
+      primer === null || isEnvelope ? deck.text : JSON.stringify({ deck: deck.text, primer: primer.text });
+    void submission.submit(text, isEnvelope ? 'browser-capture' : 'manual-paste');
   }
 
   return (

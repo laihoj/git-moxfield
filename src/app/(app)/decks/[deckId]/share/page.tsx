@@ -30,7 +30,7 @@ export default async function SharePage({ params }: PageProps<'/decks/[deckId]/s
   const user = await requireUser({ next: routes.deckShare(deckId) });
   const [overview, links] = await Promise.all([
     loadOverview(deckId),
-    shareLinkServicesFor(user).listShareLinks(deckId),
+    shareLinkServicesFor(user).then((shareLinks) => shareLinks.listShareLinks(deckId)),
   ]);
   if (overview === null) notFound();
 

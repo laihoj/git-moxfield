@@ -81,7 +81,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   const handoffToken = readRequestHandoffToken(request);
   if (handoffToken === null) return settled(request, seeOther(next));
 
-  const outcome = await getAuthService().completeHandoff(handoffToken, readRequestSessionToken(request));
+  const auth = await getAuthService();
+  const outcome = await auth.completeHandoff(handoffToken, readRequestSessionToken(request));
   if (outcome === null) return settled(request, seeOther(next));
   if (outcome.kind === 'confirm') return seeOther(handoffConfirmPath(next));
   return establishSessionOnResponse(request, settled(request, seeOther(next)), outcome.signIn.session);
@@ -107,7 +108,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const intent = form.get('intent');
   const rawNext = form.get('next');
   const next = safeRedirectPath(typeof rawNext === 'string' ? rawNext : null, '/');
-  const auth = getAuthService();
+  const auth = await getAuthService();
   const handoffToken = readRequestHandoffToken(request);
 
   if (intent === 'cancel') {

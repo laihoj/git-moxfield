@@ -2,17 +2,25 @@
 
 import clsx from 'clsx';
 import { FileJson, Upload, X } from 'lucide-react';
-import { useId, useState, type DragEvent } from 'react';
+import { useId, useRef, useState, type DragEvent } from 'react';
 
+import { isEncodedCapturePayload } from '@/integrations/moxfield/capture-codec-protocol';
 import { MAX_CAPTURE_BYTES } from '@/integrations/moxfield/capture-protocol';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { formatBytes } from '@/lib/format';
+
+import { inflateCapturePayload, type InflateFailure } from './capture-payload';
 
 /** What a pasted text looks like, detected client-side for immediate feedback. */
 export type PastedKind = 'envelope' | 'deck' | 'primer' | 'unknown' | 'invalid';
 
 export interface PastedContent {
+  /**
+   * The pasted JSON text. Compressed text (the bookmarklet's clipboard fallback) is
+   * inflated first; it stays compressed only in a browser that cannot inflate it.
+   */
   text: string;
+  /** UTF-8 size of {@link text}. */
   bytes: number;
   kind: PastedKind;
   /** Deck name, when the JSON is a deck or capture envelope. */
@@ -85,29 +93,62 @@ export interface PasteZoneProps {
   problem?: string | null;
 }
 
+const SIZE_LIMIT = `limit ${formatBytes(MAX_CAPTURE_BYTES)}`;
+
+/** Why pasted compressed text could not be read. */
+const INFLATE_PROBLEMS: Record<Exclude<InflateFailure, 'unavailable'>, string> = {
+  'too-large': `The pasted data is too large to import (${SIZE_LIMIT}).`,
+  malformed:
+    'The pasted deck data is damaged or incomplete. Run the bookmarklet on the Moxfield deck page again, then paste again.',
+  'unsupported-encoding':
+    'The pasted deck data is compressed in a format this version of git-moxfield cannot read.',
+};
+
 /**
  * Receives large JSON by paste, drop or file picker without ever rendering it: the
  * textarea stays empty (a 1 MB value would freeze mobile browsers) and a summary with
- * the size and the detected deck name is shown instead.
+ * the size and the detected deck name is shown instead. Compressed capture payloads (what
+ * the bookmarklet copies when its popup is blocked) are inflated and summarized the same
+ * way.
  */
 export function PasteZone({ label, description, value, onChange, problem }: PasteZoneProps) {
   const id = useId();
   const [dragging, setDragging] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
+  /** Incremented by every input and clear, so that a slow inflate cannot override a newer one. */
+  const latest = useRef(0);
 
   function accept(raw: string, source: PastedContent['source'], fileName?: string): void {
     if (raw.trim() === '') return;
-    if (raw.length > MAX_CAPTURE_BYTES) {
-      setReadError(`That is more than ${formatBytes(MAX_CAPTURE_BYTES)}, too large for a deck.`);
+    const attempt = ++latest.current;
+    if (!isEncodedCapturePayload(raw)) {
+      if (raw.length > MAX_CAPTURE_BYTES) {
+        setReadError(`The pasted data is too large to import (${SIZE_LIMIT}).`);
+        return;
+      }
+      setReadError(null);
+      onChange(inspectPasted(raw, source, fileName));
       return;
     }
-    setReadError(null);
-    onChange(inspectPasted(raw, source, fileName));
+    void inflateCapturePayload(raw).then((result) => {
+      if (attempt !== latest.current) return;
+      if (result.ok) {
+        setReadError(null);
+        onChange(inspectPasted(result.text, source, fileName));
+      } else if (result.reason === 'unavailable') {
+        // Sent as it is; the server reads it. Only bookmarklets compress, so it is a capture.
+        const text = raw.trim();
+        setReadError(null);
+        onChange({ text, bytes: text.length, kind: 'envelope', source, fileName });
+      } else {
+        setReadError(INFLATE_PROBLEMS[result.reason]);
+      }
+    });
   }
 
   function readFile(file: File): void {
     if (file.size > MAX_CAPTURE_BYTES) {
-      setReadError(`${file.name} is larger than ${formatBytes(MAX_CAPTURE_BYTES)}, too large for a deck.`);
+      setReadError(`${file.name} is too large to import (${SIZE_LIMIT}).`);
       return;
     }
     file.text().then(
@@ -190,6 +231,7 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
           value={value}
           invalid={message !== null}
           onClear={() => {
+            latest.current += 1;
             onChange(null);
           }}
         />

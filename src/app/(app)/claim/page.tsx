@@ -24,7 +24,7 @@ export const metadata: Metadata = { title: 'Set up git-moxfield', robots: { inde
  * code to whoever opens this page.
  */
 export default async function ClaimPage() {
-  const auth = getAuthService();
+  const auth = await getAuthService();
   if (!(await auth.isClaimable())) redirect(routes.signIn());
   after(async () => {
     await auth.claimStatus();

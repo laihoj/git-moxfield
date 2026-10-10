@@ -5,6 +5,8 @@
  * database (or an open transaction). Repositories speak domain types
  * (`CanonicalSnapshot`, `CardFacts`, ...) and the record types exported here; JSON
  * columns are decoded and validated on read, and every multi-statement write is atomic.
+ * Every method is asynchronous (libSQL, ADR 0008); remotely each query is a round trip,
+ * so independent reads are worth starting together (`Promise.all`).
  *
  * Two kinds of repositories share the binding:
  * - **Deck data** (decks, branches, commits, observations, tags, notes, card index, card
@@ -23,13 +25,15 @@
  */
 import { randomUUID } from 'node:crypto';
 
+import type { TransactionOptions } from '@/server/db/transaction';
+
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 
 import { createBranchRepository, type BranchRepository } from './branches';
 import { createCardIndexRepository, type CardIndexRepository } from './card-index';
 import { createCatalogRepository, type CatalogRepository } from './catalog';
 import { createCommitRepository, type CommitRepository } from './commits';
-import { withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import { withTransaction, type LibsqlExecutor, type RepositoryContext } from './context';
 import { createCredentialRepository, type CredentialRepository } from './credentials';
 import { createDeckRepository, type DeckRepository } from './decks';
 import { createInviteRepository, type InviteRepository } from './invites';
@@ -65,11 +69,14 @@ export interface Repositories {
   readonly invites: InviteRepository;
   readonly shareLinks: ShareLinkRepository;
   /**
-   * Runs `fn` atomically with repositories bound to one transaction: if `fn` throws,
-   * every write it made is rolled back. Nested calls use savepoints. `fn` must be
-   * synchronous (better-sqlite3 transactions cannot span an `await`).
+   * Runs `fn` atomically with repositories bound to one `BEGIN IMMEDIATE` transaction: if
+   * `fn` throws, every write it made is rolled back. Nested calls use savepoints. The rules
+   * of `runInTransaction` (`src/server/db/transaction.ts`) apply: inside `fn` use only the
+   * repositories it receives, keep it short and free of network I/O (no Moxfield fetches),
+   * never wait for a deck lock in it, and let it run more than once (it is retried after a
+   * transient failure), so it must not have effects outside the database.
    */
-  transaction<T>(fn: (repos: Repositories) => T): T;
+  transaction<T>(fn: (repos: Repositories) => Promise<T>, options?: TransactionOptions): Promise<T>;
 }
 
 export interface RepositoryOptions {
@@ -87,7 +94,7 @@ export interface RepositoryOptions {
 }
 
 /** Binds all repositories to a database or an open transaction. */
-export function createRepositories(db: DbExecutor, options: RepositoryOptions = {}): Repositories {
+export function createRepositories(db: LibsqlExecutor, options: RepositoryOptions = {}): Repositories {
   const clock = options.now ?? (() => new Date());
   return bind({
     db,
@@ -117,11 +124,11 @@ function bind(ctx: RepositoryContext): Repositories {
     loginLinks: createLoginLinkRepository(ctx),
     invites: createInviteRepository(ctx),
     shareLinks: createShareLinkRepository(ctx),
-    transaction: (fn) => withTransaction(ctx, (tx) => fn(bind(tx))),
+    transaction: (fn, options) => withTransaction(ctx, (tx) => fn(bind(tx)), options),
   };
 }
 
-export type { DbExecutor } from './context';
+export { MAX_STORED_VALUE_BYTES, type LibsqlExecutor } from './context';
 export { RepositoryError, isRepositoryError, type RepositoryErrorCode } from './errors';
 export {
   MAIN_BRANCH_NAME,

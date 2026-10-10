@@ -5,11 +5,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createAuthService, SETUP_CODE_SETTING, SYSTEM_ACTOR } from '@/server/auth/service';
 import { SETUP_CODE_PATTERN } from '@/server/auth/setup-code';
-import { LOCAL_WORKSPACE_ID, openDatabase, type Db } from '@/server/db/client';
+import { LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
+import type { LibsqlDatabase } from '@/server/db/libsql';
 import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
 import {
   blueFarmSpec,
@@ -21,7 +23,7 @@ import {
 
 describe('user management', () => {
   it('lists users with their decks and keys for admins only', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     await harness.auth.createBookmarkletKey(member.user, 'Laptop', 'http://localhost:3000');
@@ -43,7 +45,7 @@ describe('user management', () => {
   });
 
   it('disables a user: their sessions end and their keys stop working until enabled', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
     const key = keyOfBookmarklet(
@@ -69,7 +71,7 @@ describe('user management', () => {
   });
 
   it('withdraws for good the links that sign a disabled user in, so enabling them revives none', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Bob');
     const deviceLink = tokenOfPath((await harness.auth.createDeviceLink(member.user)).path);
@@ -84,7 +86,7 @@ describe('user management', () => {
   });
 
   it('takes a disabled admin’s invites and recovery links with them, also after enabling them again', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const root = await signUp(harness.auth, 'Root', { role: 'admin' });
     const mallory = await signUp(harness.auth, 'Mallory', { role: 'admin' });
     const bob = await signUp(harness.auth, 'Bob');
@@ -108,11 +110,11 @@ describe('user management', () => {
     await harness.auth.enableUser(root.user, mallory.user.id);
     expect(await harness.auth.acceptInvite(adminInvite, 'Mallory2', null)).toMatchObject({ ok: false });
     expect(await harness.auth.consumeLoginLink(forRoot, 'Mallory')).toBeNull();
-    expect(harness.repos.users.count()).toBe(3);
+    expect(await harness.repos.users.count()).toBe(3);
   });
 
   it('refuses an invite whose admin was disabled from the command line', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     await signUp(harness.auth, 'Root', { role: 'admin' });
     const mallory = await signUp(harness.auth, 'Mallory', { role: 'admin' });
     const invite = tokenOfPath((await harness.auth.createInvite(mallory.user, { role: 'member' })).path);
@@ -124,14 +126,14 @@ describe('user management', () => {
   });
 
   it('honours an invite or recovery link only while its admin is an active admin (defence in depth)', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const root = await signUp(harness.auth, 'Root', { role: 'admin' });
     const demoted = await signUp(harness.auth, 'Demoted', { role: 'admin' });
     const bob = await signUp(harness.auth, 'Bob');
     const invite = tokenOfPath((await harness.auth.createInvite(demoted.user, { role: 'admin' })).path);
     const recovery = tokenOfPath((await harness.auth.createRecoveryLink(demoted.user, bob.user.id)).path);
     // No feature demotes an admin; an operator could, in the database. Nothing was revoked.
-    harness.db.$client.prepare("UPDATE users SET role = 'member' WHERE id = ?").run(demoted.user.id);
+    await harness.db.run(sql`UPDATE users SET role = 'member' WHERE id = ${demoted.user.id}`);
 
     expect(await harness.auth.getInvite(invite)).toEqual({ status: 'revoked' });
     expect(await harness.auth.acceptInvite(invite, 'Eve', null)).toMatchObject({
@@ -148,7 +150,7 @@ describe('user management', () => {
   });
 
   it('never lets an admin disable themselves or the last admin', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     expect(await harness.auth.disableUser(admin.user, admin.user.id)).toMatchObject({
       ok: false,
@@ -172,7 +174,7 @@ describe('user management', () => {
   });
 
   it('re-checks the actor’s role in the database on every admin operation', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const first = await signUp(harness.auth, 'First', { role: 'admin' });
     const second = await signUp(harness.auth, 'Second', { role: 'admin' });
     await harness.auth.disableUser(first.user, second.user.id);
@@ -183,7 +185,7 @@ describe('user management', () => {
   });
 
   it('renames users (admins) and oneself (anyone), validating the name', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
 
@@ -206,12 +208,12 @@ describe('user management', () => {
 
 describe('claim', () => {
   it('creates the setup code once, prints it to the log, and changes nothing when only asked', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     expect(await harness.auth.isClaimable()).toBe(true);
-    expect(harness.repos.settings.get(SETUP_CODE_SETTING)).toBeNull();
+    expect(await harness.repos.settings.get(SETUP_CODE_SETTING)).toBeNull();
 
     expect(await harness.auth.claimStatus()).toEqual({ claimable: true });
-    const code = defined(harness.repos.settings.get(SETUP_CODE_SETTING));
+    const code = defined(await harness.repos.settings.get(SETUP_CODE_SETTING));
     expect(code).toMatch(SETUP_CODE_PATTERN);
     expect(await harness.auth.claimStatus()).toEqual({ claimable: true });
     expect(await harness.auth.setupCode()).toBe(code);
@@ -223,13 +225,13 @@ describe('claim', () => {
   });
 
   it('includes the public URL in the log message when one is configured', async () => {
-    const harness = createServiceHarness({ env: { PUBLIC_APP_URL: 'https://decks.example.com' } });
+    const harness = await createServiceHarness({ env: { PUBLIC_APP_URL: 'https://decks.example.com' } });
     await harness.auth.claimStatus();
     expect(harness.logger.entries.at(-1)?.message).toContain('https://decks.example.com/claim');
   });
 
   it('makes the first admin, who adopts the existing local history', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     harness.api.setDeck(blueFarmSpec());
     const tracked = await harness.services.trackDeck(BLUE_FARM_URL);
     if (!tracked.ok) throw new Error(tracked.reason);
@@ -257,7 +259,7 @@ describe('claim', () => {
     expect((await harness.auth.listSessions(outcome.signIn.user))[0]?.createdVia).toBe('claim');
 
     // The code is gone, and the installation cannot be claimed again.
-    expect(harness.repos.settings.get(SETUP_CODE_SETTING)).toBeNull();
+    expect(await harness.repos.settings.get(SETUP_CODE_SETTING)).toBeNull();
     expect(await harness.auth.isClaimable()).toBe(false);
     expect(await harness.auth.claimStatus()).toEqual({ claimable: false });
     expect(await harness.auth.setupCode()).toBeNull();
@@ -268,20 +270,20 @@ describe('claim', () => {
   });
 
   it('gives the first admin of a fresh installation a workspace of their own', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     // Every database has an empty `local` workspace; there is no history to adopt.
-    expect(harness.repos.workspaces.getById(LOCAL_WORKSPACE_ID)).not.toBeNull();
+    expect(await harness.repos.workspaces.getById(LOCAL_WORKSPACE_ID)).not.toBeNull();
     const code = defined(await harness.auth.setupCode());
 
     const outcome = await harness.auth.claim(code, 'Owner', null);
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.adoptedLocalWorkspace).toBe(false);
     expect(outcome.signIn.user.workspaceId).not.toBe(LOCAL_WORKSPACE_ID);
-    expect(harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).toBeNull();
+    expect(await harness.repos.users.getByWorkspaceId(LOCAL_WORKSPACE_ID)).toBeNull();
   });
 
   it('is impossible once any user exists, even with the right code', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     await harness.auth.claimStatus();
     const code = defined(await harness.auth.setupCode());
     await signUp(harness.auth, 'Invited first');
@@ -290,24 +292,25 @@ describe('claim', () => {
 
   describe('across processes', () => {
     let dir: string | undefined;
-    const open: Db[] = [];
+    const open: LibsqlDatabase[] = [];
 
     afterEach(() => {
-      for (const db of open.splice(0)) db.$client.close();
+      for (const handle of open.splice(0)) handle.close();
       if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
       dir = undefined;
     });
 
     it('lets exactly one of two processes claim, although both saw it claimable', async () => {
       dir = mkdtempSync(join(tmpdir(), 'git-moxfield-claim-'));
-      const { config } = createServiceHarness();
-      const start = () => {
-        const db = openDatabase(join(dir ?? '', 'app.db'));
-        open.push(db);
-        return createAuthService({ db, config, logger: recordingLogger() });
+      const { config } = await createServiceHarness();
+      // Two app instances, each with a connection pool of its own on the same file.
+      const start = async () => {
+        const handle = await openDatabase({ url: `file:${join(dir ?? '', 'app.db')}` });
+        open.push(handle);
+        return createAuthService({ db: handle.db, config, logger: recordingLogger() });
       };
-      const first = start();
-      const second = start();
+      const first = await start();
+      const second = await start();
       // Both processes see an unclaimed installation and the same code.
       expect(await first.claimStatus()).toEqual({ claimable: true });
       expect(await second.claimStatus()).toEqual({ claimable: true });

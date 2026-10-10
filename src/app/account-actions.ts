@@ -66,7 +66,8 @@ export async function renameSelfAction(_previous: RenameState, formData: FormDat
   const user = await requireUser({ next: routes.account() });
   const value = formString(formData, 'name');
   try {
-    const outcome = await getAuthService().renameSelf(user, value);
+    const auth = await getAuthService();
+    const outcome = await auth.renameSelf(user, value);
     if (!outcome.ok) return { status: 'error', message: outcome.message, value };
     // The header shows the name on every page.
     revalidatePath('/', 'layout');
@@ -89,7 +90,8 @@ export async function createBookmarkletAction(
   const appUrl = publicAppUrl(await headers());
   if (appUrl === null) return { status: 'error', message: NO_APP_URL, label };
   try {
-    const created = await getAuthService().createBookmarkletKey(user, label, appUrl);
+    const auth = await getAuthService();
+    const created = await auth.createBookmarkletKey(user, label, appUrl);
     revalidateAccount();
     return {
       status: 'created',
@@ -121,7 +123,8 @@ export async function revokeKeyAction(
     return { ok: false, message: 'Invalid request.' };
   }
   try {
-    const revoked = await getAuthService().revokeKey(user, id.data, { includeDerived, includeShareLinks });
+    const auth = await getAuthService();
+    const revoked = await auth.revokeKey(user, id.data, { includeDerived, includeShareLinks });
     revalidateAccount();
     // Every deck's Share page lists its links.
     if (includeShareLinks) revalidatePath('/decks/[deckId]/share', 'page');
@@ -140,7 +143,8 @@ export async function revokeKeyShareLinksAction(keyId: string): Promise<AccountA
   const id = idSchema.safeParse(keyId);
   if (!id.success) return { ok: false, message: 'Invalid request.' };
   try {
-    const revoked = await getAuthService().revokeKeyShareLinks(user, id.data);
+    const auth = await getAuthService();
+    const revoked = await auth.revokeKeyShareLinks(user, id.data);
     revalidatePath('/account');
     // Every deck's Share page lists its links.
     revalidatePath('/decks/[deckId]/share', 'page');
@@ -159,7 +163,8 @@ export async function revokeSessionAction(sessionId: string): Promise<AccountAct
     return { ok: false, message: 'Use “Sign out” to sign this device out.' };
   }
   try {
-    await getAuthService().revokeSession(user, id.data);
+    const auth = await getAuthService();
+    await auth.revokeSession(user, id.data);
     revalidatePath('/account');
     return { ok: true };
   } catch (error) {
@@ -171,7 +176,8 @@ export async function revokeSessionAction(sessionId: string): Promise<AccountAct
 export async function signOutOtherDevicesAction(): Promise<AccountActionResult> {
   const user = await requireUser({ next: routes.account() });
   try {
-    await getAuthService().endOtherSessions(user);
+    const auth = await getAuthService();
+    await auth.endOtherSessions(user);
     revalidatePath('/account');
     return { ok: true };
   } catch (error) {
@@ -183,7 +189,8 @@ export async function signOutOtherDevicesAction(): Promise<AccountActionResult> 
 export async function signOutEverywhereAction(): Promise<AccountActionResult> {
   const user = await requireUser({ next: routes.account() });
   try {
-    await getAuthService().endAllSessions(user);
+    const auth = await getAuthService();
+    await auth.endAllSessions(user);
     await endBrowserSession();
   } catch (error) {
     return { ok: false, message: failureMessage(error, 'signOutEverywhere', user) };
@@ -197,7 +204,8 @@ export async function createDeviceLinkAction(): Promise<IssuedLinkState> {
   const appUrl = publicAppUrl(await headers());
   if (appUrl === null) return { status: 'error', message: NO_APP_URL };
   try {
-    const link = await getAuthService().createDeviceLink(user);
+    const auth = await getAuthService();
+    const link = await auth.createDeviceLink(user);
     const url = new URL(link.path, appUrl).href;
     return { status: 'created', url, expiresAt: link.expiresAt, qr: qrCode(url) };
   } catch (error) {

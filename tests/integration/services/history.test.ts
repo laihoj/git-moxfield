@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { allCards } from '@/core/canonical';
@@ -60,7 +61,7 @@ describe('deck services: history', () => {
   let versions: VersionRefDTO[];
 
   beforeEach(async () => {
-    harness = createServiceHarness();
+    harness = await createServiceHarness();
     ({ deckId, versions } = await buildHistory(harness));
   });
 
@@ -189,7 +190,7 @@ describe('deck services: history', () => {
       expect(await harness.services.compare('missing', 'v1', 'v2')).toBeNull();
 
       // A deck without observations has no working state.
-      const fresh = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+      const fresh = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
       const freshDeck = await trackDeck(fresh);
       expect(await fresh.services.compare(freshDeck, 'empty', 'working')).toBeNull();
       expect(await fresh.services.compare(freshDeck, 'empty', 'head')).toBeNull();
@@ -293,7 +294,7 @@ describe('deck services: history', () => {
     });
 
     it('reports null facts for cards missing from the catalog', async () => {
-      harness.db.$client.prepare('DELETE FROM card_catalog WHERE key = ?').run('grim tutor');
+      await harness.db.run(sql`DELETE FROM card_catalog WHERE key = ${'grim tutor'}`);
       const [grimTutor] = await harness.services.searchCards(deckId, 'grim');
       expect(grimTutor).toMatchObject({ key: 'grim tutor', facts: null });
     });
@@ -380,7 +381,7 @@ describe('deck services: card history across renames', () => {
   }
 
   it('follows a renamed card with one history under either name, as the diff does', async () => {
-    const harness = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+    const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const deckId = await renameHistory(harness);
     expect(
       defined(await harness.services.getVersion(deckId, 3)).diff.changes.filter((c) =>
@@ -413,7 +414,7 @@ describe('deck services: card history across renames', () => {
   });
 
   it('keeps an ambiguous rename a removal and an addition, like the diff', async () => {
-    const harness = createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
+    const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const base = blueFarmSpec();
     const envelope = (spec: MoxDeckSpec, sharedIdFrom?: string): Record<string, unknown> => {
       const built = buildCaptureEnvelope(spec);

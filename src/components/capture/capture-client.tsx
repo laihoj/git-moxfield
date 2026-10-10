@@ -8,7 +8,6 @@ import {
   DONE,
   ERROR,
   isCaptureMessage,
-  MAX_CAPTURE_BYTES,
   PAYLOAD,
   READY,
   readCaptureNonce,
@@ -93,8 +92,10 @@ export interface CaptureClientProps {
  * READY to the opener until the Moxfield tab answers, accepts the payload only from
  * the opener, an allowed origin and with the matching nonce, imports it together with
  * the bookmarklet key that came with it (which signs this browser in), and reports DONE
- * or ERROR back. Without an opener or nonce, or after a timeout, it offers the manual
- * paste form (or sign-in first, for a signed-out browser).
+ * or ERROR back. The payload arrives compressed from current bookmarklets; a plain one
+ * (from a bookmarklet made before compression) is compressed here before it is sent.
+ * Without an opener or nonce, or after a timeout, it offers the manual paste form (or
+ * sign-in first, for a signed-out browser).
  */
 export function CaptureClient({
   allowedOrigins,
@@ -160,13 +161,9 @@ export function CaptureClient({
         setPhase({ kind: 'outdated' });
         return;
       }
-      if (data.json.length > MAX_CAPTURE_BYTES) {
-        const message = 'The deck is too large to import.';
-        post({ t: ERROR, n: nonce, message }, replyOrigin);
-        setPhase({ kind: 'opener-error', message });
-        return;
-      }
       setPhase({ kind: 'received' });
+      // The submission compresses a plain payload and refuses one over the size limits
+      // (`prepareCapturePayload`); either way, the answer goes back to the Moxfield tab.
       void importPayload(data.json, data.key).then((result) => {
         post(
           result.ok ? { t: DONE, n: nonce } : { t: ERROR, n: nonce, message: result.message },

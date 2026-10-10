@@ -38,7 +38,8 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
   const requestHeaders = await headers();
   const setup = getSetupInfo();
   const appUrl = publicAppUrl(requestHeaders);
-  const keys = await getAuthService().listKeys(user);
+  const auth = await getAuthService();
+  const keys = await auth.listKeys(user);
   const siteHost = new URL(setup.moxfieldSiteOrigin).host;
 
   const bookmarkletCard = (

@@ -51,28 +51,28 @@ export interface CommitRepository {
    * content or a bad sequence; `not-found` for an unknown deck, branch, parent,
    * snapshot or raw blob; `conflict` when the id or the sequence already exists.
    */
-  insert(commit: CommitRecord): CommitRecord;
-  getById(id: string): CommitRecord | null;
-  getBySequence(deckId: string, sequence: number): CommitRecord | null;
+  insert(commit: CommitRecord): Promise<CommitRecord>;
+  getById(id: string): Promise<CommitRecord | null>;
+  getBySequence(deckId: string, sequence: number): Promise<CommitRecord | null>;
   /**
    * Resolves an abbreviated commit id within a deck (case-insensitive). Returns `null`
    * when nothing matches, when the prefix is ambiguous, or when it is not at least
    * {@link MIN_COMMIT_ID_PREFIX_LENGTH} hex characters.
    */
-  findByIdPrefix(deckId: string, prefix: string): CommitRecord | null;
+  findByIdPrefix(deckId: string, prefix: string): Promise<CommitRecord | null>;
   /** The commit the deck's HEAD branch points at, or `null` before the first version. */
-  head(deckId: string): CommitRecord | null;
+  head(deckId: string): Promise<CommitRecord | null>;
   /**
    * The chain of versions ending at `fromCommitId` (default: HEAD), oldest first,
    * following parent pointers. Empty when the deck has no versions or `fromCommitId`
    * is not a commit of the deck.
    */
-  lineage(deckId: string, fromCommitId?: string): CommitRecord[];
+  lineage(deckId: string, fromCommitId?: string): Promise<CommitRecord[]>;
   /** All versions of the deck, newest (highest sequence) first. */
-  listForDeck(deckId: string): CommitRecord[];
-  count(deckId: string): number;
+  listForDeck(deckId: string): Promise<CommitRecord[]>;
+  count(deckId: string): Promise<number>;
   /** Highest sequence of the deck, or `null` before the first version. */
-  maxSequence(deckId: string): number | null;
+  maxSequence(deckId: string): Promise<number | null>;
 }
 
 export function createCommitRepository(ctx: RepositoryContext): CommitRepository {
@@ -80,15 +80,15 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
   const owned = () => inWorkspace(ctx, commits.deckId);
 
   return {
-    insert(commit) {
+    async insert(commit) {
       if (!Number.isInteger(commit.sequence) || commit.sequence < 1) {
         throw new RepositoryError(
           'invalid-input',
           `Commit sequence must be a positive integer, got ${commit.sequence}`,
         );
       }
-      return withTransaction(ctx, ({ db }) => {
-        const deck = db
+      return withTransaction(ctx, async ({ db }) => {
+        const deck = await db
           .select({ source: decks.source, externalId: decks.externalId })
           .from(decks)
           .where(and(eq(decks.id, commit.deckId), eq(decks.workspaceId, ctx.workspaceId)))
@@ -97,10 +97,13 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         assertContentAddressed(commit, `${deck.source}:${deck.externalId}`);
 
         // Installation-wide on purpose: commit ids are the table's primary key.
-        if (db.select({ id: commits.id }).from(commits).where(eq(commits.id, commit.id)).get()) {
-          throw new RepositoryError('conflict', `Commit ${commit.id} already exists`);
-        }
-        const branch = db
+        const existing = await db
+          .select({ id: commits.id })
+          .from(commits)
+          .where(eq(commits.id, commit.id))
+          .get();
+        if (existing) throw new RepositoryError('conflict', `Commit ${commit.id} already exists`);
+        const branch = await db
           .select({ deckId: branches.deckId })
           .from(branches)
           .where(eq(branches.id, commit.branchId))
@@ -112,7 +115,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
           );
         }
         if (commit.parentId !== null) {
-          const parent = db
+          const parent = await db
             .select({ deckId: commits.deckId, sequence: commits.sequence })
             .from(commits)
             .where(eq(commits.id, commit.parentId))
@@ -130,7 +133,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
             );
           }
         }
-        const taken = db
+        const taken = await db
           .select({ id: commits.id })
           .from(commits)
           .where(and(eq(commits.deckId, commit.deckId), eq(commits.sequence, commit.sequence)))
@@ -159,13 +162,13 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
           sourceMetadataJson: encodeJson(commit.sourceMetadata, 'Source metadata'),
         };
         // Remaining references: snapshot and raw blob.
-        referencing(`Commit ${commit.id}`, () => db.insert(commits).values(values).run());
+        await referencing(`Commit ${commit.id}`, () => db.insert(commits).values(values));
         return { ...commit };
       });
     },
 
-    getById(id) {
-      const row = ctx.db
+    async getById(id) {
+      const row = await ctx.db
         .select()
         .from(commits)
         .where(and(eq(commits.id, id), owned()))
@@ -173,8 +176,8 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return row ? toCommitRecord(row) : null;
     },
 
-    getBySequence(deckId, sequence) {
-      const row = ctx.db
+    async getBySequence(deckId, sequence) {
+      const row = await ctx.db
         .select()
         .from(commits)
         .where(and(eq(commits.deckId, deckId), eq(commits.sequence, sequence), owned()))
@@ -182,12 +185,12 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return row ? toCommitRecord(row) : null;
     },
 
-    findByIdPrefix(deckId, prefix) {
+    async findByIdPrefix(deckId, prefix) {
       const normalized = prefix.trim().toLowerCase();
       if (!/^[0-9a-f]+$/.test(normalized) || normalized.length < MIN_COMMIT_ID_PREFIX_LENGTH) return null;
       // Ids are lowercase hex, so every id starting with the prefix sorts within
       // [prefix, prefix + 'g'): a primary-key range scan instead of LIKE.
-      const [match, another] = ctx.db
+      const [match, another] = await ctx.db
         .select()
         .from(commits)
         .where(
@@ -203,8 +206,8 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return match && !another ? toCommitRecord(match) : null;
     },
 
-    head(deckId) {
-      const row = ctx.db
+    async head(deckId) {
+      const row = await ctx.db
         .select(getTableColumns(commits))
         .from(decks)
         .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
@@ -214,15 +217,18 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return row ? toCommitRecord(row) : null;
     },
 
-    lineage(deckId, fromCommitId) {
-      const rows = ctx.db
-        .select()
-        .from(commits)
-        .where(and(eq(commits.deckId, deckId), owned()))
-        .all();
+    async lineage(deckId, fromCommitId) {
+      const [rows, headId] = await Promise.all([
+        ctx.db
+          .select()
+          .from(commits)
+          .where(and(eq(commits.deckId, deckId), owned()))
+          .all(),
+        fromCommitId === undefined ? headCommitId(ctx, deckId) : Promise.resolve(fromCommitId),
+      ]);
       const byId = new Map(rows.map((row) => [row.id, row]));
       const chain: (typeof commits.$inferSelect)[] = [];
-      let cursor = fromCommitId ?? headCommitId(ctx, deckId);
+      let cursor = headId;
       if (cursor !== null && !byId.has(cursor)) return [];
       while (cursor !== null) {
         const row = byId.get(cursor);
@@ -235,18 +241,18 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return chain.reverse().map(toCommitRecord);
     },
 
-    listForDeck(deckId) {
-      return ctx.db
+    async listForDeck(deckId) {
+      const rows = await ctx.db
         .select()
         .from(commits)
         .where(and(eq(commits.deckId, deckId), owned()))
         .orderBy(desc(commits.sequence))
-        .all()
-        .map(toCommitRecord);
+        .all();
+      return rows.map(toCommitRecord);
     },
 
-    count(deckId) {
-      const row = ctx.db
+    async count(deckId) {
+      const row = await ctx.db
         .select({ n: count() })
         .from(commits)
         .where(and(eq(commits.deckId, deckId), owned()))
@@ -254,8 +260,8 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       return row?.n ?? 0;
     },
 
-    maxSequence(deckId) {
-      const row = ctx.db
+    async maxSequence(deckId) {
+      const row = await ctx.db
         .select({ value: max(commits.sequence) })
         .from(commits)
         .where(and(eq(commits.deckId, deckId), owned()))
@@ -287,8 +293,8 @@ function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   }
 }
 
-function headCommitId(ctx: RepositoryContext, deckId: string): string | null {
-  const row = ctx.db
+async function headCommitId(ctx: RepositoryContext, deckId: string): Promise<string | null> {
+  const row = await ctx.db
     .select({ headCommitId: branches.headCommitId })
     .from(decks)
     .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))

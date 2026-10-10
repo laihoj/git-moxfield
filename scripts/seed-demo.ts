@@ -3,8 +3,9 @@
  * Ludevic's Opus), with eight versions spread over the last ten weeks, tags, notes and
  * uncommitted changes on top, so every screen of git-moxfield has something to show.
  *
- *   pnpm seed:demo            seed into DATABASE_PATH (default data/git-moxfield.db; read from
- *                             the environment and .env* files, like the app)
+ *   pnpm seed:demo            seed into the app's database (TURSO_DATABASE_URL, else
+ *                             DATABASE_PATH, default data/git-moxfield.db; read from the
+ *                             environment and .env* files, like the app)
  *   pnpm seed:demo --force    replace an existing demo deck
  *
  * The deck belongs to the demo user, an admin named "Demo" with a workspace of its own
@@ -23,13 +24,10 @@
  * the deck page shows that state, which is a realistic picture of a deck you update
  * with the bookmarklet.
  */
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
-import { openDatabase } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
 import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
@@ -43,6 +41,8 @@ import {
   type MoxDeckSpec,
 } from '@tests/support/moxfield-deck-builder';
 
+import { describeConfiguredDatabase, openConfiguredDatabase } from './database';
+import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 
 /** Moxfield-style public id of the demo deck (not a real Moxfield deck). */
@@ -460,8 +460,10 @@ function uncommittedEdits(deck: DemoDeck): void {
  * own when there is none. (It never adopts the `local` workspace of a pre-account
  * installation, so seeding a real database cannot take over its history.)
  */
-export function ensureDemoUser(repos: Repositories): UserRecord {
-  const existing = repos.users.findByDisplayName(DEMO_USER_NAME).find((user) => user.role === 'admin');
+export async function ensureDemoUser(repos: Repositories): Promise<UserRecord> {
+  const existing = (await repos.users.findByDisplayName(DEMO_USER_NAME)).find(
+    (user) => user.role === 'admin',
+  );
   if (existing) return existing.disabledAt === null ? existing : repos.users.setDisabled(existing.id, false);
   return repos.users.create({ displayName: DEMO_USER_NAME, role: 'admin' });
 }
@@ -543,7 +545,7 @@ export async function seedDemoDeck(services: DeckServices, clock: DemoClock, end
   return deckId;
 }
 
-async function main(): Promise<void> {
+async function main(): Promise<number> {
   let force: boolean;
   try {
     force = parseArgs({ options: { force: { type: 'boolean', default: false } } }).values.force;
@@ -551,8 +553,7 @@ async function main(): Promise<void> {
     console.error(
       `${error instanceof Error ? error.message : String(error)}\nUsage: pnpm seed:demo [--force]`,
     );
-    process.exitCode = 1;
-    return;
+    return 1;
   }
   loadEnvFiles();
   const appConfig = getConfig();
@@ -566,9 +567,11 @@ async function main(): Promise<void> {
   const end = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
   const clock = new DemoClock(end);
 
-  const db = openDatabase(appConfig.DATABASE_PATH);
+  const where = describeConfiguredDatabase(appConfig);
+  const database = await openConfiguredDatabase(appConfig);
+  const { db } = database;
   try {
-    const demoUser = ensureDemoUser(createRepositories(db));
+    const demoUser = await ensureDemoUser(createRepositories(db));
     const services = createServices({
       db,
       sources: createDeckSourceRegistry(config, { fetchImpl: api.fetch, logger }),
@@ -584,10 +587,9 @@ async function main(): Promise<void> {
     if (existing) {
       if (!force) {
         console.error(
-          `The demo deck already exists at /decks/${existing.id} in ${appConfig.DATABASE_PATH}. Run with --force to replace it.`,
+          `The demo deck already exists at /decks/${existing.id} in the ${where}. Run with --force to replace it.`,
         );
-        process.exitCode = 1;
-        return;
+        return 1;
       }
       await services.untrackDeck(existing.id);
       console.log('Removed the existing demo deck.');
@@ -596,7 +598,7 @@ async function main(): Promise<void> {
     const deckId = await seedDemoDeck(services, clock, end);
     const overview = await services.getOverview(deckId);
     console.log(
-      `Seeded "${overview?.name ?? 'Blue Farm (demo)'}" with ${overview?.versionCount ?? 0} versions (status: ${overview?.status ?? 'unknown'}) into ${appConfig.DATABASE_PATH}.`,
+      `Seeded "${overview?.name ?? 'Blue Farm (demo)'}" with ${overview?.versionCount ?? 0} versions (status: ${overview?.status ?? 'unknown'}) into the ${where}.`,
     );
     console.log(`/decks/${deckId}`);
 
@@ -608,26 +610,11 @@ async function main(): Promise<void> {
       `\nSign in as the demo user "${demoUser.displayName}" with this one-time link (valid until ${link.expiresAt}):`,
     );
     console.log(new URL(link.path, appUrl).href);
+    return 0;
   } finally {
-    db.$client.close();
-  }
-}
-
-/** Whether Node runs this file as the main module (symlinks resolved, as for `import.meta.url`). */
-function isEntryPoint(): boolean {
-  const entryPoint = process.argv[1];
-  if (entryPoint === undefined) return false;
-  try {
-    return realpathSync(entryPoint) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
+    database.close();
   }
 }
 
 // Run only as a script (`pnpm seed:demo`), not when imported by tests.
-if (isEntryPoint()) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-    process.exitCode = 1;
-  });
-}
+if (isEntryPoint(import.meta.url)) runMain('seed-demo', main);

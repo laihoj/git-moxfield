@@ -14,8 +14,6 @@ export const dynamic = 'force-dynamic';
 export async function GET(): Promise<Response> {
   const disabled = e2eDisabledResponse();
   if (disabled !== null) return disabled;
-  return Response.json(
-    { setupCode: await getAuthService().setupCode() },
-    { headers: { 'cache-control': 'no-store' } },
-  );
+  const auth = await getAuthService();
+  return Response.json({ setupCode: await auth.setupCode() }, { headers: { 'cache-control': 'no-store' } });
 }

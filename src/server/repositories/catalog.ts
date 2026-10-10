@@ -12,21 +12,21 @@ import type { CardFacts, CardKey } from '@/core/model';
 import { cardCatalog } from '@/server/db/schema';
 
 import { decodeStringArray, encodeJson } from './codec';
-import { batches, distinct, withTransaction, type RepositoryContext } from './context';
+import { batches, distinct, writeAll, type RepositoryContext } from './context';
 
 export interface CatalogRepository {
   /**
-   * Inserts or replaces the workspace's facts in one transaction. When the input contains
-   * the same key more than once, the last entry wins.
+   * Inserts or replaces the workspace's facts atomically (one batch). When the input
+   * contains the same key more than once, the last entry wins.
    */
-  upsertMany(facts: readonly CardFacts[]): void;
+  upsertMany(facts: readonly CardFacts[]): Promise<void>;
   /** The workspace's facts for the given keys; unknown keys are absent from the result. */
-  getMany(keys: Iterable<CardKey>): Map<CardKey, CardFacts>;
+  getMany(keys: Iterable<CardKey>): Promise<Map<CardKey, CardFacts>>;
 }
 
 export function createCatalogRepository(ctx: RepositoryContext): CatalogRepository {
   return {
-    upsertMany(facts) {
+    async upsertMany(facts) {
       if (facts.length === 0) return;
       const latest = new Map<CardKey, CardFacts>();
       for (const fact of facts) latest.set(fact.key, fact);
@@ -44,9 +44,11 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
         scryfallId: fact.scryfallId ?? null,
         updatedAt,
       }));
-      withTransaction(ctx, ({ db }) => {
-        for (const batch of batches(rows)) {
-          db.insert(cardCatalog)
+      const [first = [], ...rest] = batches(rows);
+      await writeAll(ctx, (db) => {
+        const upsert = (batch: typeof rows) =>
+          db
+            .insert(cardCatalog)
             .values(batch)
             .onConflictDoUpdate({
               target: [cardCatalog.workspaceId, cardCatalog.key],
@@ -61,20 +63,23 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
                 scryfallId: excluded(cardCatalog.scryfallId),
                 updatedAt: excluded(cardCatalog.updatedAt),
               },
-            })
-            .run();
-        }
+            });
+        return [upsert(first), ...rest.map(upsert)] as const;
       });
     },
 
-    getMany(keys) {
+    async getMany(keys) {
       const result = new Map<CardKey, CardFacts>();
-      for (const batch of batches(distinct(keys))) {
-        const rows = ctx.db
-          .select()
-          .from(cardCatalog)
-          .where(and(eq(cardCatalog.workspaceId, ctx.workspaceId), inArray(cardCatalog.key, batch)))
-          .all();
+      const pages = await Promise.all(
+        batches(distinct(keys)).map((batch) =>
+          ctx.db
+            .select()
+            .from(cardCatalog)
+            .where(and(eq(cardCatalog.workspaceId, ctx.workspaceId), inArray(cardCatalog.key, batch)))
+            .all(),
+        ),
+      );
+      for (const rows of pages) {
         for (const row of rows) {
           const facts: CardFacts = {
             key: row.key,

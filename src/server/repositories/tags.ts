@@ -8,7 +8,7 @@ import { compareStrings } from '@/core/canonical';
 import { commits, versionTags } from '@/server/db/schema';
 
 import { toCommitRecord, type CommitRecord } from './commits';
-import { batches, distinct, inWorkspace, referencing, type RepositoryContext } from './context';
+import { batches, distinct, inWorkspace, referencing, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 /** Maximum tag length in Unicode code points (after normalization). */
@@ -56,17 +56,17 @@ export interface VersionTagRepository {
    * @throws {RepositoryError} `invalid-input` for an invalid tag (see
    * {@link normalizeVersionTag}); `not-found` for an unknown commit.
    */
-  add(commitId: string, tag: string): string;
+  add(commitId: string, tag: string): Promise<string>;
   /** Removes a tag (input is normalized first). Returns whether it was present. */
-  remove(commitId: string, tag: string): boolean;
+  remove(commitId: string, tag: string): Promise<boolean>;
   /** Tags of one version, sorted. */
-  listForCommit(commitId: string): string[];
+  listForCommit(commitId: string): Promise<string[]>;
   /** Tags of several versions; every requested id is present (possibly with `[]`). */
-  listForCommits(commitIds: Iterable<string>): Map<string, string[]>;
+  listForCommits(commitIds: Iterable<string>): Promise<Map<string, string[]>>;
   /** Every tag used in the deck with the number of versions carrying it, sorted by name. */
-  listForDeck(deckId: string): TagCount[];
+  listForDeck(deckId: string): Promise<TagCount[]>;
   /** Versions of the deck carrying the tag, newest first. Invalid tags match nothing. */
-  commitsWithTag(deckId: string, tag: string): CommitRecord[];
+  commitsWithTag(deckId: string, tag: string): Promise<CommitRecord[]>;
 }
 
 export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRepository {
@@ -78,82 +78,83 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
     );
 
   return {
-    add(commitId, tag) {
+    async add(commitId, tag) {
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) throw new RepositoryError('invalid-input', validation.reason);
       const { name } = validation;
-      const owned = ctx.db
+      const owned = await ctx.db
         .select({ id: commits.id })
         .from(commits)
         .where(and(eq(commits.id, commitId), inWorkspace(ctx, commits.deckId)))
         .get();
       if (!owned) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
-      referencing(`Tag ${name}`, () =>
-        ctx.db
-          .insert(versionTags)
-          .values({ commitId, name, createdAt: ctx.now() })
-          .onConflictDoNothing()
-          .run(),
+      const createdAt = ctx.now();
+      await referencing(`Tag ${name}`, () =>
+        write(ctx, (db) =>
+          db.insert(versionTags).values({ commitId, name, createdAt }).onConflictDoNothing(),
+        ),
       );
       return name;
     },
 
-    remove(commitId, tag) {
+    async remove(commitId, tag) {
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) return false;
-      const result = ctx.db
-        .delete(versionTags)
-        .where(
-          and(
-            eq(versionTags.commitId, commitId),
-            eq(versionTags.name, validation.name),
-            ownedCommit(versionTags.commitId),
+      const result = await write(ctx, (db) =>
+        db
+          .delete(versionTags)
+          .where(
+            and(
+              eq(versionTags.commitId, commitId),
+              eq(versionTags.name, validation.name),
+              ownedCommit(versionTags.commitId),
+            ),
           ),
-        )
-        .run();
-      return result.changes > 0;
+      );
+      return result.rowsAffected > 0;
     },
 
-    listForCommit(commitId) {
-      return ctx.db
+    async listForCommit(commitId) {
+      const rows = await ctx.db
         .select({ name: versionTags.name })
         .from(versionTags)
         .where(and(eq(versionTags.commitId, commitId), ownedCommit(versionTags.commitId)))
-        .all()
-        .map((row) => row.name)
-        .sort(compareStrings);
+        .all();
+      return rows.map((row) => row.name).sort(compareStrings);
     },
 
-    listForCommits(commitIds) {
+    async listForCommits(commitIds) {
       const ids = distinct(commitIds);
       const result = new Map<string, string[]>(ids.map((id) => [id, []]));
-      for (const batch of batches(ids)) {
-        const rows = ctx.db
-          .select({ commitId: versionTags.commitId, name: versionTags.name })
-          .from(versionTags)
-          .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
-          .all();
-        for (const row of rows) result.get(row.commitId)?.push(row.name);
-      }
+      const pages = await Promise.all(
+        batches(ids).map((batch) =>
+          ctx.db
+            .select({ commitId: versionTags.commitId, name: versionTags.name })
+            .from(versionTags)
+            .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
+            .all(),
+        ),
+      );
+      for (const row of pages.flat()) result.get(row.commitId)?.push(row.name);
       for (const names of result.values()) names.sort(compareStrings);
       return result;
     },
 
-    listForDeck(deckId) {
-      return ctx.db
+    async listForDeck(deckId) {
+      const rows = await ctx.db
         .select({ name: versionTags.name, count: count() })
         .from(versionTags)
         .innerJoin(commits, eq(commits.id, versionTags.commitId))
         .where(and(eq(commits.deckId, deckId), inWorkspace(ctx, commits.deckId)))
         .groupBy(versionTags.name)
-        .all()
-        .sort((a, b) => compareStrings(a.name, b.name));
+        .all();
+      return rows.sort((a, b) => compareStrings(a.name, b.name));
     },
 
-    commitsWithTag(deckId, tag) {
+    async commitsWithTag(deckId, tag) {
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) return [];
-      return ctx.db
+      const rows = await ctx.db
         .select(getTableColumns(commits))
         .from(commits)
         .innerJoin(versionTags, eq(versionTags.commitId, commits.id))
@@ -165,8 +166,8 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
           ),
         )
         .orderBy(desc(commits.sequence))
-        .all()
-        .map(toCommitRecord);
+        .all();
+      return rows.map(toCommitRecord);
     },
   };
 }

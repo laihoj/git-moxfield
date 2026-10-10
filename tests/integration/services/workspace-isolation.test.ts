@@ -30,7 +30,7 @@ async function expectNotFound(promise: Promise<unknown>): Promise<void> {
 
 /** Alice tracks Blue Farm with one version (tagged, with a note) and uncommitted changes. */
 async function aliceWithHistory(harness: ServiceHarness): Promise<{ alice: HarnessUser; deckId: string }> {
-  const alice = harness.createUser('Alice');
+  const alice = await harness.createUser('Alice');
   harness.api.setDeck(blueFarmSpec());
   const tracked = await alice.services.trackDeck(BLUE_FARM_URL);
   if (!tracked.ok) throw new Error(tracked.reason);
@@ -60,9 +60,9 @@ async function publishAndRefreshFor(harness: ServiceHarness, services: DeckServi
 
 describe('deck services: workspace isolation', () => {
   it('treats another workspace’s deck as nonexistent in every read', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { deckId } = await aliceWithHistory(harness);
-    const bob = harness.createUser('Bob').services;
+    const bob = (await harness.createUser('Bob')).services;
 
     expect(await bob.listDecks()).toEqual([]);
     expect(await bob.getOverview(deckId)).toBeNull();
@@ -78,9 +78,9 @@ describe('deck services: workspace isolation', () => {
   });
 
   it('refuses every write to another workspace’s deck and leaves it untouched', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { alice, deckId } = await aliceWithHistory(harness);
-    const bob = harness.createUser('Bob').services;
+    const bob = (await harness.createUser('Bob')).services;
     const before = defined(await alice.services.getOverview(deckId));
     const working = defined(before.working);
 
@@ -114,9 +114,9 @@ describe('deck services: workspace isolation', () => {
   });
 
   it('cannot commit another workspace’s reviewed observation on its own deck', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { alice, deckId } = await aliceWithHistory(harness);
-    const bob = harness.createUser('Bob');
+    const bob = await harness.createUser('Bob');
     const bobDeck = await bob.services.trackDeck(BLUE_FARM_URL);
     if (!bobDeck.ok) throw new Error(bobDeck.reason);
     const alicesObservation = defined(defined(await alice.services.getOverview(deckId)).working);
@@ -133,9 +133,9 @@ describe('deck services: workspace isolation', () => {
   });
 
   it('lets two users track and capture the same Moxfield deck independently', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { alice, deckId } = await aliceWithHistory(harness);
-    const bob = harness.createUser('Bob').services;
+    const bob = (await harness.createUser('Bob')).services;
     const envelope = buildCaptureEnvelope(editedBlueFarm());
 
     // Alice tracks it; for Bob it is untracked.
@@ -164,7 +164,7 @@ describe('deck services: workspace isolation', () => {
   });
 
   it('keeps the card facts a workspace captures to itself, so a crafted paste changes nobody else’s view', async () => {
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     const { alice, deckId } = await aliceWithHistory(harness);
     const solRingFacts = async () => {
       const version = defined(await alice.services.getVersion(deckId, 1));
@@ -184,7 +184,7 @@ describe('deck services: workspace isolation', () => {
     expect(before.search).toEqual(before.version);
 
     // Eve, in her own workspace, pastes a deck with a crafted Sol Ring, then untracks it.
-    const eve = harness.createUser('Eve').services;
+    const eve = (await harness.createUser('Eve')).services;
     const crafted = blueFarmSpec({
       publicId: 'EvilFarmTestDeck000001',
       name: 'Evil Farm',
@@ -215,10 +215,10 @@ describe('deck services: workspace isolation', () => {
     // Commit ids are content-addressed by Moxfield deck, snapshot, parent, time and
     // message, so this one collision is possible across users. It is reported like a
     // concurrent commit, and committing again (a new time) succeeds.
-    const harness = createServiceHarness();
+    const harness = await createServiceHarness();
     harness.api.setDeck(blueFarmSpec());
-    const alice = harness.createUser('Alice').services;
-    const bob = harness.createUser('Bob').services;
+    const alice = (await harness.createUser('Alice')).services;
+    const bob = (await harness.createUser('Bob')).services;
     const a = await alice.trackDeck(BLUE_FARM_URL);
     const b = await bob.trackDeck(BLUE_FARM_URL);
     if (!a.ok || !b.ok) throw new Error('not tracked');

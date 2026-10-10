@@ -30,7 +30,6 @@ import {
 
 import type { ShareLinkServices } from './contract';
 import { ServiceError } from './errors';
-import { settle } from './settle';
 import type { CreatedShareLinkDTO, ShareLinkDTO } from './types';
 
 export interface ShareLinkServicesDependencies {
@@ -70,63 +69,58 @@ interface BoundDependencies {
 class DefaultShareLinkServices implements ShareLinkServices {
   constructor(private readonly deps: BoundDependencies) {}
 
-  createShareLink(
+  async createShareLink(
     deckId: string,
     input: { label: string; includeNotes: boolean },
     appUrl: string,
   ): Promise<CreatedShareLinkDTO> {
-    return settle(() => {
-      const label = validateShareLinkLabel(input.label);
-      if (!label.ok) throw new ServiceError('invalid-input', label.message);
-      // Checked at runtime too: callers may pass a value straight from a form.
-      if (typeof input.includeNotes !== 'boolean') {
-        throw new ServiceError('invalid-input', 'Choose whether the link shows your notes.');
-      }
-      const token = generateToken('share');
-      // Built before anything is stored: an unusable app URL must not leave a link behind.
-      const url = shareUrl(appUrl, token);
-      const { repos, user, logger } = this.deps;
-      return repos.transaction((tx) => {
-        const session = tx.sessions.getActive(user.id, user.sessionId, this.at());
-        if (session === null) throw new ServiceError('forbidden', 'You were signed out. Sign in again.');
-        let record: ShareLinkRecord;
-        try {
-          record = tx.shareLinks.create({
-            deckId,
-            tokenHash: hashToken(token),
-            label: label.value,
-            includeNotes: input.includeNotes,
-            createdByUserId: user.id,
-            credentialId: session.credentialId,
-          });
-        } catch (error) {
-          if (isRepositoryError(error, 'not-found')) throw new ServiceError('not-found', DECK_NOT_FOUND);
-          throw error;
-        }
-        logger.info('Share link created', {
+    const label = validateShareLinkLabel(input.label);
+    if (!label.ok) throw new ServiceError('invalid-input', label.message);
+    // Checked at runtime too: callers may pass a value straight from a form.
+    if (typeof input.includeNotes !== 'boolean') {
+      throw new ServiceError('invalid-input', 'Choose whether the link shows your notes.');
+    }
+    const token = generateToken('share');
+    // Built before anything is stored: an unusable app URL must not leave a link behind.
+    const url = shareUrl(appUrl, token);
+    const { repos, user, logger } = this.deps;
+    const record = await repos.transaction(async (tx): Promise<ShareLinkRecord> => {
+      const session = await tx.sessions.getActive(user.id, user.sessionId, this.at());
+      if (session === null) throw new ServiceError('forbidden', 'You were signed out. Sign in again.');
+      try {
+        return await tx.shareLinks.create({
           deckId,
-          linkId: record.id,
-          userId: user.id,
-          includeNotes: record.includeNotes,
-          madeFromKeyId: record.credentialId,
+          tokenHash: hashToken(token),
+          label: label.value,
+          includeNotes: input.includeNotes,
+          createdByUserId: user.id,
+          credentialId: session.credentialId,
         });
-        return { link: toShareLinkDTO(record), url };
-      });
-    });
-  }
-
-  listShareLinks(deckId: string): Promise<ShareLinkDTO[]> {
-    return settle(() => this.deps.repos.shareLinks.listForDeck(deckId).map(toShareLinkDTO));
-  }
-
-  revokeShareLink(deckId: string, linkId: string): Promise<boolean> {
-    return settle(() => {
-      const revoked = this.deps.repos.shareLinks.revoke(deckId, linkId, this.at());
-      if (revoked) {
-        this.deps.logger.info('Share link revoked', { deckId, linkId, userId: this.deps.user.id });
+      } catch (error) {
+        if (isRepositoryError(error, 'not-found')) throw new ServiceError('not-found', DECK_NOT_FOUND);
+        throw error;
       }
-      return revoked;
     });
+    logger.info('Share link created', {
+      deckId,
+      linkId: record.id,
+      userId: user.id,
+      includeNotes: record.includeNotes,
+      madeFromKeyId: record.credentialId,
+    });
+    return { link: toShareLinkDTO(record), url };
+  }
+
+  async listShareLinks(deckId: string): Promise<ShareLinkDTO[]> {
+    return (await this.deps.repos.shareLinks.listForDeck(deckId)).map(toShareLinkDTO);
+  }
+
+  async revokeShareLink(deckId: string, linkId: string): Promise<boolean> {
+    const revoked = await this.deps.repos.shareLinks.revoke(deckId, linkId, this.at());
+    if (revoked) {
+      this.deps.logger.info('Share link revoked', { deckId, linkId, userId: this.deps.user.id });
+    }
+    return revoked;
   }
 
   private at(): string {

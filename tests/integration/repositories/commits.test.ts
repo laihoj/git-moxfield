@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { commitId } from '@/core/hash';
@@ -8,9 +8,11 @@ import type { CommitRecord, DeckRecord, Repositories } from '@/server/repositori
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   commitTestSnapshot,
+  commitTestSnapshots,
   countRows,
   createTestDeck,
   createTestRepositories,
+  expectDatabaseError,
   expectRepositoryError,
   testSourceMetadata,
 } from '@tests/support/db';
@@ -20,20 +22,20 @@ function version(n: number): CanonicalSnapshot {
 }
 
 /** A valid, not yet inserted commit record (first version of the deck unless overridden). */
-function draftCommit(
+async function draftCommit(
   repos: Repositories,
   deck: DeckRecord,
   overrides: Partial<Omit<CommitRecord, 'id'>> = {},
-): CommitRecord {
-  const branch = repos.branches.getMain(deck.id);
+): Promise<CommitRecord> {
+  const branch = await repos.branches.getMain(deck.id);
   if (!branch) throw new Error('main branch missing');
   const fields: Omit<CommitRecord, 'id'> = {
     deckId: deck.id,
     branchId: branch.id,
     sequence: 1,
     parentId: null,
-    snapshotHash: repos.snapshots.put(version(1)),
-    rawBlobHash: repos.rawBlobs.put({ mediaType: 'application/json', data: { raw: 1 } }),
+    snapshotHash: await repos.snapshots.put(version(1)),
+    rawBlobHash: await repos.rawBlobs.put({ mediaType: 'application/json', data: { raw: 1 } }),
     message: 'First version\n\nWith a body.',
     createdAt: '2026-05-01T10:00:00.000Z',
     ingestMethod: 'manual-paste',
@@ -55,201 +57,210 @@ function draftCommit(
 }
 
 describe('commits repository', () => {
-  it('inserts a commit and reads it back by id and by sequence', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const draft = draftCommit(repos, deck);
+  it('inserts a commit and reads it back by id and by sequence', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const draft = await draftCommit(repos, deck);
 
-    expect(repos.commits.insert(draft)).toEqual(draft);
+    expect(await repos.commits.insert(draft)).toEqual(draft);
 
-    expect(repos.commits.getById(draft.id)).toEqual(draft);
-    expect(repos.commits.getBySequence(deck.id, 1)).toEqual(draft);
-    expect(repos.commits.getBySequence(deck.id, 2)).toBeNull();
-    expect(repos.commits.getById('missing')).toBeNull();
+    expect(await repos.commits.getById(draft.id)).toEqual(draft);
+    expect(await repos.commits.getBySequence(deck.id, 1)).toEqual(draft);
+    expect(await repos.commits.getBySequence(deck.id, 2)).toBeNull();
+    expect(await repos.commits.getById('missing')).toBeNull();
   });
 
-  it('does not move the branch head on insert', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    repos.commits.insert(draftCommit(repos, deck));
-    expect(repos.commits.head(deck.id)).toBeNull();
+  it('does not move the branch head on insert', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    await repos.commits.insert(await draftCommit(repos, deck));
+    expect(await repos.commits.head(deck.id)).toBeNull();
   });
 
-  it('verifies that the id is the hash of the commit content', () => {
-    const { db, repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const draft = draftCommit(repos, deck);
+  it('verifies that the id is the hash of the commit content', async () => {
+    const { db, repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const draft = await draftCommit(repos, deck);
 
-    expectRepositoryError(() => repos.commits.insert({ ...draft, id: 'f'.repeat(64) }), 'invalid-input');
-    expectRepositoryError(() => repos.commits.insert({ ...draft, message: 'Tampered' }), 'invalid-input');
-    expectRepositoryError(() => repos.commits.insert({ ...draft, sourceVersion: 13 }), 'invalid-input');
+    await expectRepositoryError(
+      () => repos.commits.insert({ ...draft, id: 'f'.repeat(64) }),
+      'invalid-input',
+    );
+    await expectRepositoryError(
+      () => repos.commits.insert({ ...draft, message: 'Tampered' }),
+      'invalid-input',
+    );
+    await expectRepositoryError(() => repos.commits.insert({ ...draft, sourceVersion: 13 }), 'invalid-input');
     // Headers of the commit object must be single-line.
-    expectRepositoryError(
+    await expectRepositoryError(
       () => repos.commits.insert({ ...draft, createdAt: '2026-05-01\n10:00' }),
       'invalid-input',
     );
-    expect(countRows(db, 'commits')).toBe(0);
+    expect(await countRows(db, 'commits')).toBe(0);
   });
 
-  it('rejects duplicate ids and sequences', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const first = repos.commits.insert(draftCommit(repos, deck));
+  it('rejects duplicate ids and sequences', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const first = await repos.commits.insert(await draftCommit(repos, deck));
 
-    expectRepositoryError(() => repos.commits.insert(first), 'conflict');
+    await expectRepositoryError(() => repos.commits.insert(first), 'conflict');
     // Sequence and branch are not part of the content: same content, same id.
-    expectRepositoryError(() => repos.commits.insert(draftCommit(repos, deck, { sequence: 5 })), 'conflict');
-    expectRepositoryError(
-      () => repos.commits.insert(draftCommit(repos, deck, { message: 'Another root at v1' })),
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { sequence: 5 })),
+      'conflict',
+    );
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { message: 'Another root at v1' })),
       'conflict',
     );
   });
 
-  it('validates sequence, branch, parent and content references', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const other = createTestDeck(repos);
-    const v1 = repos.commits.insert(draftCommit(repos, deck));
-    const foreign = commitTestSnapshot(repos, other, version(1));
-    const otherBranch = repos.branches.getMain(other.id);
+  it('validates sequence, branch, parent and content references', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const other = await createTestDeck(repos);
+    const v1 = await repos.commits.insert(await draftCommit(repos, deck));
+    const foreign = await commitTestSnapshot(repos, other, version(1));
+    const otherBranch = await repos.branches.getMain(other.id);
     if (!otherBranch) throw new Error('main branch missing');
 
-    expectRepositoryError(
-      () => repos.commits.insert(draftCommit(repos, deck, { sequence: 0 })),
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { sequence: 0 })),
       'invalid-input',
     );
-    expectRepositoryError(
-      () => repos.commits.insert(draftCommit(repos, deck, { sequence: 1.5 })),
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { sequence: 1.5 })),
       'invalid-input',
     );
-    expectRepositoryError(
-      () =>
+    await expectRepositoryError(
+      async () =>
         repos.commits.insert(
-          draftCommit(repos, deck, { sequence: 2, parentId: v1.id, branchId: otherBranch.id }),
+          await draftCommit(repos, deck, { sequence: 2, parentId: v1.id, branchId: otherBranch.id }),
         ),
       'not-found',
     );
-    expectRepositoryError(
-      () => repos.commits.insert(draftCommit(repos, deck, { sequence: 2, parentId: foreign.id })),
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { sequence: 2, parentId: foreign.id })),
       'not-found',
     );
-    expectRepositoryError(
-      () => repos.commits.insert(draftCommit(repos, deck, { sequence: 2, parentId: 'missing' })),
+    await expectRepositoryError(
+      async () => repos.commits.insert(await draftCommit(repos, deck, { sequence: 2, parentId: 'missing' })),
       'not-found',
     );
-    expectRepositoryError(
-      () =>
+    await expectRepositoryError(
+      async () =>
         repos.commits.insert({
-          ...draftCommit(repos, deck, { sequence: 2, parentId: v1.id }),
+          ...(await draftCommit(repos, deck, { sequence: 2, parentId: v1.id })),
           deckId: 'missing',
         }),
       'not-found',
     );
-    expectRepositoryError(
-      () =>
+    await expectRepositoryError(
+      async () =>
         repos.commits.insert(
-          draftCommit(repos, deck, { sequence: 2, parentId: v1.id, snapshotHash: 'a'.repeat(64) }),
+          await draftCommit(repos, deck, { sequence: 2, parentId: v1.id, snapshotHash: 'a'.repeat(64) }),
         ),
       'not-found',
     );
-    expectRepositoryError(
-      () =>
+    await expectRepositoryError(
+      async () =>
         repos.commits.insert(
-          draftCommit(repos, deck, { sequence: 2, parentId: v1.id, rawBlobHash: 'b'.repeat(64) }),
+          await draftCommit(repos, deck, { sequence: 2, parentId: v1.id, rawBlobHash: 'b'.repeat(64) }),
         ),
       'not-found',
     );
-    expect(repos.commits.count(deck.id)).toBe(1);
+    expect(await repos.commits.count(deck.id)).toBe(1);
 
-    const v3 = repos.commits.insert(
-      draftCommit(repos, deck, { sequence: 3, parentId: v1.id, rawBlobHash: null }),
+    const v3 = await repos.commits.insert(
+      await draftCommit(repos, deck, { sequence: 3, parentId: v1.id, rawBlobHash: null }),
     );
-    expectRepositoryError(
-      () =>
+    await expectRepositoryError(
+      async () =>
         repos.commits.insert(
-          draftCommit(repos, deck, { sequence: 2, parentId: v3.id, message: 'Back in time' }),
+          await draftCommit(repos, deck, { sequence: 2, parentId: v3.id, message: 'Back in time' }),
         ),
       'invalid-input',
     );
   });
 
-  it('resolves HEAD through the deck head branch', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    expect(repos.commits.head(deck.id)).toBeNull();
-    commitTestSnapshot(repos, deck, version(1));
-    const v2 = commitTestSnapshot(repos, deck, version(2));
-    expect(repos.commits.head(deck.id)).toEqual(v2);
-    expect(repos.commits.head('missing')).toBeNull();
+  it('resolves HEAD through the deck head branch', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    expect(await repos.commits.head(deck.id)).toBeNull();
+    await commitTestSnapshot(repos, deck, version(1));
+    const v2 = await commitTestSnapshot(repos, deck, version(2));
+    expect(await repos.commits.head(deck.id)).toEqual(v2);
+    expect(await repos.commits.head('missing')).toBeNull();
   });
 
-  it('walks the lineage from HEAD or a given commit, oldest first', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const other = createTestDeck(repos);
-    const v1 = commitTestSnapshot(repos, deck, version(1));
-    const v2 = commitTestSnapshot(repos, deck, version(2));
-    const v3 = commitTestSnapshot(repos, deck, version(3));
+  it('walks the lineage from HEAD or a given commit, oldest first', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const other = await createTestDeck(repos);
+    const v1 = await commitTestSnapshot(repos, deck, version(1));
+    const v2 = await commitTestSnapshot(repos, deck, version(2));
+    const v3 = await commitTestSnapshot(repos, deck, version(3));
     // A version off the main line (an experiment): parent v1, HEAD stays at v3.
-    const side = commitTestSnapshot(repos, deck, version(4), { parentId: v1.id, moveHead: false });
-    commitTestSnapshot(repos, other, version(1));
+    const side = await commitTestSnapshot(repos, deck, version(4), { parentId: v1.id, moveHead: false });
+    await commitTestSnapshot(repos, other, version(1));
 
-    expect(repos.commits.lineage(deck.id).map((c) => c.sequence)).toEqual([1, 2, 3]);
-    expect(repos.commits.lineage(deck.id)).toEqual([v1, v2, v3]);
-    expect(repos.commits.lineage(deck.id, v2.id).map((c) => c.id)).toEqual([v1.id, v2.id]);
-    expect(repos.commits.lineage(deck.id, side.id).map((c) => c.id)).toEqual([v1.id, side.id]);
-    expect(repos.commits.lineage(deck.id, 'missing')).toEqual([]);
-    expect(repos.commits.lineage(other.id, v2.id)).toEqual([]);
-    expect(repos.commits.lineage(createTestDeck(repos).id)).toEqual([]);
+    expect((await repos.commits.lineage(deck.id)).map((c) => c.sequence)).toEqual([1, 2, 3]);
+    expect(await repos.commits.lineage(deck.id)).toEqual([v1, v2, v3]);
+    expect((await repos.commits.lineage(deck.id, v2.id)).map((c) => c.id)).toEqual([v1.id, v2.id]);
+    expect((await repos.commits.lineage(deck.id, side.id)).map((c) => c.id)).toEqual([v1.id, side.id]);
+    expect(await repos.commits.lineage(deck.id, 'missing')).toEqual([]);
+    expect(await repos.commits.lineage(other.id, v2.id)).toEqual([]);
+    expect(await repos.commits.lineage((await createTestDeck(repos)).id)).toEqual([]);
   });
 
-  it('lists, counts and finds the highest sequence per deck', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos);
-    const other = createTestDeck(repos);
-    expect(repos.commits.listForDeck(deck.id)).toEqual([]);
-    expect(repos.commits.count(deck.id)).toBe(0);
-    expect(repos.commits.maxSequence(deck.id)).toBeNull();
+  it('lists, counts and finds the highest sequence per deck', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const other = await createTestDeck(repos);
+    expect(await repos.commits.listForDeck(deck.id)).toEqual([]);
+    expect(await repos.commits.count(deck.id)).toBe(0);
+    expect(await repos.commits.maxSequence(deck.id)).toBeNull();
 
-    const versions = [1, 2, 3].map((n) => commitTestSnapshot(repos, deck, version(n)));
-    commitTestSnapshot(repos, other, version(1));
+    const versions = await commitTestSnapshots(repos, deck, [1, 2, 3].map(version));
+    await commitTestSnapshot(repos, other, version(1));
 
-    expect(repos.commits.listForDeck(deck.id)).toEqual([...versions].reverse());
-    expect(repos.commits.count(deck.id)).toBe(3);
-    expect(repos.commits.maxSequence(deck.id)).toBe(3);
-    expect(repos.commits.maxSequence(other.id)).toBe(1);
+    expect(await repos.commits.listForDeck(deck.id)).toEqual([...versions].reverse());
+    expect(await repos.commits.count(deck.id)).toBe(3);
+    expect(await repos.commits.maxSequence(deck.id)).toBe(3);
+    expect(await repos.commits.maxSequence(other.id)).toBe(1);
   });
 
   describe('findByIdPrefix', () => {
-    it('resolves unique prefixes case-insensitively within the deck', () => {
-      const { repos } = createTestRepositories();
-      const deck = createTestDeck(repos);
-      const other = createTestDeck(repos);
-      const v1 = commitTestSnapshot(repos, deck, version(1));
-      const foreign = commitTestSnapshot(repos, other, version(2));
+    it('resolves unique prefixes case-insensitively within the deck', async () => {
+      const { repos } = await createTestRepositories();
+      const deck = await createTestDeck(repos);
+      const other = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, version(1));
+      const foreign = await commitTestSnapshot(repos, other, version(2));
 
-      expect(repos.commits.findByIdPrefix(deck.id, v1.id)).toEqual(v1);
-      expect(repos.commits.findByIdPrefix(deck.id, v1.id.slice(0, 7))).toEqual(v1);
-      expect(repos.commits.findByIdPrefix(deck.id, ` ${v1.id.slice(0, 4).toUpperCase()} `)).toEqual(v1);
-      expect(repos.commits.findByIdPrefix(deck.id, foreign.id.slice(0, 12))).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, v1.id)).toEqual(v1);
+      expect(await repos.commits.findByIdPrefix(deck.id, v1.id.slice(0, 7))).toEqual(v1);
+      expect(await repos.commits.findByIdPrefix(deck.id, ` ${v1.id.slice(0, 4).toUpperCase()} `)).toEqual(v1);
+      expect(await repos.commits.findByIdPrefix(deck.id, foreign.id.slice(0, 12))).toBeNull();
     });
 
-    it('rejects prefixes that are too short or not hex', () => {
-      const { repos } = createTestRepositories();
-      const deck = createTestDeck(repos);
-      const v1 = commitTestSnapshot(repos, deck, version(1));
+    it('rejects prefixes that are too short or not hex', async () => {
+      const { repos } = await createTestRepositories();
+      const deck = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, version(1));
 
-      expect(repos.commits.findByIdPrefix(deck.id, v1.id.slice(0, 3))).toBeNull();
-      expect(repos.commits.findByIdPrefix(deck.id, '')).toBeNull();
-      expect(repos.commits.findByIdPrefix(deck.id, `${v1.id.slice(0, 6)}%`)).toBeNull();
-      expect(repos.commits.findByIdPrefix(deck.id, 'v1')).toBeNull();
-      expect(repos.commits.findByIdPrefix(deck.id, `${v1.id}0`)).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, v1.id.slice(0, 3))).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, '')).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, `${v1.id.slice(0, 6)}%`)).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, 'v1')).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, `${v1.id}0`)).toBeNull();
     });
 
-    it('returns null for ambiguous prefixes', () => {
-      const { repos } = createTestRepositories();
-      const deck = createTestDeck(repos);
-      const snapshotHash = repos.snapshots.put(version(1));
+    it('returns null for ambiguous prefixes', async () => {
+      const { repos } = await createTestRepositories();
+      const deck = await createTestDeck(repos);
+      const snapshotHash = await repos.snapshots.put(version(1));
       const createdAt = '2026-06-01T00:00:00.000Z';
       const idFor = (message: string): string =>
         commitId({
@@ -270,57 +281,63 @@ describe('commits repository', () => {
         if (earlier === undefined) seen.set(prefix, message);
         else pair = [earlier, message];
       }
-      const [a, b] = pair.map((message) =>
+      const commitRoot = (message: string) =>
         commitTestSnapshot(repos, deck, version(1), {
           message,
           createdAt,
           parentId: null,
           sourceVersion: null,
-        }),
-      );
-      if (!a || !b) throw new Error('commits missing');
+        });
+      const a = await commitRoot(pair[0]);
+      const b = await commitRoot(pair[1]);
       const shared = a.id.slice(0, 4);
       expect(b.id.startsWith(shared)).toBe(true);
 
-      expect(repos.commits.findByIdPrefix(deck.id, shared)).toBeNull();
+      expect(await repos.commits.findByIdPrefix(deck.id, shared)).toBeNull();
       const longer = (id: string): string => {
         let length = 5;
         while (a.id.slice(0, length) === b.id.slice(0, length)) length++;
         return id.slice(0, length);
       };
-      expect(repos.commits.findByIdPrefix(deck.id, longer(a.id))).toEqual(a);
-      expect(repos.commits.findByIdPrefix(deck.id, longer(b.id))).toEqual(b);
+      expect(await repos.commits.findByIdPrefix(deck.id, longer(a.id))).toEqual(a);
+      expect(await repos.commits.findByIdPrefix(deck.id, longer(b.id))).toEqual(b);
     });
   });
 
   describe('immutability', () => {
-    it('rejects updates of commits, even through raw SQL', () => {
-      const { db, repos } = createTestRepositories();
-      const deck = createTestDeck(repos);
-      const v1 = commitTestSnapshot(repos, deck, version(1));
+    it('rejects updates of commits, even through raw SQL', async () => {
+      const { db, repos } = await createTestRepositories();
+      const deck = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, version(1));
 
-      expect(() =>
-        db.$client.prepare("UPDATE commits SET message = 'rewritten' WHERE id = ?").run(v1.id),
-      ).toThrow(/commits are immutable/);
-      expect(() => db.update(commits).set({ sequence: 99 }).where(eq(commits.id, v1.id)).run()).toThrow(
+      await expectDatabaseError(
+        db.run(sql`UPDATE commits SET message = 'rewritten' WHERE id = ${v1.id}`),
+        'trigger',
         /commits are immutable/,
       );
-      expect(repos.commits.getById(v1.id)).toEqual(v1);
+      await expectDatabaseError(
+        db.update(commits).set({ sequence: 99 }).where(eq(commits.id, v1.id)),
+        'trigger',
+        /commits are immutable/,
+      );
+      expect(await repos.commits.getById(v1.id)).toEqual(v1);
     });
 
-    it('rejects deleting commits while their deck exists', () => {
-      const { db, repos } = createTestRepositories();
-      const deck = createTestDeck(repos);
-      const v1 = commitTestSnapshot(repos, deck, version(1));
+    it('rejects deleting commits while their deck exists', async () => {
+      const { db, repos } = await createTestRepositories();
+      const deck = await createTestDeck(repos);
+      const v1 = await commitTestSnapshot(repos, deck, version(1));
 
-      expect(() => db.$client.prepare('DELETE FROM commits WHERE id = ?').run(v1.id)).toThrow(
+      await expectDatabaseError(
+        db.run(sql`DELETE FROM commits WHERE id = ${v1.id}`),
+        'trigger',
         /delete the deck to remove its history/,
       );
-      expect(() => db.delete(commits).run()).toThrow(/commits are immutable/);
-      expect(repos.commits.getById(v1.id)).toEqual(v1);
+      await expectDatabaseError(db.delete(commits), 'trigger', /commits are immutable/);
+      expect(await repos.commits.getById(v1.id)).toEqual(v1);
 
-      expect(repos.decks.delete(deck.id)).toBe(true);
-      expect(countRows(db, 'commits')).toBe(0);
+      expect(await repos.decks.delete(deck.id)).toBe(true);
+      expect(await countRows(db, 'commits')).toBe(0);
     });
   });
 });

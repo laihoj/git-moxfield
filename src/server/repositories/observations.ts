@@ -10,7 +10,7 @@ import type { IngestMethod } from '@/integrations/deck-source';
 import { decks, observations } from '@/server/db/schema';
 
 import { decodeIngestMethod, decodeSourceMetadata, decodeWarnings, encodeJson } from './codec';
-import { inWorkspace, referencing, withTransaction, type RepositoryContext } from './context';
+import { inWorkspace, referencing, withTransaction, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 import { deleteUnreferencedRawBlobs } from './raw-blobs';
 import { deleteUnreferencedSnapshots } from './snapshots';
@@ -37,17 +37,17 @@ export interface ObservationRepository {
    * @returns the stored record with its generated id.
    * @throws {RepositoryError} `not-found` when the deck, snapshot or raw blob is unknown.
    */
-  insert(input: NewObservation): ObservationRecord;
-  getById(id: string): ObservationRecord | null;
+  insert(input: NewObservation): Promise<ObservationRecord>;
+  getById(id: string): Promise<ObservationRecord | null>;
   /** The deck's working state: latest `fetchedAt`, ties broken by insertion order. */
-  latestForDeck(deckId: string): ObservationRecord | null;
+  latestForDeck(deckId: string): Promise<ObservationRecord | null>;
   /**
    * Deletes the deck's observations except `keepIds`, then the snapshots and raw blobs
    * that no commit or remaining observation references any more (their card index rows
-   * cascade). Atomic; inside a transaction it joins it.
+   * cascade). Atomic: its own transaction, or a savepoint of the caller's.
    * @returns the number of observations deleted.
    */
-  pruneForDeck(deckId: string, keepIds: readonly string[]): number;
+  pruneForDeck(deckId: string, keepIds: readonly string[]): Promise<number>;
 }
 
 export function createObservationRepository(ctx: RepositoryContext): ObservationRepository {
@@ -55,8 +55,8 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
   const owned = () => inWorkspace(ctx, observations.deckId);
 
   return {
-    insert(input) {
-      const deck = ctx.db
+    async insert(input) {
+      const deck = await ctx.db
         .select({ id: decks.id })
         .from(decks)
         .where(and(eq(decks.id, input.deckId), eq(decks.workspaceId, ctx.workspaceId)))
@@ -75,12 +75,12 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
         sourceMetadataJson: encodeJson(record.sourceMetadata, 'Source metadata'),
         warningsJson: encodeJson(record.warnings, 'Ingest warnings'),
       };
-      referencing('Observation', () => ctx.db.insert(observations).values(values).run());
+      await referencing('Observation', () => write(ctx, (db) => db.insert(observations).values(values)));
       return record;
     },
 
-    getById(id) {
-      const row = ctx.db
+    async getById(id) {
+      const row = await ctx.db
         .select()
         .from(observations)
         .where(and(eq(observations.id, id), owned()))
@@ -88,8 +88,8 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
       return row ? toObservationRecord(row) : null;
     },
 
-    latestForDeck(deckId) {
-      const row = ctx.db
+    async latestForDeck(deckId) {
+      const row = await ctx.db
         .select()
         .from(observations)
         .where(and(eq(observations.deckId, deckId), owned()))
@@ -100,29 +100,29 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
     },
 
     pruneForDeck(deckId, keepIds) {
-      return withTransaction(ctx, (tx) => {
+      return withTransaction(ctx, async (tx) => {
         const { db } = tx;
         const superseded = and(
           eq(observations.deckId, deckId),
           inWorkspace(tx, observations.deckId),
           keepIds.length === 0 ? undefined : notInArray(observations.id, [...keepIds]),
         );
-        const references = db
+        const references = await db
           .select({ snapshotHash: observations.snapshotHash, rawBlobHash: observations.rawBlobHash })
           .from(observations)
           .where(superseded)
           .all();
         if (references.length === 0) return 0;
-        const deleted = db.delete(observations).where(superseded).run().changes;
-        deleteUnreferencedSnapshots(
+        const deleted = await db.delete(observations).where(superseded);
+        await deleteUnreferencedSnapshots(
           db,
           references.map((reference) => reference.snapshotHash),
         );
-        deleteUnreferencedRawBlobs(
+        await deleteUnreferencedRawBlobs(
           db,
           references.map((reference) => reference.rawBlobHash),
         );
-        return deleted;
+        return deleted.rowsAffected;
       });
     },
   };

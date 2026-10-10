@@ -23,7 +23,10 @@ export const metadata: Metadata = { title: 'Sign in', robots: { index: false, fo
  */
 export default async function LoginLinkPage({ params }: PageProps<'/signin/[token]'>) {
   const { token } = await params;
-  const [link, user] = await Promise.all([getAuthService().getLoginLink(token), getCurrentUser()]);
+  const [link, user] = await Promise.all([
+    getAuthService().then((auth) => auth.getLoginLink(token)),
+    getCurrentUser(),
+  ]);
 
   if (link.status !== 'valid') return <LinkProblem status={link.status} signedIn={user !== null} />;
 

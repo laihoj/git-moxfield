@@ -9,7 +9,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { commitNotes, commits } from '@/server/db/schema';
 
 import { decodeJson, encodeJson } from './codec';
-import { inWorkspace, referencing, type RepositoryContext } from './context';
+import { inWorkspace, referencing, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 export interface CommitNoteRecord {
@@ -32,12 +32,12 @@ export interface CommitNoteRepository {
    * @throws {RepositoryError} `invalid-input` for an invalid kind or non-JSON data;
    * `not-found` for an unknown commit.
    */
-  upsert(commitId: string, kind: string, data: unknown): CommitNoteRecord;
-  get(commitId: string, kind: string): CommitNoteRecord | null;
+  upsert(commitId: string, kind: string, data: unknown): Promise<CommitNoteRecord>;
+  get(commitId: string, kind: string): Promise<CommitNoteRecord | null>;
   /** All notes of a version, sorted by kind. */
-  listForCommit(commitId: string): CommitNoteRecord[];
+  listForCommit(commitId: string): Promise<CommitNoteRecord[]>;
   /** Returns whether a note was deleted. */
-  delete(commitId: string, kind: string): boolean;
+  delete(commitId: string, kind: string): Promise<boolean>;
 }
 
 export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRepository {
@@ -49,11 +49,11 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
     );
 
   return {
-    upsert(commitId, kind, data) {
+    async upsert(commitId, kind, data) {
       if (!NOTE_KIND.test(kind)) {
         throw new RepositoryError('invalid-input', `Invalid note kind ${JSON.stringify(kind)}`);
       }
-      const commit = ctx.db
+      const commit = await ctx.db
         .select({ id: commits.id })
         .from(commits)
         .where(and(eq(commits.id, commitId), inWorkspace(ctx, commits.deckId)))
@@ -61,22 +61,25 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
       if (!commit) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
       const dataJson = encodeJson(data, 'Note data');
       const now = ctx.now();
-      const row = referencing(`Note ${kind}`, () =>
-        ctx.db
-          .insert(commitNotes)
-          .values({ id: ctx.newId(), commitId, kind, dataJson, createdAt: now, updatedAt: now })
-          .onConflictDoUpdate({
-            target: [commitNotes.commitId, commitNotes.kind],
-            set: { dataJson, updatedAt: now },
-          })
-          .returning()
-          .get(),
+      const id = ctx.newId();
+      const row = await referencing(`Note ${kind}`, () =>
+        write(ctx, (db) =>
+          db
+            .insert(commitNotes)
+            .values({ id, commitId, kind, dataJson, createdAt: now, updatedAt: now })
+            .onConflictDoUpdate({
+              target: [commitNotes.commitId, commitNotes.kind],
+              set: { dataJson, updatedAt: now },
+            })
+            .returning()
+            .get(),
+        ),
       );
       return toNoteRecord(row);
     },
 
-    get(commitId, kind) {
-      const row = ctx.db
+    async get(commitId, kind) {
+      const row = await ctx.db
         .select()
         .from(commitNotes)
         .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind), owned()))
@@ -84,22 +87,23 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
       return row ? toNoteRecord(row) : null;
     },
 
-    listForCommit(commitId) {
-      return ctx.db
+    async listForCommit(commitId) {
+      const rows = await ctx.db
         .select()
         .from(commitNotes)
         .where(and(eq(commitNotes.commitId, commitId), owned()))
         .orderBy(asc(commitNotes.kind))
-        .all()
-        .map(toNoteRecord);
+        .all();
+      return rows.map(toNoteRecord);
     },
 
-    delete(commitId, kind) {
-      const result = ctx.db
-        .delete(commitNotes)
-        .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind), owned()))
-        .run();
-      return result.changes > 0;
+    async delete(commitId, kind) {
+      const result = await write(ctx, (db) =>
+        db
+          .delete(commitNotes)
+          .where(and(eq(commitNotes.commitId, commitId), eq(commitNotes.kind, kind), owned())),
+      );
+      return result.rowsAffected > 0;
     },
   };
 }

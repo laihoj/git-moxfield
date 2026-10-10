@@ -14,7 +14,14 @@ import { and, desc, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from
 
 import { credentials, loginLinks, users } from '@/server/db/schema';
 
-import { referencing, withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import {
+  isUniqueViolation,
+  referencing,
+  withTransaction,
+  write,
+  type LibsqlExecutor,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 import type { UserRecord } from './users';
 
@@ -65,38 +72,38 @@ export interface LoginLinkRepository {
    * @throws {RepositoryError} `not-found` for an unknown user; `conflict` when the token
    * hash is already stored.
    */
-  create(input: NewLoginLink): LoginLinkRecord;
+  create(input: NewLoginLink): Promise<LoginLinkRecord>;
   /** The link with this token hash in any state (used, expired, revoked), or `null`. */
-  getByTokenHash(tokenHash: string): LoginLinkRecord | null;
+  getByTokenHash(tokenHash: string): Promise<LoginLinkRecord | null>;
   /**
    * Uses up a link: marks it used when it is unused, not revoked, has not expired at
    * `now`, its user is not disabled, the key it descends from (if any) is not revoked,
    * and, for a recovery link made by an admin, that admin is still an active admin. The
-   * check and the update are one conditional `UPDATE`, so of concurrent consumers (other
-   * requests, other processes) exactly one succeeds.
+   * check and the update are one conditional `UPDATE` in an `IMMEDIATE` transaction, so of
+   * concurrent consumers (other requests, other processes) exactly one succeeds.
    * @returns the link and its user, or `null` when the link cannot be used.
    */
-  consume(tokenHash: string, now: string): { link: LoginLinkRecord; user: UserRecord } | null;
+  consume(tokenHash: string, now: string): Promise<{ link: LoginLinkRecord; user: UserRecord } | null>;
   /**
    * Whether the link's creator, if it is a recovery link made by an admin, is still an
    * active admin (as {@link consume} requires). `true` for every other link.
    */
-  hasActiveCreator(link: LoginLinkRecord): boolean;
+  hasActiveCreator(link: LoginLinkRecord): Promise<boolean>;
   /**
    * Withdraws one link that is unused, not revoked and not expired at `at` (and, with
    * `purpose`, has that purpose). @returns whether one was withdrawn.
    */
-  revoke(id: string, at: string, options?: { purpose?: LoginLinkPurpose }): boolean;
+  revoke(id: string, at: string, options?: { purpose?: LoginLinkPurpose }): Promise<boolean>;
   /**
    * Withdraws every link matching `filter` that is unused, not revoked and not expired
    * at `at`. @returns how many were withdrawn.
    * @throws {RepositoryError} `invalid-input` when `filter` names no user or key.
    */
-  revokeUnused(filter: UnusedLinkFilter, at: string): number;
+  revokeUnused(filter: UnusedLinkFilter, at: string): Promise<number>;
   /** Links of `purpose` that are unused, not revoked and not expired at `now`, newest first. */
-  listPending(purpose: LoginLinkPurpose, now: string): LoginLinkRecord[];
+  listPending(purpose: LoginLinkPurpose, now: string): Promise<LoginLinkRecord[]>;
   /** The user's used links of `purpose`, most recently used first. */
-  listUsedForUser(userId: string, purpose: LoginLinkPurpose): LoginLinkRecord[];
+  listUsedForUser(userId: string, purpose: LoginLinkPurpose): Promise<LoginLinkRecord[]>;
 }
 
 const recordColumns = {
@@ -112,7 +119,7 @@ const recordColumns = {
 };
 
 /** `id IN (active admins)`: admins who are not disabled. */
-function activeAdminIds(db: DbExecutor) {
+function activeAdminIds(db: LibsqlExecutor) {
   return db
     .select({ id: users.id })
     .from(users)
@@ -125,42 +132,55 @@ function isPending(now: string): SQL | undefined {
 }
 
 export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepository {
+  const duplicate = (cause?: unknown): RepositoryError =>
+    new RepositoryError(
+      'conflict',
+      'A login link with this token already exists',
+      cause === undefined ? undefined : { cause },
+    );
+
   return {
-    create(input) {
-      const taken = ctx.db
+    async create(input) {
+      const taken = await ctx.db
         .select({ id: loginLinks.id })
         .from(loginLinks)
         .where(eq(loginLinks.tokenHash, input.tokenHash))
         .get();
-      if (taken) throw new RepositoryError('conflict', 'A login link with this token already exists');
-      return referencing(`Login link of user ${input.userId}`, () =>
-        ctx.db
-          .insert(loginLinks)
-          .values({
-            id: ctx.newId(),
-            tokenHash: input.tokenHash,
-            userId: input.userId,
-            purpose: input.purpose,
-            createdByUserId: input.createdByUserId,
-            credentialId: input.credentialId ?? null,
-            createdAt: ctx.now(),
-            expiresAt: input.expiresAt,
-          })
-          .returning(recordColumns)
-          .get(),
-      );
+      if (taken) throw duplicate();
+      const values = {
+        id: ctx.newId(),
+        tokenHash: input.tokenHash,
+        userId: input.userId,
+        purpose: input.purpose,
+        createdByUserId: input.createdByUserId,
+        credentialId: input.credentialId ?? null,
+        createdAt: ctx.now(),
+        expiresAt: input.expiresAt,
+      };
+      try {
+        return await referencing(`Login link of user ${input.userId}`, () =>
+          write(ctx, (db) => db.insert(loginLinks).values(values).returning(recordColumns).get()),
+        );
+      } catch (error) {
+        // The same token hash stored since the check above.
+        if (isUniqueViolation(error)) throw duplicate(error);
+        throw error;
+      }
     },
 
-    getByTokenHash(tokenHash) {
-      return (
-        ctx.db.select(recordColumns).from(loginLinks).where(eq(loginLinks.tokenHash, tokenHash)).get() ?? null
-      );
+    async getByTokenHash(tokenHash) {
+      const row = await ctx.db
+        .select(recordColumns)
+        .from(loginLinks)
+        .where(eq(loginLinks.tokenHash, tokenHash))
+        .get();
+      return row ?? null;
     },
 
     consume(tokenHash, now) {
-      return withTransaction(ctx, ({ db }) => {
+      return withTransaction(ctx, async ({ db }) => {
         // `undefined` when no row matched (Drizzle's type omits that case).
-        const link = db
+        const link = (await db
           .update(loginLinks)
           .set({ usedAt: now })
           .where(
@@ -187,17 +207,17 @@ export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepo
             ),
           )
           .returning(recordColumns)
-          .get() as LoginLinkRecord | undefined;
+          .get()) as LoginLinkRecord | undefined;
         if (!link) return null;
-        const user = db.select().from(users).where(eq(users.id, link.userId)).get();
+        const user = await db.select().from(users).where(eq(users.id, link.userId)).get();
         if (!user) throw new RepositoryError('corrupt-data', `Login link ${link.id} has no user`);
         return { link, user };
       });
     },
 
-    hasActiveCreator(link) {
+    async hasActiveCreator(link) {
       if (link.purpose !== 'recovery' || link.createdByUserId === null) return true;
-      const creator = ctx.db
+      const creator = await ctx.db
         .select({ id: users.id })
         .from(users)
         .where(and(eq(users.id, link.createdByUserId), eq(users.role, 'admin'), isNull(users.disabledAt)))
@@ -205,22 +225,23 @@ export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepo
       return creator !== undefined;
     },
 
-    revoke(id, at, options = {}) {
-      const result = ctx.db
-        .update(loginLinks)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            eq(loginLinks.id, id),
-            isPending(at),
-            options.purpose === undefined ? undefined : eq(loginLinks.purpose, options.purpose),
+    async revoke(id, at, options = {}) {
+      const result = await write(ctx, (db) =>
+        db
+          .update(loginLinks)
+          .set({ revokedAt: at })
+          .where(
+            and(
+              eq(loginLinks.id, id),
+              isPending(at),
+              options.purpose === undefined ? undefined : eq(loginLinks.purpose, options.purpose),
+            ),
           ),
-        )
-        .run();
-      return result.changes > 0;
+      );
+      return result.rowsAffected > 0;
     },
 
-    revokeUnused(filter, at) {
+    async revokeUnused(filter, at) {
       if (
         filter.userId === undefined &&
         filter.createdByUserId === undefined &&
@@ -228,22 +249,25 @@ export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepo
       ) {
         throw new RepositoryError('invalid-input', 'Name the user or key whose links to revoke');
       }
-      const result = ctx.db
-        .update(loginLinks)
-        .set({ revokedAt: at })
-        .where(
-          and(
-            isPending(at),
-            filter.userId === undefined ? undefined : eq(loginLinks.userId, filter.userId),
-            filter.createdByUserId === undefined
-              ? undefined
-              : eq(loginLinks.createdByUserId, filter.createdByUserId),
-            filter.credentialId === undefined ? undefined : eq(loginLinks.credentialId, filter.credentialId),
-            filter.purpose === undefined ? undefined : eq(loginLinks.purpose, filter.purpose),
+      const result = await write(ctx, (db) =>
+        db
+          .update(loginLinks)
+          .set({ revokedAt: at })
+          .where(
+            and(
+              isPending(at),
+              filter.userId === undefined ? undefined : eq(loginLinks.userId, filter.userId),
+              filter.createdByUserId === undefined
+                ? undefined
+                : eq(loginLinks.createdByUserId, filter.createdByUserId),
+              filter.credentialId === undefined
+                ? undefined
+                : eq(loginLinks.credentialId, filter.credentialId),
+              filter.purpose === undefined ? undefined : eq(loginLinks.purpose, filter.purpose),
+            ),
           ),
-        )
-        .run();
-      return result.changes;
+      );
+      return result.rowsAffected;
     },
 
     listPending(purpose, now) {

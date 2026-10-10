@@ -40,10 +40,13 @@ function git(dir: string, ...args: string[]): string {
   return result.stdout;
 }
 
-function expectExportError(fn: () => unknown, code: GitExportErrorCode): GitExportError {
+async function expectExportError(
+  operation: Promise<unknown>,
+  code: GitExportErrorCode,
+): Promise<GitExportError> {
   let caught: unknown;
   try {
-    fn();
+    await operation;
   } catch (error) {
     caught = error;
   }
@@ -84,35 +87,35 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
   let deck: DeckRecord;
   let commits: CommitRecord[];
 
-  function commitVersion(
+  async function commitVersion(
     snapshot: CanonicalSnapshot,
     message: string,
     createdAt: string,
     sourceVersion: number | null,
   ) {
-    const commit = commitTestSnapshot(repos, deck, snapshot, { message, createdAt, sourceVersion });
+    const commit = await commitTestSnapshot(repos, deck, snapshot, { message, createdAt, sourceVersion });
     commits.push(commit);
     return commit;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     workDir = mkdtempSync(join(tmpdir(), 'git-moxfield-export-'));
-    ({ repos } = createTestRepositories());
-    deck = createTestDeck(repos, { externalId: 'ExportDeck000000000001', name: 'Blue Farm' });
+    ({ repos } = await createTestRepositories());
+    deck = await createTestDeck(repos, { externalId: 'ExportDeck000000000001', name: 'Blue Farm' });
     commits = [];
-    commitVersion(V1, 'Initial list', '2026-03-01T10:00:00.250Z', 100);
-    commitVersion(
+    await commitVersion(V1, 'Initial list', '2026-03-01T10:00:00.250Z', 100);
+    await commitVersion(
       V2,
       'Test Mnemonic Betrayal\n\nDress Down to Considering.\r\n# not a comment',
       '2026-03-05T18:30:00.000Z',
       104,
     );
     // Same snapshot again (only the message differs): still one commit per version.
-    commitVersion(V2, 'Tournament list', '2026-03-07T09:00:00.000Z', null);
-    commitVersion(V4, '', '2026-04-01T12:00:00.000Z', 110);
-    repos.tags.add(commits[2]?.id ?? '', 'tournament');
-    repos.tags.add(commits[2]?.id ?? '', 'pre ban');
-    repos.tags.add(commits[3]?.id ?? '', 'v1');
+    await commitVersion(V2, 'Tournament list', '2026-03-07T09:00:00.000Z', null);
+    await commitVersion(V4, '', '2026-04-01T12:00:00.000Z', 110);
+    await repos.tags.add(commits[2]?.id ?? '', 'tournament');
+    await repos.tags.add(commits[2]?.id ?? '', 'pre ban');
+    await repos.tags.add(commits[3]?.id ?? '', 'v1');
   });
 
   afterEach(() => {
@@ -120,9 +123,9 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('replays the main lineage oldest to newest with messages, trailers, identity and dates', () => {
+  it('replays the main lineage oldest to newest with messages, trailers, identity and dates', async () => {
     const outDir = join(workDir, 'repo');
-    const result = exportDeckToGit({
+    const result = await exportDeckToGit({
       repos,
       deckId: deck.id,
       outDir,
@@ -171,9 +174,9 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     ).toBe('v2');
   });
 
-  it('commits exactly the snapshot file tree of every version and deletes files that disappear', () => {
+  it('commits exactly the snapshot file tree of every version and deletes files that disappear', async () => {
     const outDir = join(workDir, 'repo');
-    exportDeckToGit({ repos, deckId: deck.id, outDir });
+    await exportDeckToGit({ repos, deckId: deck.id, outDir });
 
     for (const [tag, snapshot] of [
       ['v1', V1],
@@ -202,12 +205,15 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     );
   });
 
-  it('keeps the last captured primer.md through versions whose primer was not captured', () => {
-    const lineDeck = createTestDeck(repos, { externalId: 'PrimerGapDeck000000001', name: 'Primer gap' });
+  it('keeps the last captured primer.md through versions whose primer was not captured', async () => {
+    const lineDeck = await createTestDeck(repos, {
+      externalId: 'PrimerGapDeck000000001',
+      name: 'Primer gap',
+    });
     const primerA = '# Plan\n\nWin with the Oracle.\n';
     const primerB = '# Plan\n\nWin with the Oracle.\n\n## Mulligans\n\nKeep fast mana.\n';
     const at = (day: number): string => `2026-05-0${day}T12:00:00.000Z`;
-    commitTestSnapshot(
+    await commitTestSnapshot(
       repos,
       lineDeck,
       { ...V1, primer: primerA },
@@ -217,7 +223,7 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
       },
     );
     // The primer request failed while a card moved: v2's primer is unknown, not deleted.
-    commitTestSnapshot(
+    await commitTestSnapshot(
       repos,
       lineDeck,
       { ...V2, primer: null },
@@ -226,7 +232,7 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
         createdAt: at(2),
       },
     );
-    commitTestSnapshot(
+    await commitTestSnapshot(
       repos,
       lineDeck,
       { ...V2, primer: primerB },
@@ -236,7 +242,7 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
       },
     );
     const outDir = join(workDir, 'primer-gap');
-    exportDeckToGit({ repos, deckId: lineDeck.id, outDir });
+    await exportDeckToGit({ repos, deckId: lineDeck.id, outDir });
 
     expect(git(outDir, 'log', '--reverse', '--format=%s', '--name-status', '--', 'primer.md')).toBe(
       'With primer\n\nA\tprimer.md\nPrimer edited\n\nM\tprimer.md\n',
@@ -247,9 +253,12 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     expect(git(outDir, 'diff', '--numstat', 'v2', 'v3', '--', 'primer.md')).toBe('4\t0\tprimer.md\n');
   });
 
-  it('writes no primer.md for leading versions whose primer was never captured', () => {
-    const lineDeck = createTestDeck(repos, { externalId: 'NoPrimerYetDeck0000001', name: 'No primer yet' });
-    commitTestSnapshot(
+  it('writes no primer.md for leading versions whose primer was never captured', async () => {
+    const lineDeck = await createTestDeck(repos, {
+      externalId: 'NoPrimerYetDeck0000001',
+      name: 'No primer yet',
+    });
+    await commitTestSnapshot(
       repos,
       lineDeck,
       { ...V1, primer: null },
@@ -259,15 +268,15 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
       },
     );
     const outDir = join(workDir, 'no-primer-yet');
-    exportDeckToGit({ repos, deckId: lineDeck.id, outDir });
+    await exportDeckToGit({ repos, deckId: lineDeck.id, outDir });
 
     expect(git(outDir, 'ls-tree', '--name-only', 'v1')).not.toContain('primer.md');
     expect(git(outDir, 'show', 'v1:deck.yaml')).toContain('\nprimer: unavailable\n');
   });
 
-  it('tags every version and every version tag with a valid ref name', () => {
+  it('tags every version and every version tag with a valid ref name', async () => {
     const outDir = join(workDir, 'repo');
-    const result = exportDeckToGit({ repos, deckId: deck.id, outDir });
+    const result = await exportDeckToGit({ repos, deckId: deck.id, outDir });
 
     expect(result.versions.map((version) => version.tags)).toEqual([
       ['v1'],
@@ -284,12 +293,12 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it('exports version tags whose ref names collide under numbered names, with warnings', () => {
+  it('exports version tags whose ref names collide under numbered names, with warnings', async () => {
     const v2 = commits[1]?.id ?? '';
     for (const tag of ['pre ban', 'pre-ban', 'stable', 'stable.', 'a..b', 'a.b', 'a.b-2'])
-      repos.tags.add(v2, tag);
+      await repos.tags.add(v2, tag);
     const outDir = join(workDir, 'repo');
-    const result = exportDeckToGit({ repos, deckId: deck.id, outDir });
+    const result = await exportDeckToGit({ repos, deckId: deck.id, outDir });
 
     // Tags that are valid ref names as they are keep their names; the others are numbered.
     expect(result.versions[1]?.tags).toEqual([
@@ -314,9 +323,9 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     expect(result.versions[2]?.tags).toEqual(['v3', 'pre-ban/v3', 'tournament/v3']);
   });
 
-  it('records which deck a repository is an export of and refuses to export into it again', () => {
+  it('records which deck a repository is an export of and refuses to export into it again', async () => {
     const outDir = join(workDir, 'repo');
-    exportDeckToGit({ repos, deckId: deck.id, outDir, now: () => new Date('2026-10-09T00:00:00Z') });
+    await exportDeckToGit({ repos, deckId: deck.id, outDir, now: () => new Date('2026-10-09T00:00:00Z') });
     expect(git(outDir, 'config', '--get', 'gitMoxfield.deck').trim()).toBe('moxfield:ExportDeck000000000001');
     expect(git(outDir, 'config', '--get', 'gitMoxfield.exportedAt').trim()).toBe('2026-10-09T00:00:00.000Z');
     expect(readFileSync(join(outDir, '.git', 'description'), 'utf8')).toBe(
@@ -324,42 +333,42 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     );
 
     const head = git(outDir, 'rev-parse', 'HEAD');
-    const error = expectExportError(
-      () => exportDeckToGit({ repos, deckId: deck.id, outDir }),
+    const error = await expectExportError(
+      exportDeckToGit({ repos, deckId: deck.id, outDir }),
       'already-exported',
     );
     expect(error.message).toContain('fresh directory');
     expect(git(outDir, 'rev-parse', 'HEAD')).toBe(head);
   });
 
-  it('exports into an existing empty directory but refuses other non-empty directories untouched', () => {
+  it('exports into an existing empty directory but refuses other non-empty directories untouched', async () => {
     const empty = join(workDir, 'empty');
     mkdirSync(empty);
-    expect(exportDeckToGit({ repos, deckId: deck.id, outDir: empty }).versions).toHaveLength(4);
+    expect((await exportDeckToGit({ repos, deckId: deck.id, outDir: empty })).versions).toHaveLength(4);
 
     const occupied = join(workDir, 'occupied');
     mkdirSync(occupied);
     writeFileSync(join(occupied, 'notes.txt'), 'mine');
-    expectExportError(
-      () => exportDeckToGit({ repos, deckId: deck.id, outDir: occupied }),
+    await expectExportError(
+      exportDeckToGit({ repos, deckId: deck.id, outDir: occupied }),
       'target-not-empty',
     );
     expect(readdirSync(occupied)).toEqual(['notes.txt']);
 
     const file = join(workDir, 'file');
     writeFileSync(file, '');
-    expectExportError(() => exportDeckToGit({ repos, deckId: deck.id, outDir: file }), 'invalid-target');
+    await expectExportError(exportDeckToGit({ repos, deckId: deck.id, outDir: file }), 'invalid-target');
   });
 
-  it('refuses unknown decks and decks without versions before writing anything', () => {
+  it('refuses unknown decks and decks without versions before writing anything', async () => {
     const outDir = join(workDir, 'repo');
-    expectExportError(() => exportDeckToGit({ repos, deckId: 'no-such-deck', outDir }), 'deck-not-found');
-    const fresh = createTestDeck(repos);
-    expectExportError(() => exportDeckToGit({ repos, deckId: fresh.id, outDir }), 'no-versions');
+    await expectExportError(exportDeckToGit({ repos, deckId: 'no-such-deck', outDir }), 'deck-not-found');
+    const fresh = await createTestDeck(repos);
+    await expectExportError(exportDeckToGit({ repos, deckId: fresh.id, outDir }), 'no-versions');
     expect(existsSync(outDir)).toBe(false);
   });
 
-  it('removes a partially written export when git fails', () => {
+  it('removes a partially written export when git fails', async () => {
     const outDir = join(workDir, 'repo');
     let commitsMade = 0;
     const failingGit: GitRunner = (args, options) => {
@@ -367,8 +376,8 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
         return { status: 128, stdout: '', stderr: 'fatal: disk full' };
       return spawnGit(args, options);
     };
-    const error = expectExportError(
-      () => exportDeckToGit({ repos, deckId: deck.id, outDir, git: failingGit }),
+    const error = await expectExportError(
+      exportDeckToGit({ repos, deckId: deck.id, outDir, git: failingGit }),
       'git-failed',
     );
     expect(error.message).toContain('fatal: disk full');
@@ -377,32 +386,32 @@ describe.skipIf(!gitAvailable)('exportDeckToGit', () => {
     const empty = join(workDir, 'empty');
     mkdirSync(empty);
     commitsMade = 0;
-    expectExportError(
-      () => exportDeckToGit({ repos, deckId: deck.id, outDir: empty, git: failingGit }),
+    await expectExportError(
+      exportDeckToGit({ repos, deckId: deck.id, outDir: empty, git: failingGit }),
       'git-failed',
     );
     expect(readdirSync(empty)).toEqual([]);
   });
 
-  it('reports a missing git executable without touching the target', () => {
+  it('reports a missing git executable without touching the target', async () => {
     const outDir = join(workDir, 'repo');
     const missingGit: GitRunner = () => {
       throw new GitExportError('git-unavailable', 'Could not run git: spawn git ENOENT');
     };
-    expectExportError(
-      () => exportDeckToGit({ repos, deckId: deck.id, outDir, git: missingGit }),
+    await expectExportError(
+      exportDeckToGit({ repos, deckId: deck.id, outDir, git: missingGit }),
       'git-unavailable',
     );
     expect(existsSync(outDir)).toBe(false);
   });
 
-  it('ignores GIT_* variables of the surrounding environment, such as those set inside git hooks', () => {
+  it('ignores GIT_* variables of the surrounding environment, such as those set inside git hooks', async () => {
     const decoy = join(workDir, 'decoy');
     vi.stubEnv('GIT_DIR', join(decoy, '.git'));
     vi.stubEnv('GIT_INDEX_FILE', join(decoy, 'index'));
     vi.stubEnv('GIT_AUTHOR_NAME', 'Someone Else');
     const outDir = join(workDir, 'repo');
-    exportDeckToGit({ repos, deckId: deck.id, outDir });
+    await exportDeckToGit({ repos, deckId: deck.id, outDir });
     vi.unstubAllEnvs();
 
     expect(existsSync(decoy)).toBe(false);
@@ -441,22 +450,24 @@ describe('git export helpers', () => {
     expect(labelTagName(tag, 2)).toBe(expected);
   });
 
-  it('finds decks by id, Moxfield id or URL', () => {
-    const { repos } = createTestRepositories();
-    const deck = createTestDeck(repos, { externalId: 'FindMe0000000000000001' });
-    expect(findDeckForExport(repos, deck.id)?.id).toBe(deck.id);
-    expect(findDeckForExport(repos, ' FindMe0000000000000001 ')?.id).toBe(deck.id);
-    expect(findDeckForExport(repos, 'https://moxfield.com/decks/FindMe0000000000000001/primer')?.id).toBe(
-      deck.id,
-    );
+  it('finds decks by id, Moxfield id or URL', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos, { externalId: 'FindMe0000000000000001' });
+    expect((await findDeckForExport(repos, deck.id))?.id).toBe(deck.id);
+    expect((await findDeckForExport(repos, ' FindMe0000000000000001 '))?.id).toBe(deck.id);
     expect(
-      findDeckForExport(repos, 'http://localhost:4010/decks/FindMe0000000000000001', {
-        siteOrigins: ['http://localhost:4010'],
-      })?.id,
+      (await findDeckForExport(repos, 'https://moxfield.com/decks/FindMe0000000000000001/primer'))?.id,
     ).toBe(deck.id);
-    expect(findDeckForExport(repos, 'https://example.com/decks/FindMe0000000000000001')).toBeNull();
-    expect(findDeckForExport(repos, 'Unknown000000000000001')).toBeNull();
-    expect(findDeckForExport(repos, '')).toBeNull();
+    expect(
+      (
+        await findDeckForExport(repos, 'http://localhost:4010/decks/FindMe0000000000000001', {
+          siteOrigins: ['http://localhost:4010'],
+        })
+      )?.id,
+    ).toBe(deck.id);
+    expect(await findDeckForExport(repos, 'https://example.com/decks/FindMe0000000000000001')).toBeNull();
+    expect(await findDeckForExport(repos, 'Unknown000000000000001')).toBeNull();
+    expect(await findDeckForExport(repos, '')).toBeNull();
   });
 
   it('derives the default export directory from the deck id', () => {

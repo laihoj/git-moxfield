@@ -9,15 +9,23 @@ import { stableStringify } from '@/core/canonical';
 import type { IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
 
+import { assertStorableSize } from './context';
 import { RepositoryError } from './errors';
 
-/** Serializes a JSON value deterministically. */
+/**
+ * Serializes a JSON value deterministically.
+ * @throws {RepositoryError} `invalid-input` when the value is not JSON-serializable or too
+ *   large to store (`MAX_STORED_VALUE_BYTES`).
+ */
 export function encodeJson(value: unknown, what: string): string {
+  let json: string;
   try {
-    return stableStringify(value);
+    json = stableStringify(value);
   } catch (cause) {
     throw new RepositoryError('invalid-input', `${what} is not JSON-serializable`, { cause });
   }
+  assertStorableSize(what, Buffer.byteLength(json, 'utf8'));
+  return json;
 }
 
 /** Parses a JSON column. */

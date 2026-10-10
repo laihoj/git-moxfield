@@ -84,8 +84,8 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:3000>. The SQLite database (`data/git-moxfield.db`) is created
-and migrated automatically on first request. The app listens on this computer only
+Open <http://localhost:3000>. The local SQLite database (`data/git-moxfield.db`, opened
+with libSQL) is created and migrated automatically on first request. The app listens on this computer only
 (`127.0.0.1`); to use it from your phone, see [Using it from another device](#using-it-from-another-device).
 
 Try it without touching Moxfield, using a seeded demo history:
@@ -199,9 +199,9 @@ src/
                   No I/O, no framework, no Moxfield.
   integrations/   DeckSource interface + Moxfield adapter (URL parsing, HTTP client,
                   lenient zod schemas, normalization, restore text, bookmarklet).
-  server/         Config, logging, SQLite (Drizzle) schema and migrations,
-                  repositories (all SQL), services (use cases), source registry,
-                  Git export.
+  server/         Config, logging, libSQL/SQLite (Drizzle) schema and migrations,
+                  repositories (all SQL), services (use cases), accounts, access
+                  layer, source registry, Git export.
   app/            Next.js App Router pages, server actions, capture route handlers.
   components/     UI kit and deck components.
 ```
@@ -215,9 +215,10 @@ src/
 - **Two representations:** a lean _canonical snapshot_ with only user-controlled
   state, for diffs and hashes, plus the _raw payload_, gzip-compressed and
   content-addressed, for losslessness.
-- **Storage:** SQLite with immutable, content-addressed snapshots and Git-like
-  commits, branches (only `main` today), tags and notes. A derived
-  `snapshot_cards` index powers card history and search.
+- **Storage:** SQLite (libSQL: a local file, or Turso when hosted; ADR 0008) with
+  immutable, content-addressed snapshots and Git-like commits, branches (only `main`
+  today), tags and notes. A derived `snapshot_cards` index powers card history and
+  search.
 
 Full design: [`docs/architecture.md`](docs/architecture.md). UX:
 [`docs/ux.md`](docs/ux.md).
@@ -250,17 +251,22 @@ Full design: [`docs/architecture.md`](docs/architecture.md). UX:
 | `pnpm dev:mock`                | Dev server wired to the mock Moxfield (`data/mock.db`)            |
 | `pnpm mock-moxfield`           | Mock Moxfield API, deck page and control API on :4010             |
 | `pnpm seed:demo`               | Seed a demo deck with 8 versions (`DATABASE_PATH` selects the DB) |
+| `pnpm users <command>`         | Invite, list and recover users; print the setup code              |
 | `pnpm build` / `pnpm start`    | Production build / server (this computer only)                    |
 | `pnpm start:lan`               | Production server reachable from your network                     |
-| `pnpm db:migrate`              | Apply migrations explicitly (also happens automatically on start) |
+| `pnpm db:migrate`              | Apply migrations (automatic for a local file; required for Turso) |
 | `pnpm db:generate`             | Generate a migration after editing `src/server/db/schema.ts`      |
 | `pnpm export:git <deck> [dir]` | Replay a deck's history into a new Git repository                 |
 | `pnpm check`                   | typecheck + lint + format check + unit/integration tests          |
 
-Database: SQLite file at `DATABASE_PATH` (default `data/git-moxfield.db`), WAL
-mode. Back it up by copying the file while the app is stopped. Migrations live in
-`drizzle/` and are committed. `0001_immutability_triggers.sql` is hand-written. The
-scripts (`db:migrate`, `export:git`, `seed:demo`) read `.env.local` and the other
+Database: libSQL (ADR 0008). Locally a SQLite file at `DATABASE_PATH` (default
+`data/git-moxfield.db`), WAL mode; back it up by copying the file while the app is
+stopped. When `TURSO_DATABASE_URL` is set (Turso, or a local libSQL server such as
+`turso dev`), the app uses that database instead and never migrates it itself: run
+`pnpm db:migrate` against it first (the hosted deploy does this after every build), and
+the app refuses a database that is not up to date. Migrations live in `drizzle/` and
+are committed. `0001_immutability_triggers.sql` is hand-written. The scripts
+(`db:migrate`, `users`, `export:git`, `seed:demo`) read `.env.local` and the other
 `.env*` files like the app does, so they use the same database.
 
 Schema changes that SQLite cannot `ALTER` (a column's type, default or nullability,
@@ -292,7 +298,10 @@ pnpm test
 ```
 
 Vitest unit and integration tests cover core, adapter, repositories and services,
-using an in-memory SQLite and a fake Moxfield API. They take a few seconds.
+using in-memory libSQL databases and a fake Moxfield API. They take a few seconds.
+`LIBSQL_TEST_URL=http://127.0.0.1:8080 pnpm test:remote` additionally runs the database
+layer against a throwaway libSQL server (it wipes that database; see
+`vitest.remote.config.ts`).
 
 ```bash
 pnpm test:e2e:install
@@ -348,18 +357,20 @@ What is covered:
 
 All optional. See [`.env.example`](.env.example).
 
-| Variable                           | Default                | Purpose                                                                |
-| ---------------------------------- | ---------------------- | ---------------------------------------------------------------------- |
-| `DATABASE_PATH`                    | `data/git-moxfield.db` | SQLite file                                                            |
-| `MOXFIELD_USER_AGENT`              | —                      | Moxfield-issued User-Agent for server-side access                      |
-| `MOXFIELD_SERVER_FETCH`            | `auto`                 | `off` = bookmarklet/paste only                                         |
-| `MOXFIELD_BLOCK_BACKOFF_SECONDS`   | `3600`                 | Pause after a Cloudflare block                                         |
-| `MOXFIELD_MIN_REQUEST_INTERVAL_MS` | `1000`                 | Spacing between Moxfield requests                                      |
-| `REFRESH_COOLDOWN_SECONDS`         | `10`                   | Minimum time between refreshes of one deck                             |
-| `AUTO_REFRESH_AFTER_SECONDS`       | `300`                  | Deck page refreshes in the background when older                       |
-| `PUBLIC_APP_URL`                   | request origin         | URL baked into bookmarklets (e.g. a LAN address for your phone)        |
-| `ALLOWED_HOSTS`                    | —                      | Other host names to answer to, e.g. `mybox.local` (see security notes) |
-| `CAPTURE_ALLOWED_ORIGINS`          | `https://moxfield.com` | Origins allowed to hand decks to `/capture`                            |
+| Variable                           | Default                   | Purpose                                                                |
+| ---------------------------------- | ------------------------- | ---------------------------------------------------------------------- |
+| `DATABASE_PATH`                    | `data/git-moxfield.db`    | Local SQLite file (unless `TURSO_DATABASE_URL` is set)                 |
+| `TURSO_DATABASE_URL`               | —                         | Remote libSQL database (`libsql://…turso.io`); migrate it first        |
+| `TURSO_AUTH_TOKEN`                 | —                         | Its auth token (secret)                                                |
+| `MOXFIELD_USER_AGENT`              | —                         | Moxfield-issued User-Agent for server-side access                      |
+| `MOXFIELD_SERVER_FETCH`            | `auto` (`off` on Netlify) | `off` = bookmarklet/paste only                                         |
+| `MOXFIELD_BLOCK_BACKOFF_SECONDS`   | `3600`                    | Pause after a Cloudflare block                                         |
+| `MOXFIELD_MIN_REQUEST_INTERVAL_MS` | `1000`                    | Spacing between Moxfield requests                                      |
+| `REFRESH_COOLDOWN_SECONDS`         | `10`                      | Minimum time between refreshes of one deck                             |
+| `AUTO_REFRESH_AFTER_SECONDS`       | `300`                     | Deck page refreshes in the background when older                       |
+| `PUBLIC_APP_URL`                   | request origin            | URL baked into bookmarklets (e.g. a LAN address for your phone)        |
+| `ALLOWED_HOSTS`                    | —                         | Other host names to answer to, e.g. `mybox.local` (see security notes) |
+| `CAPTURE_ALLOWED_ORIGINS`          | `https://moxfield.com`    | Origins allowed to hand decks to `/capture`                            |
 
 **Security notes.**
 

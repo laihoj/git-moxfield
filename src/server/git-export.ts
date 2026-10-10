@@ -260,19 +260,19 @@ export function defaultExportDirectory(deck: Pick<DeckRecord, 'externalId'>): st
  * id, a Moxfield public deck id, or a Moxfield deck URL on one of `siteOrigins`
  * (default: moxfield.com). Returns `null` when nothing matches.
  */
-export function findDeckForExport(
+export async function findDeckForExport(
   repos: Repositories,
   reference: string,
   options: { siteOrigins?: readonly string[] } = {},
-): DeckRecord | null {
+): Promise<DeckRecord | null> {
   const input = reference.trim();
   if (input === '') return null;
-  const byId = repos.decks.getById(input);
+  const byId = await repos.decks.getById(input);
   if (byId) return byId;
   for (const origin of options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]) {
     const parsed = parseMoxfieldDeckInput(input, origin);
     if (!parsed.ok) continue;
-    const deck = repos.decks.getBySourceExternal(parsed.ref.source, parsed.ref.externalId);
+    const deck = await repos.decks.getBySourceExternal(parsed.ref.source, parsed.ref.externalId);
     if (deck) return deck;
   }
   return null;
@@ -284,19 +284,19 @@ export function findDeckForExport(
  * workspace and owner. A git-moxfield deck id names one deck; a Moxfield deck id or URL
  * names every user's copy of that Moxfield deck.
  */
-export function locateDecksForExport(
+export async function locateDecksForExport(
   repos: Repositories,
   reference: string,
   options: { siteOrigins?: readonly string[] } = {},
-): DeckLocation[] {
+): Promise<DeckLocation[]> {
   const input = reference.trim();
   if (input === '') return [];
-  const byId = repos.workspaces.locateDeck(input);
+  const byId = await repos.workspaces.locateDeck(input);
   if (byId) return [byId];
   for (const origin of options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]) {
     const parsed = parseMoxfieldDeckInput(input, origin);
     if (!parsed.ok) continue;
-    const decks = repos.workspaces.locateDecksBySource(parsed.ref.source, parsed.ref.externalId);
+    const decks = await repos.workspaces.locateDecksBySource(parsed.ref.source, parsed.ref.externalId);
     if (decks.length > 0) return decks;
   }
   return [];
@@ -309,22 +309,27 @@ interface PlannedVersion {
 }
 
 /** Reads everything the export needs before anything is written. */
-function planExport(repos: Repositories, deckId: string): { deck: DeckRecord; versions: PlannedVersion[] } {
-  const deck = repos.decks.getById(deckId);
+async function planExport(
+  repos: Repositories,
+  deckId: string,
+): Promise<{ deck: DeckRecord; versions: PlannedVersion[] }> {
+  const [deck, main] = await Promise.all([repos.decks.getById(deckId), repos.branches.getMain(deckId)]);
   if (!deck) throw new GitExportError('deck-not-found', `No deck with id ${deckId}`);
-  const head = repos.branches.getMain(deck.id)?.headCommitId ?? null;
+  const head = main?.headCommitId ?? null;
   if (head === null) {
     throw new GitExportError('no-versions', `${deck.name} has no versions yet; commit one before exporting.`);
   }
-  const lineage = repos.commits.lineage(deck.id, head);
+  const lineage = await repos.commits.lineage(deck.id, head);
   if (lineage.length === 0) {
     throw new GitExportError(
       'corrupt-history',
       `The main branch of ${deck.name} points at an unknown version`,
     );
   }
-  const snapshots = repos.snapshots.getMany(lineage.map((commit) => commit.snapshotHash));
-  const labels = repos.tags.listForCommits(lineage.map((commit) => commit.id));
+  const [snapshots, labels] = await Promise.all([
+    repos.snapshots.getMany(lineage.map((commit) => commit.snapshotHash)),
+    repos.tags.listForCommits(lineage.map((commit) => commit.id)),
+  ]);
   // An uncaptured primer (null) is unknown, not deleted: keep the last captured primer.md.
   let knownPrimer = '';
   const versions = lineage.map((commit): PlannedVersion => {
@@ -530,15 +535,16 @@ function writeHistory(
 }
 
 /**
- * Replays the deck's main-branch history into a new Git repository at `outDir`.
+ * Replays the deck's main-branch history into a new Git repository at `outDir`. Reads
+ * the whole history first (the database is not used while git runs).
  *
  * @throws {GitExportError} when the deck does not exist or has no versions, when
  * `outDir` is not a new or empty directory (`already-exported` when it holds a previous
  * export of the same deck), or when git fails. A failed export removes what it wrote.
  */
-export function exportDeckToGit(options: ExportDeckToGitOptions): ExportResult {
+export async function exportDeckToGit(options: ExportDeckToGitOptions): Promise<ExportResult> {
   const runner = options.git ?? spawnGit;
-  const { deck, versions } = planExport(options.repos, options.deckId);
+  const { deck, versions } = await planExport(options.repos, options.deckId);
   const git = new GitRepository(runner, resolve(options.outDir));
 
   // Fail before touching the file system when git cannot run.

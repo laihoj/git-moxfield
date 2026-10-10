@@ -2,9 +2,19 @@
  * `POST /api/capture` (the popup bookmarklet's capture page and the paste form) against
  * the real auth and deck services on an in-memory database: a bookmarklet key signs the
  * browser in and decides the workspace; without one the session cookie does; neither is
- * a 401. Keys and tokens never reach the logs.
+ * a 401. Compressed payloads are decoded within hard limits, after authentication. Keys
+ * and tokens never reach the logs.
  */
+import { gzipSync } from 'node:zlib';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  CAPTURE_GZIP_TAG,
+  encodeCapturePayload,
+  MAX_DECODED_CAPTURE_BYTES,
+  MAX_PLAIN_CAPTURE_BYTES,
+} from '@/integrations/moxfield/capture-codec-protocol';
 
 import type * as AccessModule from '@/server/access';
 import type * as AuthModule from '@/server/auth';
@@ -12,6 +22,7 @@ import type { SessionUser, SignIn } from '@/server/auth/types';
 import type * as ConfigModule from '@/server/config';
 import type { AppConfig } from '@/server/config';
 import { keyOfBookmarklet, signUp } from '@tests/support/auth';
+import { gzipPayload } from '@tests/support/capture-codec';
 import { buildCaptureEnvelope } from '@tests/support/moxfield-deck-builder';
 import { appRequest, setCookies } from '@tests/support/routes';
 import { blueFarmSpec, createServiceHarness, type ServiceHarness } from '@tests/support/services';
@@ -28,11 +39,11 @@ function harness(): ServiceHarness {
 
 vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
-  getAuthService: () => harness().auth,
+  getAuthService: () => Promise.resolve(harness().auth),
 }));
 vi.mock('@/server/access', async (importOriginal) => ({
   ...(await importOriginal<typeof AccessModule>()),
-  servicesFor: (user: SessionUser) => harness().servicesForWorkspace(user.workspaceId),
+  servicesFor: (user: SessionUser) => Promise.resolve(harness().servicesForWorkspace(user.workspaceId)),
 }));
 vi.mock('@/server/config', async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
@@ -57,7 +68,7 @@ let owner: SignIn;
 let key: string;
 
 beforeEach(async () => {
-  state.harness = createServiceHarness();
+  state.harness = await createServiceHarness();
   // Cookie lifetimes are computed with the system clock; align it with the services' clock.
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(state.harness.clock.now());
@@ -209,5 +220,99 @@ describe('POST /api/capture with a session', () => {
     expect(await harness().auth.listKeys(owner.user)).toEqual([
       expect.objectContaining({ lastUsedAt: null }),
     ]);
+  });
+});
+
+describe('POST /api/capture with compressed payloads', () => {
+  it('decodes a payload compressed by the capture page and ingests the deck', async () => {
+    const payload = await encodeCapturePayload(envelope());
+    expect(payload.startsWith(CAPTURE_GZIP_TAG)).toBe(true);
+    expect(payload.length).toBeLessThan(envelope().length / 2);
+
+    const response = await capture({ payload, method: 'browser-capture', track: true, key });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: 'ingested', changedSinceLastObservation: true });
+    expect(await decksOf(owner.user)).toEqual(['Blue Farm']);
+  });
+
+  it('decodes a compressed paste of { deck, primer } JSON strings', async () => {
+    const parsed = buildCaptureEnvelope(blueFarmSpec());
+    const text = JSON.stringify({ deck: JSON.stringify(parsed.deck), primer: JSON.stringify(parsed.primer) });
+    const response = await capture(
+      { payload: gzipPayload(text), method: 'manual-paste', track: false },
+      { cookie: owner.session.token },
+    );
+    expect(await response.json()).toMatchObject({ status: 'untracked', name: 'Blue Farm' });
+  });
+
+  it('passes plain JSON through, and still accepts an object payload as it is', async () => {
+    const parsed = buildCaptureEnvelope(blueFarmSpec());
+    const plain = await capture(
+      { payload: ` \n${envelope()}\n`, method: 'manual-paste', track: false },
+      { cookie: owner.session.token },
+    );
+    expect(await plain.json()).toMatchObject({ status: 'untracked', name: 'Blue Farm' });
+    const object = await capture(
+      { payload: { deck: JSON.stringify(parsed.deck) }, method: 'manual-paste', track: false },
+      { cookie: owner.session.token },
+    );
+    expect(await object.json()).toMatchObject({ status: 'untracked', name: 'Blue Farm' });
+  });
+
+  it('answers 413 to a decompression bomb, still signing the browser in', async () => {
+    const bomb = gzipPayload(' '.repeat(MAX_DECODED_CAPTURE_BYTES + 1));
+    expect(bomb.length).toBeLessThan(20_000);
+
+    const response = await capture({ payload: bomb, method: 'browser-capture', track: true, key });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: `The deck data is too large (limit ${MAX_DECODED_CAPTURE_BYTES} bytes uncompressed).`,
+    });
+    expect(setCookies(response).has('__Host-gm_session')).toBe(true);
+    expect(await decksOf(owner.user)).toEqual([]);
+  });
+
+  it('answers 413 to a plain payload over the uncompressed limit', async () => {
+    const response = await capture(
+      { payload: `${envelope()}${' '.repeat(MAX_PLAIN_CAPTURE_BYTES)}`, method: 'manual-paste', track: true },
+      { cookie: owner.session.token },
+    );
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { error: string }).error).toContain('too large to send uncompressed');
+  });
+
+  it.each([
+    ['not base64url', `${CAPTURE_GZIP_TAG}not+base64/url=`, 'not valid base64url'],
+    ['not gzip', `${CAPTURE_GZIP_TAG}${Buffer.from(envelope()).toString('base64url')}`, 'not valid gzip'],
+    [
+      'cut off',
+      CAPTURE_GZIP_TAG + gzipSync(envelope()).subarray(0, -10).toString('base64url'),
+      'not valid gzip',
+    ],
+    ['in an unknown encoding', 'gm-brotli-base64url:AAAA', 'does not support'],
+  ])('answers 400 to a compressed payload that is %s', async (_case, payload, fragment) => {
+    const response = await capture({ payload, method: 'browser-capture', track: true, key });
+    expect(response.status).toBe(400);
+    const { error } = (await response.json()) as { error: string };
+    expect(error).toContain(fragment);
+    expect(error).not.toContain(payload.slice(CAPTURE_GZIP_TAG.length, CAPTURE_GZIP_TAG.length + 16));
+    expect(await decksOf(owner.user)).toEqual([]);
+  });
+
+  it('reports an envelope that inflates to something other than a deck as unusable', async () => {
+    const response = await capture({
+      payload: gzipPayload('{"nope":1}'),
+      method: 'browser-capture',
+      track: true,
+      key,
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('not a usable Moxfield deck');
+  });
+
+  it('authenticates before inflating anything', async () => {
+    const bomb = gzipPayload(' '.repeat(MAX_DECODED_CAPTURE_BYTES + 1));
+    const response = await capture({ payload: bomb, method: 'manual-paste', track: true });
+    expect(response.status).toBe(401);
   });
 });

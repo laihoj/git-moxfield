@@ -4,6 +4,8 @@ node_modules/
 out/
 build/
 coverage/
+# Output of local `netlify build` / `netlify dev` runs (functions, edge functions, caches)
+.netlify/
 playwright-report/
 test-results/
 data/

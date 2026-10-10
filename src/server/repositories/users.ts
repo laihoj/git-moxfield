@@ -10,9 +10,9 @@ import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
 
 import { users, workspaces } from '@/server/db/schema';
 
-import { withTransaction, type DbExecutor, type RepositoryContext } from './context';
+import { withTransaction, write, writeAll, type LibsqlExecutor, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
-import { insertWorkspace } from './workspaces';
+import { newWorkspaceRow } from './workspaces';
 
 export type UserRole = (typeof users.$inferSelect)['role'];
 
@@ -47,89 +47,91 @@ export interface UserRepository {
    * Creates a user together with a new workspace of its own, atomically.
    * @throws {RepositoryError} `invalid-input` for an empty display name.
    */
-  create(input: NewUser): UserRecord;
+  create(input: NewUser): Promise<UserRecord>;
   /**
    * Creates a user who adopts an existing workspace without an owner (the first admin
    * adopting `local`, so a single-user installation keeps its history). Atomic.
    * @throws {RepositoryError} `not-found` for an unknown workspace; `conflict` when the
    * workspace already has an owner; `invalid-input` for an empty display name.
    */
-  createForWorkspace(input: NewUser & { workspaceId: string }): UserRecord;
-  getById(id: string): UserRecord | null;
+  createForWorkspace(input: NewUser & { workspaceId: string }): Promise<UserRecord>;
+  getById(id: string): Promise<UserRecord | null>;
   /** The owner of a workspace, or `null` for an unowned (or unknown) workspace. */
-  getByWorkspaceId(workspaceId: string): UserRecord | null;
+  getByWorkspaceId(workspaceId: string): Promise<UserRecord | null>;
   /** Users whose display name equals `name` ignoring case (names are not unique), oldest first. */
-  findByDisplayName(name: string): UserRecord[];
+  findByDisplayName(name: string): Promise<UserRecord[]>;
   /** Number of users, disabled ones included. */
-  count(): number;
+  count(): Promise<number>;
   /** Number of admins who are not disabled. */
-  countActiveAdmins(): number;
+  countActiveAdmins(): Promise<number>;
   /** Every user, oldest first (ties in creation order), with deck and active key counts. */
-  list(): UserListItem[];
+  list(): Promise<UserListItem[]>;
   /** @throws {RepositoryError} `not-found` for an unknown user; `invalid-input` for an empty name. */
-  rename(id: string, displayName: string): UserRecord;
+  rename(id: string, displayName: string): Promise<UserRecord>;
   /**
    * Disables a user (keeping the first `disabledAt`) or enables them again.
    * @throws {RepositoryError} `not-found` for an unknown user.
    */
-  setDisabled(id: string, disabled: boolean): UserRecord;
+  setDisabled(id: string, disabled: boolean): Promise<UserRecord>;
   /** Records activity at `at`. Unknown users are ignored. */
-  touchLastSeen(id: string, at: string): void;
+  touchLastSeen(id: string, at: string): Promise<void>;
 }
 
 export function createUserRepository(ctx: RepositoryContext): UserRepository {
-  const requireUser = (db: DbExecutor, id: string): UserRecord => {
-    const row = db.select().from(users).where(eq(users.id, id)).get();
+  const requireUser = async (db: LibsqlExecutor, id: string): Promise<UserRecord> => {
+    const row = await db.select().from(users).where(eq(users.id, id)).get();
     if (!row) throw new RepositoryError('not-found', `User ${id} does not exist`);
     return row;
   };
 
   return {
-    create(input) {
+    async create(input) {
       requireName(input.displayName);
-      return withTransaction(ctx, (tx) => insertUserWithWorkspace(tx, input));
+      return insertUserWithWorkspace(ctx, input);
     },
 
-    createForWorkspace(input) {
+    async createForWorkspace(input) {
       requireName(input.displayName);
       return withTransaction(ctx, (tx) => insertUserAdoptingWorkspace(tx, input));
     },
 
-    getById(id) {
-      return ctx.db.select().from(users).where(eq(users.id, id)).get() ?? null;
+    async getById(id) {
+      const row = await ctx.db.select().from(users).where(eq(users.id, id)).get();
+      return row ?? null;
     },
 
-    getByWorkspaceId(workspaceId) {
-      return ctx.db.select().from(users).where(eq(users.workspaceId, workspaceId)).get() ?? null;
+    async getByWorkspaceId(workspaceId) {
+      const row = await ctx.db.select().from(users).where(eq(users.workspaceId, workspaceId)).get();
+      return row ?? null;
     },
 
-    findByDisplayName(name) {
+    async findByDisplayName(name) {
       const wanted = foldName(name);
       if (wanted === '') return [];
-      return ctx.db
+      const rows = await ctx.db
         .select()
         .from(users)
         .orderBy(asc(users.createdAt), asc(sql`${users}.rowid`))
-        .all()
-        .filter((user) => foldName(user.displayName) === wanted);
+        .all();
+      return rows.filter((user) => foldName(user.displayName) === wanted);
     },
 
-    count() {
-      return ctx.db.select({ n: count() }).from(users).get()?.n ?? 0;
+    async count() {
+      const row = await ctx.db.select({ n: count() }).from(users).get();
+      return row?.n ?? 0;
     },
 
-    countActiveAdmins() {
-      return (
-        ctx.db
-          .select({ n: count() })
-          .from(users)
-          .where(and(eq(users.role, 'admin'), isNull(users.disabledAt)))
-          .get()?.n ?? 0
-      );
+    async countActiveAdmins() {
+      const row = await ctx.db
+        .select({ n: count() })
+        .from(users)
+        .where(and(eq(users.role, 'admin'), isNull(users.disabledAt)))
+        .get();
+      return row?.n ?? 0;
     },
 
-    list() {
-      return ctx.db
+    async list() {
+      const rows = await ctx.db
         .select({
           user: users,
           // Written out with aliases: Drizzle renders columns in a `sql` template without
@@ -139,14 +141,18 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
         })
         .from(users)
         .orderBy(asc(users.createdAt), asc(sql`${users}.rowid`))
-        .all()
-        .map((row) => ({ ...row.user, deckCount: row.deckCount, activeKeyCount: row.activeKeyCount }));
+        .all();
+      return rows.map((row) => ({
+        ...row.user,
+        deckCount: row.deckCount,
+        activeKeyCount: row.activeKeyCount,
+      }));
     },
 
-    rename(id, displayName) {
+    async rename(id, displayName) {
       const name = requireName(displayName);
-      return withTransaction(ctx, ({ db }) => {
-        requireUser(db, id);
+      return withTransaction(ctx, async ({ db }) => {
+        await requireUser(db, id);
         return db
           .update(users)
           .set({ displayName: name, updatedAt: ctx.now() })
@@ -157,8 +163,8 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
     },
 
     setDisabled(id, disabled) {
-      return withTransaction(ctx, ({ db }) => {
-        const user = requireUser(db, id);
+      return withTransaction(ctx, async ({ db }) => {
+        const user = await requireUser(db, id);
         if ((user.disabledAt !== null) === disabled) return user;
         const now = ctx.now();
         return db
@@ -170,21 +176,28 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
       });
     },
 
-    touchLastSeen(id, at) {
-      ctx.db.update(users).set({ lastSeenAt: at }).where(eq(users.id, id)).run();
+    async touchLastSeen(id, at) {
+      await write(ctx, (db) => db.update(users).set({ lastSeenAt: at }).where(eq(users.id, id)));
     },
   };
 }
 
 /**
- * Inserts a user and a new workspace of its own on the caller's transaction (`tx` must
- * be one). Shared with `./invites`, which creates the user in the same transaction that
- * uses up the invite.
+ * Inserts a user and a new workspace of its own, atomically: one batch with the root
+ * database, a savepoint inside a transaction. Shared with `./invites`, which creates the
+ * user in the same transaction that uses up the invite.
  */
-export function insertUserWithWorkspace(tx: RepositoryContext, input: NewUser): UserRecord {
+export async function insertUserWithWorkspace(ctx: RepositoryContext, input: NewUser): Promise<UserRecord> {
   const displayName = requireName(input.displayName);
-  const workspace = insertWorkspace(tx.db, tx, displayName);
-  return insertUser(tx, { ...input, displayName, workspaceId: workspace.id });
+  const workspace = newWorkspaceRow(ctx, displayName);
+  const user = newUserRow(ctx, { ...input, displayName, workspaceId: workspace.id });
+  const [, inserted] = await writeAll(ctx, (db) => [
+    db.insert(workspaces).values(workspace),
+    db.insert(users).values(user).returning(),
+  ]);
+  const row = inserted[0];
+  if (!row) throw new Error(`Inserting user ${user.id} returned no row`);
+  return row;
 }
 
 /**
@@ -192,40 +205,44 @@ export function insertUserWithWorkspace(tx: RepositoryContext, input: NewUser): 
  * transaction (`tx` must be one). Shared with `./invites`.
  * @throws {RepositoryError} `not-found` for an unknown workspace; `conflict` when it has an owner.
  */
-export function insertUserAdoptingWorkspace(
+export async function insertUserAdoptingWorkspace(
   tx: RepositoryContext,
   input: NewUser & { workspaceId: string },
-): UserRecord {
+): Promise<UserRecord> {
   const displayName = requireName(input.displayName);
-  const workspace = tx.db
+  const workspace = await tx.db
     .select({ id: workspaces.id })
     .from(workspaces)
     .where(eq(workspaces.id, input.workspaceId))
     .get();
   if (!workspace) throw new RepositoryError('not-found', `Workspace ${input.workspaceId} does not exist`);
-  const owner = tx.db
+  const owner = await tx.db
     .select({ id: users.id })
     .from(users)
     .where(eq(users.workspaceId, input.workspaceId))
     .get();
   if (owner) throw new RepositoryError('conflict', `Workspace ${input.workspaceId} already has an owner`);
-  return insertUser(tx, { ...input, displayName });
-}
-
-function insertUser(tx: RepositoryContext, input: NewUser & { workspaceId: string }): UserRecord {
-  const now = tx.now();
   return tx.db
     .insert(users)
-    .values({
-      id: tx.newId(),
-      workspaceId: input.workspaceId,
-      displayName: input.displayName,
-      role: input.role,
-      createdAt: now,
-      updatedAt: now,
-    })
+    .values(newUserRow(tx, { ...input, displayName }))
     .returning()
     .get();
+}
+
+/** The row of a new user with a fresh id. */
+function newUserRow(
+  ctx: Pick<RepositoryContext, 'now' | 'newId'>,
+  input: NewUser & { workspaceId: string },
+): typeof users.$inferInsert {
+  const now = ctx.now();
+  return {
+    id: ctx.newId(),
+    workspaceId: input.workspaceId,
+    displayName: input.displayName,
+    role: input.role,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function requireName(displayName: string): string {

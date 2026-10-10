@@ -3,7 +3,8 @@
  * normalized from). Payloads are stored as the exact `JSON.stringify` bytes of the
  * data, gzip-compressed; the key is the SHA-256 of the uncompressed bytes.
  */
-import { constants, gunzipSync, gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { constants, gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
 
@@ -11,11 +12,22 @@ import { sha256Hex } from '@/core/hash';
 import { commits, observations, rawBlobs } from '@/server/db/schema';
 
 import { corruptData, decodeJson } from './codec';
-import { batches, distinct, type DbExecutor, type RepositoryContext } from './context';
+import {
+  assertStorableSize,
+  batches,
+  distinct,
+  write,
+  type LibsqlExecutor,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 
 /** The only encoding written today. */
 const GZIP = 'gzip';
+
+// Asynchronous: (de)compressing a large capture must not block the event loop.
+const gzip = promisify(gzipCallback);
+const gunzip = promisify(gunzipCallback);
 
 export interface RawBlobInput {
   /** Versioned media type describing `data`, e.g. `application/vnd.git-moxfield.moxfield.v1+json`. */
@@ -47,48 +59,48 @@ export interface RawBlobRepository {
    * bytes). Idempotent: known bytes are not compressed or written again, and keep the
    * media type they were first stored with (identical bytes have identical meaning).
    *
-   * @throws {RepositoryError} `invalid-input` when the data is not JSON-serializable or
-   * the media type is empty.
+   * @throws {RepositoryError} `invalid-input` when the data is not JSON-serializable, the
+   * media type is empty, or the compressed payload is too large to store
+   * (`MAX_STORED_VALUE_BYTES`).
    */
-  put(input: RawBlobInput): string;
+  put(input: RawBlobInput): Promise<string>;
   /**
    * Loads and decompresses a payload, or `null` when unknown.
    * @throws {RepositoryError} `corrupt-data` when the stored bytes do not match the hash.
    */
-  get(hash: string): RawBlob | null;
+  get(hash: string): Promise<RawBlob | null>;
   /** Storage details without loading the payload, or `null` when unknown. */
-  info(hash: string): RawBlobInfo | null;
+  info(hash: string): Promise<RawBlobInfo | null>;
 }
 
 export function createRawBlobRepository(ctx: RepositoryContext): RawBlobRepository {
   return {
-    put({ mediaType, data }) {
+    async put({ mediaType, data }) {
       if (mediaType.trim() === '') throw new RepositoryError('invalid-input', 'Raw blob media type is empty');
       const bytes = Buffer.from(serialize(data), 'utf8');
       const hash = sha256Hex(bytes);
-      const known = ctx.db
+      const known = await ctx.db
         .select({ hash: rawBlobs.hash })
         .from(rawBlobs)
         .where(eq(rawBlobs.hash, hash))
         .get();
       if (known) return hash;
-      ctx.db
-        .insert(rawBlobs)
-        .values({
-          hash,
-          mediaType,
-          encoding: GZIP,
-          byteLength: bytes.byteLength,
-          data: gzipSync(bytes, { level: constants.Z_BEST_COMPRESSION }),
-          createdAt: ctx.now(),
-        })
-        .onConflictDoNothing()
-        .run();
+      const compressed = await gzip(bytes, { level: constants.Z_BEST_COMPRESSION });
+      assertStorableSize(`Raw payload ${hash} (compressed)`, compressed.byteLength);
+      const values = {
+        hash,
+        mediaType,
+        encoding: GZIP,
+        byteLength: bytes.byteLength,
+        data: compressed,
+        createdAt: ctx.now(),
+      };
+      await write(ctx, (db) => db.insert(rawBlobs).values(values).onConflictDoNothing());
       return hash;
     },
 
-    get(hash) {
-      const row = ctx.db.select().from(rawBlobs).where(eq(rawBlobs.hash, hash)).get();
+    async get(hash) {
+      const row = await ctx.db.select().from(rawBlobs).where(eq(rawBlobs.hash, hash)).get();
       if (!row) return null;
       const what = `Raw blob ${hash}`;
       if (row.encoding !== GZIP) {
@@ -96,7 +108,7 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
       }
       let bytes: Buffer;
       try {
-        bytes = gunzipSync(row.data);
+        bytes = await gunzip(row.data);
       } catch (cause) {
         throw new RepositoryError('corrupt-data', `${what} cannot be decompressed`, { cause });
       }
@@ -106,8 +118,8 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
       return { mediaType: row.mediaType, data: decodeJson(bytes.toString('utf8'), what) };
     },
 
-    info(hash) {
-      const row = ctx.db
+    async info(hash) {
+      const row = await ctx.db
         .select({
           hash: rawBlobs.hash,
           mediaType: rawBlobs.mediaType,
@@ -143,29 +155,30 @@ function serialize(data: unknown): string {
  * Deletes those of `hashes` that no commit or observation references any more.
  * Returns the number of blobs deleted.
  */
-export function deleteUnreferencedRawBlobs(db: DbExecutor, hashes: readonly string[]): number {
+export async function deleteUnreferencedRawBlobs(
+  db: LibsqlExecutor,
+  hashes: readonly string[],
+): Promise<number> {
   let deleted = 0;
   for (const batch of batches(distinct(hashes))) {
-    deleted += db
-      .delete(rawBlobs)
-      .where(
-        and(
-          inArray(rawBlobs.hash, batch),
-          notExists(
-            db
-              .select({ one: sql`1` })
-              .from(commits)
-              .where(eq(commits.rawBlobHash, rawBlobs.hash)),
-          ),
-          notExists(
-            db
-              .select({ one: sql`1` })
-              .from(observations)
-              .where(eq(observations.rawBlobHash, rawBlobs.hash)),
-          ),
+    const result = await db.delete(rawBlobs).where(
+      and(
+        inArray(rawBlobs.hash, batch),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(commits)
+            .where(eq(commits.rawBlobHash, rawBlobs.hash)),
         ),
-      )
-      .run().changes;
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(observations)
+            .where(eq(observations.rawBlobHash, rawBlobs.hash)),
+        ),
+      ),
+    );
+    deleted += result.rowsAffected;
   }
   return deleted;
 }

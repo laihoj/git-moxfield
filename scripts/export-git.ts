@@ -4,20 +4,18 @@
  *   pnpm export:git <deck id | Moxfield deck id | Moxfield deck URL> [outDir]
  *
  * `outDir` defaults to `export/<Moxfield deck id>` and must be new or empty: exports are
- * never updated in place. Reads `DATABASE_PATH` (default `data/git-moxfield.db`) from the
- * environment and `.env*` files, like the app. See
- * `src/server/git-export.ts` for the repository layout.
+ * never updated in place. Reads the app's database (`TURSO_DATABASE_URL`, else
+ * `DATABASE_PATH`, default `data/git-moxfield.db`), configured in the environment and
+ * `.env*` files like the app. See `src/server/git-export.ts` for the repository layout.
  *
  * The command line acts for the operator, so it finds decks in every user's workspace.
  * When several users track the same Moxfield deck, it lists them and asks for the
  * git-moxfield deck id of the one to export.
  */
-import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { getConfig } from '@/server/config';
-import { openDatabase } from '@/server/db/client';
 import {
   defaultExportDirectory,
   exportDeckToGit,
@@ -26,6 +24,13 @@ import {
 } from '@/server/git-export';
 import { createRepositories, type DeckLocation, type Repositories } from '@/server/repositories';
 
+import {
+  describeConfiguredDatabase,
+  describeFailure,
+  isMissingDatabaseFile,
+  openConfiguredDatabase,
+} from './database';
+import { runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 
 const USAGE = 'Usage: pnpm export:git <deck id | Moxfield deck id | Moxfield deck URL> [outDir]';
@@ -39,8 +44,8 @@ function describeDeck(deck: DeckLocation): string {
   return `  ${deck.externalId}  ${deck.name}  (id ${deck.deckId}, ${deck.ownerDisplayName ?? 'no owner'})`;
 }
 
-function printTrackedDecks(repos: Repositories): void {
-  const decks = repos.workspaces.locateAllDecks();
+async function printTrackedDecks(repos: Repositories): Promise<void> {
+  const decks = await repos.workspaces.locateAllDecks();
   if (decks.length === 0) {
     console.error('No decks are tracked yet.');
     return;
@@ -49,25 +54,26 @@ function printTrackedDecks(repos: Repositories): void {
   for (const deck of decks) console.error(describeDeck(deck));
 }
 
-function run(reference: string, outDirArgument: string | undefined): number {
+async function run(reference: string, outDirArgument: string | undefined): Promise<number> {
   const config = getConfig();
-  const databasePath = config.DATABASE_PATH;
-  if (databasePath !== ':memory:' && !existsSync(databasePath)) {
+  if (isMissingDatabaseFile(config)) {
     console.error(
-      `No git-moxfield database at ${databasePath}. Set DATABASE_PATH to the database to export from.`,
+      `No git-moxfield database: the ${describeConfiguredDatabase(config)} does not exist. ` +
+        'Set DATABASE_PATH (or TURSO_DATABASE_URL) to the database to export from.',
     );
     return 1;
   }
-  const db = openDatabase(databasePath);
+  const database = await openConfiguredDatabase(config);
+  const { db } = database;
   try {
     const system = createRepositories(db);
-    const matches = locateDecksForExport(system, reference, {
+    const matches = await locateDecksForExport(system, reference, {
       siteOrigins: [...new Set([config.moxfieldSiteOrigin, DEFAULT_MOXFIELD_SITE_ORIGIN])],
     });
     const [match, ...others] = matches;
     if (match === undefined) {
       console.error(`No tracked deck matches ${JSON.stringify(reference)}.`);
-      printTrackedDecks(system);
+      await printTrackedDecks(system);
       return 1;
     }
     if (others.length > 0) {
@@ -78,9 +84,9 @@ function run(reference: string, outDirArgument: string | undefined): number {
 
     // Everything below reads the deck's own workspace only.
     const repos = createRepositories(db, { workspaceId: match.workspaceId });
-    const deck = repos.decks.getById(match.deckId);
+    const deck = await repos.decks.getById(match.deckId);
     if (!deck) throw new Error(`Deck ${match.deckId} vanished`);
-    const result = exportDeckToGit({
+    const result = await exportDeckToGit({
       repos,
       deckId: deck.id,
       outDir: outDirArgument ?? defaultExportDirectory(deck),
@@ -103,11 +109,11 @@ function run(reference: string, outDirArgument: string | undefined): number {
     }
     throw error;
   } finally {
-    db.$client.close();
+    database.close();
   }
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   // pnpm forwards a literal `--` when users separate script arguments with it.
   const args = argv.filter((arg) => arg !== '--');
   if (args.includes('--help') || args.includes('-h')) {
@@ -121,11 +127,11 @@ function main(argv: readonly string[]): number {
   }
   try {
     loadEnvFiles();
-    return run(reference, outDir);
+    return await run(reference, outDir);
   } catch (error) {
-    console.error(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Export failed: ${describeFailure(error)}`);
     return 1;
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+runMain('export:git', () => main(process.argv.slice(2)));
