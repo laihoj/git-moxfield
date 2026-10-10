@@ -1,0 +1,14 @@
+# Native/prebuilt packages in this stack work without running their install scripts:
+# better-sqlite3 13 ships N-API prebuilds, esbuild and unrs-resolver ship platform packages.
+allowBuilds:
+  better-sqlite3: false
+  esbuild: false
+  unrs-resolver: false
+
+peerDependencyRules:
+  # eslint-config-next 16 pulls plugins whose declared peer range stops at ESLint 9.
+  # They work unchanged on ESLint 10 (ESLint 9 is end-of-life).
+  allowedVersions:
+    eslint-plugin-import>eslint: '10'
+    eslint-plugin-jsx-a11y>eslint: '10'
+    eslint-plugin-react>eslint: '10'
