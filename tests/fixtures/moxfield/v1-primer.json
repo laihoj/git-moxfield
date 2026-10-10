@@ -1,0 +1,9 @@
+{
+  "content": "===center\n# **Fixture Primer**\n*by fixture-user*\n\n***\n===endcenter\n\n===accordion\n===panel: Introduction\nThis is a synthetic primer used for tests. It mentions [[Thassa's Oracle]] and [[Underworld Breach]].\n\n- Point one\n- Point two\n===endpanel\n===endaccordion\n\n## Mulligans\nKeep hands with fast mana.\n\n<script>alert('xss')</script>\n[bad link](javascript:alert(1))\n",
+  "lastUpdatedAtUtc": "2026-09-27T16:52:21.07Z",
+  "lastUpdatedByUser": {
+    "userName": "fixture-user",
+    "displayName": "Fixture User",
+    "badges": []
+  }
+}

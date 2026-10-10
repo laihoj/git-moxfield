@@ -1,0 +1,123 @@
+{
+  "id": "Fx002",
+  "name": "Fixture Legacy Deck",
+  "description": null,
+  "format": "commander",
+  "visibility": "unlisted",
+  "publicUrl": "https://moxfield.com/decks/FixtureDeckId_00000002",
+  "publicId": "FixtureDeckId_00000002",
+  "likeCount": 0,
+  "viewCount": 1,
+  "createdByUser": { "userName": "fixture-user", "displayName": "Fixture User" },
+  "authors": [
+    { "userName": "fixture-user", "displayName": "Fixture User" },
+    { "userName": "fixture-coauthor", "displayName": "Fixture Coauthor" }
+  ],
+  "commandersCount": 1,
+  "commanders": {
+    "Tymna the Weaver": {
+      "quantity": 1,
+      "boardType": "commanders",
+      "finish": "nonFoil",
+      "isFoil": false,
+      "isAlter": false,
+      "isProxy": false,
+      "card": {
+        "id": "YB1zV",
+        "uniqueCardId": "kOjQn",
+        "scryfall_id": "00000000-0000-4000-8000-000000000001",
+        "set": "c16",
+        "name": "Tymna the Weaver",
+        "cn": "48",
+        "lang": "en",
+        "layout": "normal",
+        "type_line": "Legendary Creature — Human Cleric",
+        "mana_cost": "{1}{W}{B}",
+        "cmc": 3,
+        "color_identity": ["W", "B"]
+      }
+    }
+  },
+  "mainboardCount": 3,
+  "mainboard": {
+    "Island": {
+      "quantity": 2,
+      "boardType": "mainboard",
+      "finish": "nonFoil",
+      "isFoil": false,
+      "isAlter": false,
+      "isProxy": false,
+      "card": {
+        "id": "kAvjA",
+        "uniqueCardId": "kaN49",
+        "scryfall_id": "00000000-0000-4000-8000-000000000002",
+        "set": "znr",
+        "name": "Island",
+        "cn": "271",
+        "lang": "en",
+        "layout": "normal",
+        "type_line": "Basic Land — Island",
+        "mana_cost": "",
+        "cmc": 0,
+        "color_identity": ["U"]
+      }
+    },
+    "Thassa's Oracle": {
+      "quantity": 1,
+      "boardType": "mainboard",
+      "finish": "etched",
+      "isFoil": false,
+      "isAlter": false,
+      "isProxy": true,
+      "card": {
+        "id": "EZXJB",
+        "uniqueCardId": "kqAAx",
+        "scryfall_id": "00000000-0000-4000-8000-000000000003",
+        "set": "thb",
+        "name": "Thassa's Oracle",
+        "cn": "308",
+        "lang": "ja",
+        "layout": "normal",
+        "type_line": "Creature — Merfolk Wizard",
+        "mana_cost": "{U}{U}",
+        "cmc": 2,
+        "color_identity": ["U"]
+      }
+    }
+  },
+  "sideboardCount": 0,
+  "sideboard": {},
+  "maybeboardCount": 1,
+  "maybeboard": {
+    "Peer into the Abyss": {
+      "quantity": 1,
+      "boardType": "maybeboard",
+      "finish": "nonFoil",
+      "isFoil": false,
+      "isAlter": false,
+      "isProxy": false,
+      "card": {
+        "id": "Yo01v",
+        "uniqueCardId": "LmjJp",
+        "scryfall_id": "00000000-0000-4000-8000-000000000004",
+        "set": "m21",
+        "name": "Peer into the Abyss",
+        "cn": "360",
+        "lang": "en",
+        "layout": "normal",
+        "type_line": "Sorcery",
+        "mana_cost": "{4}{B}{B}{B}",
+        "cmc": 7,
+        "color_identity": ["B"]
+      }
+    }
+  },
+  "companionsCount": 0,
+  "companions": {},
+  "version": 7,
+  "tokens": [],
+  "hubs": [{ "name": "Budget" }],
+  "createdAtUtc": "2020-01-01T00:00:00Z",
+  "lastUpdatedAtUtc": "2020-02-01T12:00:00",
+  "authorTags": { "Thassa's Oracle": ["Win Con", "Combo"] }
+}
