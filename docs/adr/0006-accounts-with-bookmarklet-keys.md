@@ -100,3 +100,34 @@ only while the admin who made it is an active admin. `member` is everyone else.
 - The installation-wide capture token is replaced by per-user keys; bookmarklets
   created before this change stop working and must be recreated.
 - HTTP Basic auth (an installation-wide password) is removed: real accounts replace it.
+
+## Implementation notes (2026-10-10)
+
+Built as decided, in `src/server/auth` and the account pages. Where the details differ
+from, or add to, the text above:
+
+- **The command line** is `pnpm users invite [--admin]`, not `pnpm users:invite`, next to
+  `pnpm users list`, `pnpm users recover <user>` and `pnpm users claim-code`. It acts as
+  the "system actor": an admin without an account. Its recovery links show on the user's
+  Account page as coming from the server's command line. Hosted, whoever holds the Turso
+  token can run these commands against the production database, so that token is the
+  operator's master key.
+- **The setup code** (`XXXX-XXXX-XXXX` from a 29-letter alphabet without look-alikes,
+  about 58 bits, compared in constant time) is printed when a process first uses the auth
+  service, that is on its first request rather than at start, and whenever `/claim` is
+  opened (after the response is sent, so the development server's console replay never
+  shows it in the visitor's browser). On Netlify every new function instance prints it
+  once, in the function log. `pnpm users claim-code` prints it from the command line,
+  also for the hosted database.
+- **The same-tab hand-off** is a five-minute hand-off cookie set on the 303 from
+  `/api/capture/form`, finished by `GET /api/auth/handoff`, which sees the browser's own
+  session again; the confirmation page is `/signin/bookmarklet`.
+- **Cookie names** follow the context: `__Host-gm_session` (and `__Host-gm_handoff`) with
+  `Secure` over https and on the loopback host, unprefixed `gm_session` without `Secure`
+  over plain http to a LAN address, where browsers drop `Secure` cookies. The two sets
+  are never read across. The proxy re-sets the session cookie at most daily (on Netlify
+  as an edge function).
+- **Hosting** (ADR 0008) changes nothing in the design. A hosted instance starts empty
+  and is claimed like a fresh one; history from a local installation moves with
+  `pnpm import:local`, which never copies accounts, keys, sessions or links, so everyone
+  joins the hosted instance first (claim or invite) and creates new bookmarklets for it.

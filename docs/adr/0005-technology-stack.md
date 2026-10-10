@@ -31,3 +31,23 @@
 
 Node 24 LTS is recommended (`.nvmrc`). Node ≥ 22.12 is supported. Node 25 works
 but is end-of-life.
+
+## Update (2026-10-10): libSQL and the hosting platform
+
+[ADR 0008](0008-hosting-netlify-and-turso.md) replaced the database driver and added a
+hosting platform. The other choices stand.
+
+| Concern  | Now                                                                                      | Why                                                                                                                                                        |
+| -------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database | libSQL via `@libsql/client` 0.18 and Drizzle's libSQL driver; Turso in production        | One driver and one SQLite dialect everywhere: local `file:` and `:memory:` databases, and Turso over HTTP (pure JavaScript, no native binary) when hosted. |
+| Hosting  | Netlify (free), Next.js on its OpenNext adapter; Turso (free) in AWS `us-east-2`         | Costs nothing; the worst case of a used-up plan is a paused site, never a bill.                                                                            |
+| Tests    | Vitest on in-memory libSQL; an opt-in suite against a libSQL server (`pnpm test:remote`) | The remote protocol differs (error shapes, size limits, lock steals), so it is tested against the real server, not only locally.                           |
+
+What changed as a consequence:
+
+- better-sqlite3 is removed. Its synchronous API was its main advantage; every query is
+  now asynchronous, and transactions go through one helper (`runInTransaction`) that
+  serializes writers in-process and retries transient failures.
+- drizzle-kit uses its `turso` dialect. The existing migrations apply unchanged.
+- Netlify Functions run Node 24, so the build runs Node 24 too (`NODE_VERSION` in
+  `netlify.toml`, `.node-version`, `.nvmrc`). Node ≥ 22.12 still works locally.

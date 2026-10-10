@@ -9,8 +9,8 @@ git-moxfield uses Git concepts internally but speaks deckbuilding. Users see
 1. **The deck page answers four questions at a glance.** What is the Moxfield
    status? Are there uncommitted changes? What is the last committed version? What
    changed? The commit action is always one tap away.
-2. **Moves are first-class.** A card moving between zones is shown as `Mainboard →
-Considering`, never as an unrelated removal plus addition.
+2. **Moves are first-class.** A card moving between zones is shown as
+   `Mainboard → Considering`, never as an unrelated removal plus addition.
 3. **Strategic before cosmetic.** Printing changes, card tags and renames are shown,
    but collapsed and visually quiet.
 4. **Mobile does the core loop.** Inspect status, review diff, commit, browse
@@ -23,19 +23,80 @@ Considering`, never as an unrelated removal plus addition.
 
 ```
 /                                   Decks: tracked decks with status, "Track a deck"
-/setup                              Connect Moxfield: fetch status, bookmarklet, paste
+/setup                              Connect Moxfield: fetch status, your bookmarklets, paste
 /capture                            Bookmarklet landing (and ?mode=paste fallback)
-/decks/[deckId]                     Deck: status, changes since last version, commit, recent versions
+/decks/[deckId]                     Deck: status, changes since last version, commit, recent
+                                    versions, Moxfield deck panel (change Moxfield deck)
 /decks/[deckId]/history             Version timeline, tag filter
 /decks/[deckId]/versions/[n]        Version: changes, full deck, primer, notes, tags
 /decks/[deckId]/versions/[n]/restore  Restore to Moxfield: per-board copy blocks
+/decks/[deckId]/versions/[n]/restore.txt  The same restore export as a text download
 /decks/[deckId]/compare?from&to     Compare any two versions (or the current Moxfield deck)
 /decks/[deckId]/cards               Search cards across the deck's history
 /decks/[deckId]/cards/[cardKey]     Card history timeline
+/decks/[deckId]/share               Share links of the deck: create, last viewed, revoke
+
+/signin                             Sign in: the ways in (no password form); claim card
+                                    while the installation has no admin
+/signin/[token]                     A device or recovery link: who it signs in, one button
+/signin/bookmarklet                 Confirm before a same-tab bookmarklet signs this browser in
+/claim                              First run: setup code + display name → first admin
+/invite/[token]                     An invite: pick a display name → account
+/account                            Your name, sign in on another device (link + QR code),
+                                    bookmarklets, signed-in devices, recoveries, sign out
+/admin                              Admins only (404 for members): invite, people, recovery
+                                    links, invites
+
+/s/[token]                          Shared deck (read-only, no account needed): overview
+/s/[token]/history, /versions/[n], /versions/[n]/restore, /compare, /cards, /cards/[cardKey]
+                                    The owner's views, committed history only
 ```
 
 Inside a deck, navigation tabs are **Status · History · Compare · Cards**. They sit
-at the top on desktop and in a fixed bottom bar on mobile.
+at the top on desktop and in a fixed bottom bar on mobile. The owner's deck header also
+has **Share**. A shared deck has the same tabs with **Overview** (its latest version and
+what changed, beside the recent versions) in place of Status, and a read-only banner
+instead of the account menu.
+
+## Accounts
+
+There is no password form anywhere. The sign-in page lists the ways in: run your
+bookmarklet on a Moxfield deck, open a device link made on a signed-in device
+(Account › Sign in on another device), or ask the admin. Pages that a link opens
+(invite, device or recovery link, the same-tab confirmation) explain what will happen
+and do nothing until their button is pressed, so link previews in chat apps cannot use
+them up.
+
+- **First run.** While no user exists, the sign-in page shows "This git-moxfield has no
+  admin yet" with **Set up git-moxfield**; `/claim` asks for the setup code from the
+  server log and a display name.
+- **After joining** (invite, claim, recovery), Connect Moxfield opens with a greeting and
+  leads with creating a bookmarklet: name it (prefilled from the browser, e.g. "Chrome
+  on Mac"), then drag the popup variant to the bookmarks bar, or the same-tab variant on
+  a phone. The bookmarklets are shown once, until "I've installed it" or leaving the
+  page.
+- **Same-tab confirmation** names the account and the bookmarklet (label and creation
+  date, since display names are not unique) and says whom it signs out.
+- **Account** lists bookmarklets with their last use (revoke each; revoking offers to
+  revoke the bookmarklets and share links made through it too), signed-in devices (sign
+  out one, the others, or everywhere), and every recovery link that signed in as you,
+  with the admin who made it.
+- **Admin** creates invite links (member or admin, optional note), lists people with
+  their deck and key counts (disable, enable, make a recovery link) and the recovery
+  links and invites that can still be used (withdraw them).
+
+## Sharing
+
+The owner's **Share** page creates read-only links: a label for whom it is for, and an
+"Include my version notes" choice. A new link's URL is shown once, with a copy button.
+Each link shows when it was last viewed and can be revoked.
+
+A shared deck looks like the owner's, read-only: a banner names who shared it, and there
+is no commit form, refresh, tag editing or uncommitted state. Nothing names the deck's
+place on Moxfield. Restore works the same way, so a viewer can paste any version into a
+Moxfield deck of their own. A revoked link, an untracked deck or a disabled owner looks
+exactly like a link that never worked ("This link doesn't work anymore"), also when a
+page that was open navigates; the deck's frame is never shown again.
 
 ## Deck page (mobile sketch)
 
@@ -82,6 +143,25 @@ States of the status panel:
 When server fetch is unavailable (blocked or disabled), the refresh button becomes
 **Update from Moxfield**. It opens the deck on Moxfield and links to /setup, so the
 user can click the bookmarklet there.
+
+## Changing a deck's Moxfield deck
+
+A deck deleted on Moxfield and made again gets a new link. Two ways to follow it, both
+keeping every version:
+
+- **Moxfield deck panel** (Status page, side column; below the main column on phones):
+  the deck's Moxfield link, its earlier Moxfield decks with dates, and **Change Moxfield
+  deck**, a form that opens in place (URL or id of the new deck). Afterwards the Status
+  page greets the change. The "Deck not found on Moxfield" banner links to the form.
+- **Capture page:** when the bookmarklet sends a deck nobody tracks, the page offers
+  "Track this deck" and, below it, **Or continue an existing deck's history**: a deck
+  picker (preselected when exactly one deck has the same name) and a
+  **Continue "&lt;deck&gt;"** button. The deck page then shows the new copy as changes
+  since the latest version.
+
+Refusals explain the way forward: the deck's own Moxfield deck ("already follows it"),
+or a Moxfield deck another of your decks tracks ("stop tracking that deck first", and
+whether that loses versions).
 
 ## Diff presentation
 

@@ -44,15 +44,23 @@ src/
     config.ts         Typed environment configuration.
     platform.ts       Where the process runs (Netlify or not), for platform defaults.
     sources.ts        DeckSource registry (wires adapters from config; process singleton).
-    logger.ts         Structured logging.
-    db/               Drizzle schema, libSQL connection, transactions, migration state.
+    logger.ts         Structured logging (one JSON object per line; never secrets or SQL).
+    host-guard.ts     Which host names the app answers to (DNS-rebinding guard).
+    db/               Drizzle schema, libSQL connection, transactions, write lock,
+                      error classification, migration state.
     repositories/     Persistence (the only code that touches SQL).
     services/         Use cases: track, refresh, ingest capture, commit, history,
-                      compare, card history, restore, tags, notes.
-    auth/             Accounts, sessions, keys, links, invites (ADR 0006).
+                      compare, card history, restore, tags, notes, change Moxfield deck,
+                      share links, the read-only shared deck.
+    history-import/   Importing another database's history (`pnpm import:local`).
+    auth/             Accounts, sessions, keys, links, invites, claim (ADR 0006).
     access/           Who is asking → which services (ADR 0007); opens the database.
   app/              Next.js App Router: pages, server actions, route handlers.
   components/       React UI components.
+  proxy.ts          Runs before every page and endpoint: host guard, session cookie
+                    refresh (an edge function on Netlify).
+scripts/            Operator commands (`db:migrate`, `users`, `import:local`, `export:git`,
+                    `seed:demo`) on the configured database.
 ```
 
 Dependency rule: `app → server/services → (core, integrations, server/repositories)`;
@@ -87,15 +95,40 @@ See [`moxfield-integration.md`](./moxfield-integration.md) for endpoint details.
 - Primer: `GET https://api2.moxfield.com/v1/decks/{deckInternalId}/primer`
   (`deckInternalId` is the deck payload's `id`, not the public id)
 - The API is not public. Server-side requests without a Moxfield-issued User-Agent are
-  blocked by Cloudflare (HTTP 403 HTML). git-moxfield therefore supports two ingestion
+  blocked by Cloudflare (HTTP 403 HTML). git-moxfield therefore supports three ingestion
   paths that converge on the same normalization code:
   1. **Server fetch** — used when `MOXFIELD_USER_AGENT` is configured (Moxfield grants
      these for personal, non-commercial projects via support@moxfield.com), or when
-     the user opts in to trying without one.
-  2. **Browser capture** — a bookmarklet run on a Moxfield deck page fetches the same
-     two endpoints with the user's own browser session and hands the JSON to
-     git-moxfield's `/capture` page via `window.open` + `postMessage`.
+     the user opts in to trying without one. Off by default on Netlify
+     (`MOXFIELD_SERVER_FETCH`), whose servers Cloudflare blocks.
+  2. **Browser capture** — a personal bookmarklet run on a Moxfield deck page fetches the
+     same two endpoints with the user's own browser session and hands the capture to
+     git-moxfield: to its `/capture` page via `window.open` + `postMessage` (popup mode),
+     or as a form post to `/api/capture/form` (same-tab mode, for phones). The bookmarklet
+     carries its owner's key (see [Accounts](#accounts)), which decides whose workspace
+     receives the deck.
   3. **Manual paste** — fallback: paste the JSON from the two endpoint URLs.
+
+### Capture transport encoding
+
+The capture (the envelope JSON: deck, primer, capture metadata; envelope version 2) is
+gzip-compressed in the browser (`CompressionStream`) and sent as
+`gm-gzip-base64url:<base64url>` (`src/integrations/moxfield/capture-codec-protocol.ts`),
+the same text on every path: the `postMessage` payload, the JSON body of
+`POST /api/capture` and the form field of the same-tab post. Untagged text is plain JSON
+(older bookmarklets, browsers without `CompressionStream`, manual pastes), so the tag
+makes the encoding self-describing and needed no new envelope version. A real 835 KB deck
+travels as 147 KB.
+
+The server decodes only after authenticating the request (`decodeCapturePayload`,
+`capture-codec.ts`, server-only): at most 2,000,000 encoded characters, at most
+8,000,000 bytes after inflating (zlib's `maxOutputLength`, so a decompression bomb stops
+there), at most 1,400,000 bytes of plain JSON, a strict base64url alphabet, valid UTF-8.
+Oversized payloads answer 413 (the same-tab route redirects to the paste form with
+`error=too-large`), damaged ones 400 (`error=invalid`). The routes' body limits (2.9 MB
+for JSON, 4.3 MB for forms) keep every accepted request under Netlify's 6 MB limit even
+if the platform hands the body over base64-encoded, so users always see the app's own
+"too large" message, never a platform error.
 
 ## Canonical snapshot
 
@@ -218,9 +251,30 @@ fetch from Moxfield and have no other side effects; `runWrite` (repositories: `w
 trip remotely. One-time things (invites, login links, hand-offs) are used up by a
 conditional `UPDATE` inside such a transaction, so of concurrent consumers exactly one
 wins. Database errors are classified by `classifySqlError` (walking the cause chain:
-remote errors carry no extended result codes) and never logged with their SQL or bound
-parameters. Values a remote libSQL server would reject (over 5,000,000 bytes) are refused
-earlier with an `invalid-input` repository error (`MAX_STORED_VALUE_BYTES`).
+remote errors carry no extended result codes, so a primary key violation reads as
+`unique` everywhere) and never logged with their SQL or bound parameters. A remote libSQL
+server rejects any value over 5,000,000 bytes; the repositories refuse to store one over
+4,500,000 bytes (`MAX_STORED_VALUE_BYTES`) with an `invalid-input` error that says so.
+
+Retries and atomicity: `runInTransaction` runs the whole callback again (up to 3 retries,
+jittered backoff) after `busy`, `transaction-timeout` (Turso rolls back a transaction that
+holds its write lock for more than 5 s while another writer waits) and `stream-expired`.
+After any failure other than a constraint violation, the transaction is aborted: no
+further statement is sent, and the commit fails with the original error. Remotely this
+matters: after a server-side rollback, the HTTP protocol would run later statements of the
+"transaction" in autocommit mode, one by one. Using the root database inside a callback
+throws (`root-in-transaction`), and so does `db.transaction()` outside `runInTransaction`.
+
+**Write lock.** Each process holds one FIFO write lock per database
+(`src/server/db/write-lock.ts`). `runInTransaction` and `runWrite` take it in every mode.
+For a local database (`file:`, `:memory:`) every root operation takes it, reads included:
+libSQL fails a second local writer at once instead of queueing it (`TRANSACTION_ACTIVE` in
+memory, `SQLITE_BUSY` on a file), so the process queues its own work. Remote reads run
+concurrently, and the server serializes writers across processes. Waits are bounded (15 s,
+`WriteLockError`), and a nested `run` from the holder fails at once instead of deadlocking.
+Lock order everywhere: the service layer's per-deck lock first, the write lock second, and
+no lock is ever awaited inside a transaction. Local files run in WAL mode with a 5 s busy
+timeout, which only matters when another process (a script) holds the file.
 
 Turso bills every row a query reads, so the hot queries are index-driven: card history
 and card search probe `snapshot_cards(card_key, snapshot_hash)` per version of the deck
@@ -246,7 +300,8 @@ measurements; tests pin the query plans).
 | `sessions`       | Signed-in browsers and pending bookmarklet hand-offs (hashed tokens).        |
 | `login_links`    | One-time device and recovery links (hashed), kept as the recovery record.    |
 | `invites`        | One-time invitations that create an account (hashed).                        |
-| `share_links`    | Read-only links to one deck's history (ADR 0007, next step).                 |
+| `share_links`    | Read-only links to one deck's history (hashed; ADR 0007).                    |
+| `deck_relinks`   | A deck's changes of Moxfield deck ("Change Moxfield deck"), oldest first.    |
 
 Immutability is enforced in the database: triggers abort `UPDATE` on `commits`,
 `snapshots`, `raw_blobs`, and abort `DELETE` on `commits` unless the owning deck is
@@ -263,9 +318,11 @@ again.
 
 A local database is migrated when the app opens it; a remote one never is (concurrent
 cold starts would race): the deploy runs `pnpm db:migrate`, and the app refuses a
-database that is not exactly at its migrations, saying so. Migrations run with foreign
-keys off, as one atomic batch (libSQL's `migrate`), and are followed by
-`PRAGMA foreign_key_check`: drizzle-kit rebuilds tables (copy into
+database that lacks any of its migrations, saying so. It serves one with newer migrations
+(logging a warning): the deploy migrates before publishing, so the live deploy, or one
+rolled back to, runs on migrations newer than itself; they are backward compatible.
+Migrations run with foreign keys off, as one atomic batch (libSQL's `migrate`), and are
+followed by `PRAGMA foreign_key_check`: drizzle-kit rebuilds tables (copy into
 `__new_<table>`, `DROP`, rename) for changes SQLite cannot `ALTER`, and with foreign
 keys on, `DROP TABLE` fails on, or cascades into, the referencing rows. A rebuild drops
 the table's triggers, so a migration that rebuilds `commits`, `snapshots`,
@@ -290,6 +347,43 @@ source-version <n>             (omitted when unknown)
 
 Users see `vN` (per-deck sequence); short ids are shown as secondary detail.
 
+The `deck` header records the deck reference **at commit time**. A deck can change its
+Moxfield deck (below), so the versions of one deck may hash different references; each
+stays valid, and `deck_relinks` keeps every earlier reference, so every commit id can
+still be checked against its content (`pnpm import:local` does).
+
+### Changing a deck's Moxfield deck
+
+Deleting a deck on Moxfield and making it again gives the new copy a new public id. The
+owner points the git-moxfield deck at it ("Change Moxfield deck" on the Status page, or,
+when the bookmarklet sends the new copy as an untracked deck, "Continue an existing deck's
+history" on the capture page): `DeckServices.relinkDeck`, or `ingestCapture` with
+`relinkDeckId`. In one transaction the deck's `external_id` and `url` change (its id, name,
+branches and versions stay), the change is recorded in `deck_relinks`, the fetch status
+is cleared and the observations of the old Moxfield deck are pruned (they must never be
+committed as the new one's). The capture variant ingests the capture as the new working
+state in the same transaction, so the deck page shows what changed since the latest
+version. A Moxfield deck that another deck of the workspace tracks is refused, with how
+to proceed (stop tracking that deck first). Viewers of share links never see any of it:
+it names decks on Moxfield.
+
+### Importing history from another database
+
+`pnpm import:local` (`scripts/import-local.ts`, `src/server/history-import/`) moves a
+local installation's history into the configured database (Turso), into one user's
+workspace. The source file is copied (with its write-ahead log) and only the copy is
+opened and migrated, so the source is never modified. Rows move as they are (the
+`historyTransfer` repository): commit ids, timestamps and raw payloads are byte for byte
+the source's, verified on the way (content hashes, commit content addresses). Each deck
+goes in short steps (ADR 0008: no long transactions remotely): content-addressed rows in
+batches of at most 2 MB or 50 rows (invisible until referenced), then the deck's history
+in one transaction (inserts only, so the immutability triggers hold), then its card facts
+(latest wins), then a check of the lineage. Decks the target has with the same versions are
+skipped, so re-running is safe; a deck the target workspace tracks with a different
+history (or whose versions are stored elsewhere already: commit ids are unique per
+installation) refuses the import unless `--skip-existing`. Accounts, sessions, keys and
+links are never copied.
+
 ### Commit flow and concurrency
 
 `commit(deckId, { message, expectedObservationId, expectedHeadCommitId })`:
@@ -311,6 +405,16 @@ keeps one instance's requests from interleaving, while the compare-and-set on th
 head (step 3) is what keeps two instances from committing over each other. The fetch of
 step 2 happens outside any transaction; transactions hold no network request other than
 their own statements.
+
+Known limitation (remote mode only): reads outside a transaction see whatever is committed
+when each statement runs. Loading a deck's working state reads its latest observation and
+then that observation's snapshot in separate statements, and the commit's pre-checks
+(step 1) read outside a transaction too. If another instance ingests the same deck twice in
+between, pruning removes that snapshot and the request fails with "Snapshot … is missing"
+instead of answering with the newer state or `stale`. A stress test of 6 processes on one
+deck hit it in 2 of 240 rounds; real use would need two captures of one deck within
+milliseconds. History stays consistent. Planned fix: read the pre-checks in one short
+transaction and retry the working-state read when its snapshot is gone.
 
 Request-handling code gets services from `src/server/access` (`servicesFor(user)`,
 `shareLinkServicesFor(user)`, `sharedDeckServices(token)`) and the auth service from
@@ -336,6 +440,122 @@ capture.
 instructions and limitations. Restore never changes git-moxfield state: it is a pure
 export of a chosen version.
 
+## Accounts
+
+Design and rationale: [ADR 0006](./adr/0006-accounts-with-bookmarklet-keys.md). Code:
+`src/server/auth` (the `AuthService`, cookies, paths, tokens) and the account pages.
+
+- **Identity and credentials are separate.** A user (display name, role `admin` or
+  `member`, disabled or not) owns exactly one workspace, which owns the decks. A
+  credential proves who you are; today only `bookmarklet-key`. Sessions, device links,
+  share links and keys made in a signed-in browser record the key that browser's session
+  descends from (their lineage), so revoking a key reaches the sessions and unused links
+  derived from it, and, on request, the share links and keys made through it.
+- **Tokens** are a type prefix plus 32 random bytes in base64url: `gmk_` keys, `gms_`
+  sessions, `gmi_` invites, `gml_` device and recovery links, `gmv_` share links. Only
+  their SHA-256 is stored, and they are looked up by it; the format is checked before any
+  lookup (`token-format.ts`). Plaintext leaves the auth service once, to whoever it is
+  for: a cookie, a link shown to its creator, a new bookmarklet.
+- **Sessions** are an `HttpOnly`, `SameSite=Lax` cookie: `__Host-gm_session` with `Secure`
+  over https and on the loopback host, `gm_session` over plain http to a LAN address
+  (`cookie-spec.ts`). The database expiry slides with use (400 days); the proxy re-sets
+  the cookie's `Max-Age` at most daily. Every request and server action resolves the
+  session again (`getCurrentUser`, memoized per render).
+- **Ways in.** The popup bookmarklet posts its key same-origin with the capture, which
+  sets the session. The same-tab bookmarklet's cross-site form post cannot see the
+  browser's (`Lax`) session, so it starts a five-minute hand-off (`gm_handoff` cookie)
+  and redirects through `/api/auth/handoff`: a browser already signed in as the key's
+  owner continues, any other is asked on `/signin/bookmarklet`, whose same-origin POST
+  signs it in. Device links (15 minutes), recovery links (24 hours, made by an admin) and
+  invites (7 days) are consumed by a POST, never by opening them.
+- **Claim.** While no user exists, a setup code (`XXXX-XXXX-XXXX`, about 58 bits) is kept
+  in `app_settings` and printed to the server log when a process first uses the auth
+  service and whenever `/claim` is opened (`pnpm users claim-code` prints it too). Whoever
+  enters it becomes the first admin, in one transaction; if the `local` workspace holds
+  decks and has no owner (an installation from before accounts), the admin adopts it.
+- **Admins** manage accounts (invite, disable, recovery links), never decks: no admin
+  method reaches a deck. Every multi-step change (claim, invite acceptance, consuming a
+  link, revoking) runs in one `IMMEDIATE` transaction, and what happened is logged after
+  the commit, since the callback may run more than once.
+
+## Access scopes and share links
+
+Design and rationale: [ADR 0007](./adr/0007-access-control-and-share-links.md). Code:
+`src/server/access`, the only place request-handling code gets deck services from.
+
+- **Owner scope.** `servicesFor(user)` builds `DeckServices` over repositories bound to
+  the user's workspace. Every deck query filters by it, so another workspace's deck,
+  version or observation id behaves like a missing one (`not-found`, never `forbidden`).
+  `shareLinkServicesFor(user)` creates, lists and revokes the user's share links.
+- **Viewer scope.** `sharedDeckServices(token)` resolves a `gmv_` token to one deck and
+  returns `SharedDeckServices`, a separate interface without write methods (read-only by
+  type). It is confined to the deck (`confined-history.ts`: commits, snapshots, tags and
+  notes are reachable only through the deck's own versions), shows committed history only
+  (no working state, refresh or fetch status), notes only when the link includes them,
+  and nothing that says where the deck is on Moxfield (no URL, Moxfield id, source
+  metadata or earlier Moxfield decks). Every call checks the link again, so revoking it,
+  untracking the deck or disabling the owner ends access at once; all of these, like an
+  unknown token, answer 404. Views are recorded at most hourly.
+- **Routes.** A deck's pages exist for its owner under `/decks/<deckId>` and for viewers
+  under `/s/<token>`. Components never build deck URLs: they receive a `DeckScope` and
+  link with `deckRoutes(scope)` (`src/lib/routes.ts`).
+- **What workspaces share.** Only content-addressed rows (snapshots, their card index,
+  raw payloads), keyed by the hash of their content. Card facts (`card_catalog`) come
+  from untrusted captures and are per workspace.
+- **Scripts** are not requests: they build services for an explicit workspace
+  (`createServices`) and act on accounts as the system actor.
+
+## Deployment
+
+Design, limits and rationale: [ADR 0008](./adr/0008-hosting-netlify-and-turso.md); the
+steps are in the README. The hosted instance is one Netlify site and one Turso database:
+
+```
+browser ──HTTPS──► Netlify CDN ─────────── static assets (.next/static, icons, manifest)
+                        │
+                        ▼
+          edge function: src/proxy.ts (Deno; host guard, session cookie refresh)
+                        │
+                        ▼
+          Node function: the Next.js server handler (AWS us-east-2, Ohio)
+          pages · server actions · /api/capture · /api/capture/form · /api/auth/handoff
+                        │  @libsql/client/http: one HTTPS round trip per statement or batch
+                        ▼
+          Turso: libSQL database (aws-us-east-2)
+                        ▲
+                        │  the same client, from the build or the operator's machine
+          pnpm db:migrate (production builds) · users · import:local · export:git
+```
+
+- **Moxfield is reached from the browser only.** Server fetching defaults to off on
+  Netlify (`runsOnNetlify`: `NETLIFY=true` in builds, `SITE_ID` in functions), because
+  Cloudflare blocks cloud servers; decks arrive through the bookmarklet.
+- **Release.** Production builds run `pnpm run build && pnpm run db:migrate`
+  (`netlify.toml`): migrations are applied after a successful build and before the
+  deploy is published, so a failed migration publishes nothing. Deploy previews and
+  branch deploys are not built (they would share the production database).
+- **Runtime checks.** The app never migrates a remote database. When an instance first
+  opens it, `assertMigrationsApplied` requires every migration this build ships
+  (otherwise each request fails with a `MigrationStateError` naming `pnpm db:migrate`,
+  until the database is migrated; a failed opening is retried on the next request) and
+  tolerates newer ones with a warning: during a release, and after a rollback, the live
+  deploy runs on migrations newer than itself, which is why migrations are written to
+  stay backward compatible. A local database file on Netlify is refused
+  (`DatabaseConfigError`): a function's disk is temporary and per instance.
+- **Per-instance state.** The database handle, the per-deck locks, the Moxfield throttle
+  and block backoff, and the "setup code printed" flag live per process, so per function
+  instance. Correctness never depends on them: the database's compare-and-set on the
+  branch head and its unique constraints decide between instances.
+- **Cost shape.** Turso bills rows read (including rows scanned) and rows written, and
+  each statement is a round trip from Ohio, so queries are index-driven, independent
+  reads are started together, and write sets without interleaved reads go in one
+  `db.batch()`. Measured costs are in the README's "Free plans and their limits".
+- **Bundles.** The server function (about 21 MB zipped) also contains the libSQL native
+  binary, traced because of the lazy local import but never loaded for remote URLs; the
+  edge bundle (about 2.8 MB) contains no database code.
+- **Locally**, the same code runs with a `file:` database through the native libSQL
+  client (loaded lazily, only for `file:` and `:memory:` URLs), migrated when opened.
+
 ## Security
 
 - Remote content is untrusted: payloads are validated with zod, size-limited,
@@ -355,13 +575,22 @@ export of a chosen version.
 - The capture endpoint accepts only same-origin JSON POSTs; the capture page only
   accepts `postMessage` from `https://moxfield.com` with a one-time nonce. The
   same-tab form endpoint requires a valid bookmarklet key, which decides whose
-  workspace receives the deck (its `Origin` is `null` in practice; see
+  workspace receives the deck (its `Origin` is `null` when git-moxfield runs on plain
+  http, and is expected to be `https://moxfield.com` when hosted on https; see
   `moxfield-integration.md`). Since any member can post their own key from any page,
   the sign-in it hands off never changes who a browser is without a same-origin
-  confirmation on `/signin/bookmarklet`.
+  confirmation on `/signin/bookmarklet`. Captures are decoded only after the key or
+  session is accepted, within hard size limits.
 - The server only ever requests fixed Moxfield API hosts; user input is parsed into a
   validated deck id, never used as a URL.
 - No secrets are exposed to the browser (`MOXFIELD_USER_AGENT` is server-only).
+- The database URL and `TURSO_AUTH_TOKEN` come from the environment (Netlify's settings
+  when hosted, never a committed file) and are private fields of `DatabaseLocation`, so
+  logging or serializing the configuration never shows them; error messages never echo
+  the URL. Logged errors never include a query's SQL or bound parameters (which hold
+  token hashes and user data): database errors are logged as their classification.
+  Tokens, keys and cookies are never logged; the setup code of an unclaimed installation
+  is, by design.
 - The server listens on `127.0.0.1` by default (`pnpm dev`, `pnpm start`); only
   `pnpm dev:lan` / `pnpm start:lan` listen on every network interface. The socket
   binding is the boundary: a host-name check cannot keep a LAN client out, since it can

@@ -66,3 +66,25 @@ keyed by the hash of their content) is shared between workspaces.
 - UI components take a route builder (owner `/decks/<id>/…` or viewer `/s/<token>/…`)
   instead of building deck URLs themselves.
 - Sharing with a specific user (instead of a link) can later reuse the viewer scope.
+
+## Implementation notes (2026-10-10)
+
+Built as decided (`src/server/access`, `src/server/services/shared-deck-services.ts`,
+`confined-history.ts`, the `/s/<token>` pages). Additions since:
+
+- The access functions are asynchronous (`await servicesFor(user)`), because the database
+  is opened on first use (ADR 0008); a database that cannot be opened, or is not migrated,
+  fails the request with a clear error.
+- The viewer interface also has `isAvailable()`, so a page can tell a link that stopped
+  working from a version or card the deck does not have. A revoked link, an untracked
+  deck and a disabled owner all answer 404 exactly like an unknown token, also for a page
+  that was already open (the next navigation re-checks the link and shows the dead-link
+  page, never the deck's frame). Views are recorded at most hourly; the Share page shows
+  when each link was last viewed.
+- Changing a deck's Moxfield deck (after it was deleted and made again on Moxfield) is an
+  owner-scope operation (`DeckServices.relinkDeck`, or a capture with `relinkDeckId`). The
+  record of earlier Moxfield decks (`deck_relinks`) is owner-only: viewer DTOs are
+  unchanged, in line with "never says where the deck lives on Moxfield".
+- Operator scripts are not requests and do not use this layer: `pnpm export:git` finds
+  decks in every workspace, `pnpm import:local` writes into the workspace of the user it
+  is told (`--to-user`), and `pnpm users` acts on accounts only.

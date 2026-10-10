@@ -92,13 +92,52 @@ headless browsers, no spoofed User-Agents). Instead:
 1. **Server fetch** with `MOXFIELD_USER_AGENT` (a Moxfield-issued UA) when configured.
    Without it, the server sends an honest `git-moxfield/<version>` User-Agent; a
    Cloudflare block is detected (403 + HTML) and reported as `blocked`, and server
-   fetches pause for `MOXFIELD_BLOCK_BACKOFF_SECONDS`.
+   fetches pause for `MOXFIELD_BLOCK_BACKOFF_SECONDS`. On Netlify server fetching is off
+   by default (`MOXFIELD_SERVER_FETCH=off`): requests from cloud servers are blocked, so
+   every attempt would only cost a request and a backoff.
 2. **Browser capture**: the "Send to git-moxfield" bookmarklet runs on a Moxfield deck
    page, fetches the two endpoints above as the user's own browser (exactly what the
-   Moxfield page itself does), and hands the JSON to git-moxfield.
+   Moxfield page itself does), compresses the result and hands it to git-moxfield.
 3. **Manual paste**: open the two endpoint URLs in a browser and paste the JSON.
 
 All three paths feed the same validation (`zod`) and normalization code.
+
+## Capture payloads and their compression
+
+The bookmarklet wraps what it fetched in a capture envelope
+(`{ kind: 'git-moxfield/capture', version: 2, deck, primer, … }`,
+`src/integrations/moxfield/capture-protocol.ts`), serializes it as JSON and, since the
+move to Netlify (ADR 0008), compresses it before handing it over:
+
+```
+gm-gzip-base64url:<base64url of one gzip member of the UTF-8 JSON>
+```
+
+- **Why.** Netlify rejects request bodies over 6 MB with a 500 before the app runs. The
+  app accepts captures of up to 8 MB of JSON, and form encoding makes a plain capture
+  1.44 times larger on average (up to three times), so large decks would have failed at
+  the platform without a useful message. Compressed, they stay far below: measured on a
+  real deck, 835,292 bytes of JSON became 110,327 bytes of gzip (7.6:1), 147,103
+  characters encoded.
+- **How.** The browser's `CompressionStream('gzip')`, then base64url without padding,
+  whose characters need no escaping in JSON and no percent-encoding in a form, so the
+  request size is exactly the payload size. The bookmarklet embeds a small ES2020
+  encoder (`ENCODE_CAPTURE_PAYLOAD_SOURCE`); the capture and paste pages use the typed
+  one (`encodeCapturePayload`). Without `CompressionStream` (Chrome before 80, Firefox
+  before 113, Safari before 16.4) they send plain JSON.
+- **Same text everywhere.** The encoded payload is the PAYLOAD message's `json` (popup),
+  the `payload` of `POST /api/capture`, the `payload` form field (same tab) and what the
+  clipboard fallback copies; the paste form accepts it as well as plain JSON.
+- **No new envelope version.** The tag makes the encoding self-describing, and untagged
+  text is plain JSON, so bookmarklets made before compression keep working: the capture
+  page compresses what they hand over, and only their same-tab posts arrive plain. Text
+  starting with `gm-` is always treated as an encoding; an unknown one is refused.
+- **Decoding** (`capture-codec.ts`, server-only) happens after the key or session is
+  accepted, within hard limits: at most 2,000,000 encoded characters, at most
+  8,000,000 bytes inflated (a decompression bomb stops there), at most 1,400,000 bytes
+  of plain JSON; a strict base64url alphabet and valid UTF-8. Every body the capture
+  routes accept stays under Netlify's 6 MB even if the platform base64-encodes it, so
+  users see git-moxfield's own "too large" message rather than a platform error.
 
 ## Same-tab capture: `Origin: null` and the bookmarklet key
 
@@ -150,6 +189,14 @@ sees `Origin: null` on the same-tab post too (`tests/e2e/same-tab-capture.spec.t
 which also checks that a third-party page posting another member's key cannot sign a
 browser in).
 
+**Hosted on https** (Netlify), the post goes from https to https, so browsers with the
+default referrer policy send the real origin, `Origin: https://moxfield.com`, which
+`CAPTURE_ALLOWED_ORIGINS` allows by default. This was verified in Chromium and WebKit
+with an https site pair standing in for Moxfield, not against live moxfield.com (its
+response headers could not be read: Cloudflare answers 403 to non-browser clients). If
+Moxfield sends `Referrer-Policy: no-referrer`, the post arrives with `Origin: null`
+again, which is accepted. Either way the key is what authenticates.
+
 ## Failure handling
 
 | Situation                | Detection                                                                            | Result                                                                                                                                |
@@ -162,3 +209,6 @@ browser in).
 | Moxfield down            | 5xx (including an HTML maintenance page behind Cloudflare) / network error / timeout | `unavailable` / `network` / `timeout`; one retry for 5xx/network, after `Retry-After` when that is at most 5 s (no retry when longer) |
 | Schema change            | zod validation                                                                       | `schema` error listing the failing paths; partial fields produce warnings                                                             |
 | Primer missing / failing | primer request fails                                                                 | deck still ingested, primer `null` + warning                                                                                          |
+| Capture too large        | capture route body limit or codec limit                                              | 413 (`/api/capture`) or paste form with `error=too-large` (same-tab); nothing stored                                                  |
+| Capture damaged          | codec (bad tag, alphabet, gzip, UTF-8) or JSON/zod parsing                           | 400 (`/api/capture`) or paste form with `error=invalid` (same-tab); nothing stored                                                    |
+| Deck deleted, made again | new public id; the old one answers 404                                               | `not-found` on refresh; the owner changes the deck's Moxfield deck (history kept), see the README                                     |

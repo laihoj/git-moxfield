@@ -19,9 +19,7 @@ mainboard?"). The options considered:
 
 Option **A**, built so that B stays a mechanical export:
 
-- SQLite (better-sqlite3 + Drizzle ORM), one file and no server. (Since
-  [ADR 0008](0008-hosting-netlify-and-turso.md): libSQL, the same SQLite dialect, as a
-  local file in development and Turso in production.)
+- SQLite (better-sqlite3 + Drizzle ORM), one file and no server.
 - `snapshots` are content-addressed: `sha256(stableStringify(canonicalSnapshot))`.
   Identical states are stored once.
 - `commits` have Git-like ids: `sha256` of a commit object with snapshot hash, parent,
@@ -61,3 +59,25 @@ Option **A**, built so that B stays a mechanical export:
   diff nicely because the file tree is deterministic.
 - Changing the canonical serialization changes hashes. `SNAPSHOT_SCHEMA_VERSION`
   exists for that, and a golden test pins the current serialization.
+
+## Update (2026-10-10): libSQL instead of better-sqlite3
+
+[ADR 0008](0008-hosting-netlify-and-turso.md) moved the app to a hosted instance, whose
+functions have no persistent disk. The storage model above is unchanged; only the engine
+around it changed:
+
+- The database is libSQL, SQLite's dialect and file format, through Drizzle's libSQL
+  driver: a local `file:` database in development (still `data/git-moxfield.db`, still
+  WAL), `:memory:` in tests, and a Turso database over HTTP in production. The migrations,
+  including the immutability triggers, apply unchanged, and the triggers fire remotely too.
+- Access is asynchronous, and the history is written in short transactions
+  (`runInTransaction`) that never wait for Moxfield.
+- Hosted, the backup is Turso's (the free plan keeps a day of point-in-time restore), and
+  `turso db shell <database> .dump` writes a SQL dump. The Git export is still a one-way
+  projection, and `pnpm import:local` copies a local file's history into the hosted
+  database with commit ids, timestamps and payloads unchanged: content addressing makes
+  the copy verifiable.
+- Commit ids hash the deck's Moxfield reference at commit time. A deck that follows a new
+  Moxfield deck (after the old one was deleted and made again) keeps its old versions'
+  ids; `deck_relinks` keeps every earlier reference, so every id still verifies against
+  its content.

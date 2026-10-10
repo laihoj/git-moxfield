@@ -69,3 +69,15 @@ the CSRF protection. Instead:
   tests see `Origin: null` like real users do.
 
 Details: `docs/moxfield-integration.md`, "Same-tab capture".
+
+## Update (2026-10-10): personal keys and compressed captures
+
+- The per-installation capture token is gone. Every bookmarklet carries its owner's
+  personal key instead, in both modes, which decides whose workspace receives the
+  capture and signs the browser in ([ADR 0006](0006-accounts-with-bookmarklet-keys.md)).
+  Bookmarklets made with the old token must be recreated.
+- Both modes compress the capture in the browser before handing it over
+  ([ADR 0008](0008-hosting-netlify-and-turso.md)), which keeps it far below the hosting
+  platform's request limit; the server decodes it with hard size limits.
+- Hosted on Netlify, server fetch is off by default: Cloudflare blocks cloud servers as
+  well, so the bookmarklet is how decks arrive.
