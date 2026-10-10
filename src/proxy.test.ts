@@ -1,7 +1,7 @@
 /**
- * `src/proxy.ts`: the DNS-rebinding host guard runs before anything else (including
- * Basic auth) on every route that holds user data, and Basic auth still applies to
- * requests addressed to an allowed host.
+ * `src/proxy.ts`: the DNS-rebinding host guard runs on every route that holds user data,
+ * and page views refresh the session cookie's lifetime (accounts are checked where data
+ * is accessed).
  */
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
 import { NextRequest } from 'next/server';
@@ -69,17 +69,69 @@ describe('proxy host guard', () => {
     expect(proxy(request('/', { host: REBOUND })).status).toBe(421);
   });
 
-  it('checks the host before asking for Basic auth credentials', () => {
+  it('no longer asks for HTTP Basic auth, whatever the environment says', () => {
     vi.stubEnv('BASIC_AUTH_USER', 'me');
     vi.stubEnv('BASIC_AUTH_PASSWORD', 'secret');
-    expect(proxy(request('/', { host: REBOUND })).status).toBe(421);
+    const response = proxy(request('/', { host: 'localhost:3000' }));
+    expect(passedThrough(response)).toBe(true);
+    expect(response.headers.get('www-authenticate')).toBeNull();
+  });
+});
 
-    const unauthenticated = proxy(request('/', { host: 'localhost:3000' }));
-    expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers.get('www-authenticate')).toContain('Basic');
+describe('proxy session cookie refresh', () => {
+  const TOKEN = `gms_${'A'.repeat(43)}`;
 
-    const authorization = `Basic ${Buffer.from('me:secret').toString('base64')}`;
-    expect(passedThrough(proxy(request('/', { host: 'localhost:3000', authorization })))).toBe(true);
+  function setCookies(response: Response): string[] {
+    return response.headers.getSetCookie();
+  }
+
+  it('re-sets the session cookie of a page view with the full 400 days, at most daily', () => {
+    const response = proxy(
+      request('/decks/abc', { host: 'localhost:3000', cookie: `__Host-gm_session=${TOKEN}` }),
+    );
+    expect(passedThrough(response)).toBe(true);
+    expect(setCookies(response)).toEqual([
+      `__Host-gm_session=${TOKEN}; Path=/; Max-Age=34560000; HttpOnly; SameSite=Lax; Secure`,
+      '__Host-gm_session_fresh=1; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure',
+    ]);
+
+    const fresh = proxy(
+      request('/decks/abc', {
+        host: 'localhost:3000',
+        cookie: `__Host-gm_session=${TOKEN}; __Host-gm_session_fresh=1`,
+      }),
+    );
+    expect(setCookies(fresh)).toEqual([]);
+  });
+
+  it('uses the plain cookie names over plain http to a LAN address', () => {
+    const response = proxy(request('/', { host: '192.168.1.20:3000', cookie: `gm_session=${TOKEN}` }));
+    expect(setCookies(response)[0]).toBe(
+      `gm_session=${TOKEN}; Path=/; Max-Age=34560000; HttpOnly; SameSite=Lax`,
+    );
+  });
+
+  it.each([
+    ['a POST (a server action may be signing out)', '/account', 'POST'],
+    ['the hand-off route', '/api/auth/handoff', 'GET'],
+  ])('never refreshes on %s', (_case, path, method) => {
+    const response = proxy(
+      request(path, { host: 'localhost:3000', cookie: `__Host-gm_session=${TOKEN}` }, method),
+    );
+    expect(setCookies(response)).toEqual([]);
+  });
+
+  it('sets no cookie for a signed-out browser or a malformed session cookie', () => {
+    expect(setCookies(proxy(request('/', { host: 'localhost:3000' })))).toEqual([]);
+    expect(
+      setCookies(proxy(request('/', { host: 'localhost:3000', cookie: '__Host-gm_session=gms_nope' }))),
+    ).toEqual([]);
+  });
+
+  it('never refreshes for a rejected host', () => {
+    const response = proxy(request('/', { host: REBOUND, cookie: `gm_session=${TOKEN}` }));
+    expect(response.status).toBe(421);
+    expect(setCookies(response)).toEqual([]);
   });
 });
 

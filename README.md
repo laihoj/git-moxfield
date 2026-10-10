@@ -226,7 +226,7 @@ Full design: [`docs/architecture.md`](docs/architecture.md). UX:
 
 | Table                           | Purpose                                                                            |
 | ------------------------------- | ---------------------------------------------------------------------------------- |
-| `workspaces`                    | Single `local` workspace; seam for multi-user auth later                           |
+| `workspaces`                    | One private space per user (decks belong to it); `local` from before accounts      |
 | `decks`                         | Tracked decks: source + external id, cached name, HEAD branch                      |
 | `branches`                      | `main` per deck; experiments later (`kind`, `base_commit_id`)                      |
 | `commits`                       | Immutable versions: parent, snapshot, message, Moxfield version, raw payload ref   |
@@ -234,8 +234,12 @@ Full design: [`docs/architecture.md`](docs/architecture.md). UX:
 | `raw_blobs`                     | gzip raw Moxfield payloads (sha256)                                                |
 | `observations`                  | Latest fetches or captures of the live deck (the "working tree"), pruned on ingest |
 | `version_tags` / `commit_notes` | Mutable annotations on versions                                                    |
-| `card_catalog`                  | Display facts (type line, mana cost); not versioned                                |
-| `app_settings`                  | Per-installation settings (e.g. the bookmarklet capture token)                     |
+| `card_catalog`                  | Display facts (type line, mana cost) per workspace; not versioned                  |
+| `app_settings`                  | Per-installation settings (e.g. the setup code of an unclaimed installation)       |
+| `users` / `credentials`         | Accounts and their bookmarklet keys (hashed; ADR 0006)                             |
+| `sessions`                      | Signed-in browsers and pending bookmarklet hand-offs (hashed tokens)               |
+| `login_links` / `invites`       | One-time device, recovery and invite links (hashed tokens)                         |
+| `share_links`                   | Read-only links to a deck's history (ADR 0007; next step)                          |
 
 ## Development
 
@@ -302,11 +306,14 @@ Playwright runs desktop and mobile journeys against the mock Moxfield and a sepa
 dev server (`.next-e2e`, `data/e2e.db`). Stop any other `next dev` that uses
 `.next-e2e` first.
 
-Every test starts with the mock back to its seeded decks and the app's server-fetch
-pause cleared (`POST /api/e2e/reset`, which exists only with `GIT_MOXFIELD_E2E=true`),
-tracks a deck of its own, keeps the browser off the internet, and fails on browser
-console errors, hydration warnings and uncaught page errors
-(`tests/e2e/support/fixtures.ts`).
+The run starts with an empty database, so a `first-run` project first claims the
+installation with its setup code, as an operator would. Every other test then signs in
+users of its own (`POST /api/e2e/session`), or signs in through the real flows when
+that is what it tests. Every test starts with the mock back to its seeded decks and the
+app's server-fetch pause cleared (`POST /api/e2e/reset`); the `/api/e2e/*` endpoints
+exist only with `GIT_MOXFIELD_E2E=true`. Tests keep their browsers off the internet
+and fail on browser console errors, hydration warnings and uncaught page errors, in
+every browser context they open (`tests/e2e/support/fixtures.ts`).
 
 What is covered:
 
@@ -330,24 +337,29 @@ What is covered:
   same-tab bookmarklet; the popup bookmarklet for an untracked deck (desktop); pasting
   the deck JSON; a stale commit; and the phone layout (bottom navigation, touch commit
   form, no sideways scrolling on any page).
+- **Accounts end to end:** claiming a fresh installation; an invite accepted in a
+  second browser, followed by a new bookmarklet; both bookmarklets signing a fresh
+  browser in while capturing into their owner's workspace (same-tab with
+  `Origin: null`); device and recovery links (once only, never used up by opening
+  them); revoked bookmarklets and disabled accounts; signing out one browser, another
+  or every one; and private decks (another user's deck is a 404 on every page).
 
 ## Configuration
 
 All optional. See [`.env.example`](.env.example).
 
-| Variable                                  | Default                | Purpose                                                                |
-| ----------------------------------------- | ---------------------- | ---------------------------------------------------------------------- |
-| `DATABASE_PATH`                           | `data/git-moxfield.db` | SQLite file                                                            |
-| `MOXFIELD_USER_AGENT`                     | —                      | Moxfield-issued User-Agent for server-side access                      |
-| `MOXFIELD_SERVER_FETCH`                   | `auto`                 | `off` = bookmarklet/paste only                                         |
-| `MOXFIELD_BLOCK_BACKOFF_SECONDS`          | `3600`                 | Pause after a Cloudflare block                                         |
-| `MOXFIELD_MIN_REQUEST_INTERVAL_MS`        | `1000`                 | Spacing between Moxfield requests                                      |
-| `REFRESH_COOLDOWN_SECONDS`                | `10`                   | Minimum time between refreshes of one deck                             |
-| `AUTO_REFRESH_AFTER_SECONDS`              | `300`                  | Deck page refreshes in the background when older                       |
-| `PUBLIC_APP_URL`                          | request origin         | URL baked into bookmarklets (e.g. a LAN address for your phone)        |
-| `ALLOWED_HOSTS`                           | —                      | Other host names to answer to, e.g. `mybox.local` (see security notes) |
-| `CAPTURE_ALLOWED_ORIGINS`                 | `https://moxfield.com` | Origins allowed to hand decks to `/capture`                            |
-| `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` | —                      | HTTP Basic auth; recommended with `dev:lan` / `start:lan`              |
+| Variable                           | Default                | Purpose                                                                |
+| ---------------------------------- | ---------------------- | ---------------------------------------------------------------------- |
+| `DATABASE_PATH`                    | `data/git-moxfield.db` | SQLite file                                                            |
+| `MOXFIELD_USER_AGENT`              | —                      | Moxfield-issued User-Agent for server-side access                      |
+| `MOXFIELD_SERVER_FETCH`            | `auto`                 | `off` = bookmarklet/paste only                                         |
+| `MOXFIELD_BLOCK_BACKOFF_SECONDS`   | `3600`                 | Pause after a Cloudflare block                                         |
+| `MOXFIELD_MIN_REQUEST_INTERVAL_MS` | `1000`                 | Spacing between Moxfield requests                                      |
+| `REFRESH_COOLDOWN_SECONDS`         | `10`                   | Minimum time between refreshes of one deck                             |
+| `AUTO_REFRESH_AFTER_SECONDS`       | `300`                  | Deck page refreshes in the background when older                       |
+| `PUBLIC_APP_URL`                   | request origin         | URL baked into bookmarklets (e.g. a LAN address for your phone)        |
+| `ALLOWED_HOSTS`                    | —                      | Other host names to answer to, e.g. `mybox.local` (see security notes) |
+| `CAPTURE_ALLOWED_ORIGINS`          | `https://moxfield.com` | Origins allowed to hand decks to `/capture`                            |
 
 **Security notes.**
 
@@ -355,8 +367,9 @@ All optional. See [`.env.example`](.env.example).
   React text or as markdown without raw HTML (links limited to http, https and mailto;
   images not loaded).
 - A strict CSP and security headers are set.
-- The capture endpoints only accept same-origin JSON, or a form POST carrying the
-  installation's capture token.
+- Every user signs in (ADR 0006): bookmarklet keys, sessions and one-time links are
+  stored hashed. The capture endpoints only accept same-origin JSON from a signed-in
+  browser or with a bookmarklet key, or a form POST carrying a bookmarklet key.
 - Requests are only answered when addressed to an IP address, `localhost`, the host of
   `PUBLIC_APP_URL` or a name in `ALLOWED_HOSTS` (others get `421 Unknown host`). This
   stops DNS-rebinding attacks, in which a web page re-points its own domain name to
@@ -364,10 +377,8 @@ All optional. See [`.env.example`](.env.example).
   (an mDNS name such as `mybox.local`, a reverse proxy's domain), list it in
   `ALLOWED_HOSTS`.
 - The app listens on `127.0.0.1` by default, so other machines cannot reach it.
-  `pnpm dev:lan` / `pnpm start:lan` expose it to your network, with no authentication
-  unless `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` are set: anyone on the network
-  could then read your decks and untrack them. Use them on trusted networks only, and
-  set the Basic auth variables.
+  `pnpm dev:lan` / `pnpm start:lan` expose it to your network; every page still
+  requires signing in.
 
 ### Using it from another device
 
@@ -379,7 +390,7 @@ pnpm build
 ```
 
 ```bash
-PUBLIC_APP_URL=http://192.168.1.20:3000 BASIC_AUTH_USER=me BASIC_AUTH_PASSWORD=secret pnpm start:lan
+PUBLIC_APP_URL=http://192.168.1.20:3000 pnpm start:lan
 ```
 
 Put the variables in `.env.local` to keep them. Then open the LAN address on the phone

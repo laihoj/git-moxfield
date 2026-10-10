@@ -100,11 +100,12 @@ headless browsers, no spoofed User-Agents). Instead:
 
 All three paths feed the same validation (`zod`) and normalization code.
 
-## Same-tab capture: `Origin: null` and the capture token
+## Same-tab capture: `Origin: null` and the bookmarklet key
 
 The same-tab bookmarklet (phones, in-app browsers) submits a hidden form from the
 Moxfield deck page to git-moxfield's `/api/capture/form`. That is a cross-site POST, so
-the endpoint needs its own CSRF protection.
+the endpoint cannot rely on the browser's session cookie (`SameSite=Lax` cookies are
+not sent with it) or on the `Origin` header.
 
 **Finding (2026-10-09, real end-to-end test against live moxfield.com in Chromium):**
 the post from `https://moxfield.com/decks/…` to `http://localhost:3003/api/capture/form`
@@ -113,36 +114,41 @@ behavior, not a quirk: for a non-CORS request whose method is not `GET`/`HEAD`, 
 Fetch standard serializes the request origin as `null` when the referrer policy is
 `no-referrer`, or when it is `strict-origin-when-cross-origin` (the browser default),
 `strict-origin` or `no-referrer-when-downgrade` and the request goes from an `https:`
-page to a non-`https:` URL. git-moxfield normally runs on plain http (localhost or a LAN
+page to a non-`https:` URL. git-moxfield often runs on plain http (localhost or a LAN
 address), so every real same-tab capture looks like this. The first implementation
 required `Origin: https://moxfield.com` and therefore rejected every real capture with
 403; the mock Moxfield did not reproduce it because mock and app both run on http.
 
 `Origin: null` cannot authenticate anything: any site can produce it (a `no-referrer`
-policy, a sandboxed frame). So the endpoint is protected by a **capture token**:
+policy, a sandboxed frame). So the endpoint authenticates the **bookmarklet key**
+(ADR 0006): each bookmarklet carries its user's personal `gmk_` key as the form field
+`token` next to `payload`.
 
-- Each installation has a secret token: 32 random bytes as 64 hex characters, created
-  atomically on first use and stored in the `app_settings` table (key `capture-token`).
-- The setup page bakes it into the same-tab bookmarklet, which posts it as the form
-  field `token` next to `payload`. The endpoint compares it in constant time (SHA-256
-  digests and `timingSafeEqual`) and answers 403 with reinstall instructions otherwise.
-  It logs whether a token was missing or wrong, never its value.
+- The key decides whose workspace receives the deck. Requests without a valid key get
+  403 with reinstall instructions; the log says whether a key was missing, malformed or
+  unknown, never its value.
+- The key does **not** prove that the browser's own user ran the bookmarklet: any
+  member can post their own valid key from any page. A forged post can therefore only
+  ever add a deck to the forger's own workspace, and it never changes who the browser
+  is signed in as on its own (no login CSRF): the endpoint starts a pending hand-off
+  that signs nobody in and redirects through `/api/auth/handoff`, a top-level GET that
+  carries the browser's own session cookie. A browser already signed in as the key's
+  owner goes straight on to the deck; any other browser (signed out, or signed in as
+  someone else) gets `/signin/bookmarklet`, which names the account and the
+  bookmarklet and asks once, and only a same-origin POST from that page signs it in.
 - The `Origin` check remains as defence in depth: `null`, a missing header, or one of
   `CAPTURE_ALLOWED_ORIGINS` (e.g. `https://moxfield.com` when git-moxfield is served
   over https) pass; any other explicit origin is a third-party site and gets 403.
-- The popup bookmarklet carries no token. It hands the deck to git-moxfield's own
-  capture page by `postMessage` (exact origins and a one-time nonce), and that page
-  submits it same-origin to `/api/capture`.
-- The same-tab bookmarklet is therefore a credential for this installation: it only
-  runs on the Moxfield site origin, and the token sits in a hidden form field for the
-  moment of the post. Bookmarklets made before the token existed, or by another
-  installation, get the 403 page and must be reinstalled from `/setup`.
-- To revoke the token, delete it (`DELETE FROM app_settings WHERE key = 'capture-token'`
-  in the app's SQLite database); a new one is created on the next visit to `/setup`, and
-  the same-tab bookmarklet must be reinstalled.
+- The popup bookmarklet hands the deck and the key to git-moxfield's own capture page by
+  `postMessage` (exact origins and a one-time nonce), and that page submits them
+  same-origin to `/api/capture`.
+- Bookmarklets made before accounts, or by another installation, get the 403 page and
+  must be recreated from `/setup`. A key is revoked in Account.
 
 The mock Moxfield's deck page sends `Referrer-Policy: no-referrer`, so the e2e suite
-sees `Origin: null` on the same-tab post too (`tests/e2e/same-tab-capture.spec.ts`).
+sees `Origin: null` on the same-tab post too (`tests/e2e/same-tab-capture.spec.ts`,
+which also checks that a third-party page posting another member's key cannot sign a
+browser in).
 
 ## Failure handling
 

@@ -206,7 +206,7 @@ payloads they reference, are append-only; the working state is not (see below).
 
 | Table            | Purpose                                                                      |
 | ---------------- | ---------------------------------------------------------------------------- |
-| `workspaces`     | Single `local` workspace today; seam for multi-user later.                   |
+| `workspaces`     | One private space per user; `local` holds pre-account history.               |
 | `decks`          | Tracked decks (source + external id, cached name, HEAD branch).              |
 | `branches`       | `main` per deck today; experiments later (`kind`, `base_commit_id`).         |
 | `snapshots`      | Canonical JSON keyed by sha256. Immutable.                                   |
@@ -216,8 +216,14 @@ payloads they reference, are append-only; the working state is not (see below).
 | `commits`        | Immutable versions: parent, snapshot, message, source version, raw.          |
 | `version_tags`   | Mutable labels on versions (many per version, reusable names).               |
 | `commit_notes`   | Mutable structured annotations on versions (`kind` + JSON), git-notes style. |
-| `card_catalog`   | Card facts for display (type line, mana cost). Not versioned.                |
-| `app_settings`   | Per-installation key/value settings and secrets (the capture token).         |
+| `card_catalog`   | Card facts for display (type line, mana cost), per workspace. Not versioned. |
+| `app_settings`   | Per-installation key/value settings and secrets (the setup code).            |
+| `users`          | Accounts (ADR 0006): display name, role, workspace, disabled state.          |
+| `credentials`    | Bookmarklet keys (hashed), with the key each one was made through.           |
+| `sessions`       | Signed-in browsers and pending bookmarklet hand-offs (hashed tokens).        |
+| `login_links`    | One-time device and recovery links (hashed), kept as the recovery record.    |
+| `invites`        | One-time invitations that create an account (hashed).                        |
+| `share_links`    | Read-only links to one deck's history (ADR 0007, next step).                 |
 
 Immutability is enforced in the database: triggers abort `UPDATE` on `commits`,
 `snapshots`, `raw_blobs`, and abort `DELETE` on `commits` unless the owning deck is
@@ -302,14 +308,16 @@ export of a chosen version.
   (`src/server/host-guard.ts`). Without it, a page whose domain the attacker re-points
   to 127.0.0.1 would be same-origin with the app (its `Origin` matches its `Host`), pass
   the capture endpoint's and Next.js's server-action origin checks, and could read
-  every page, including the capture token on `/setup`. IP literals and `localhost` need
+  every page, including the bookmarklets on `/setup`. IP literals and `localhost` need
   no configuration because browsers only send them when no attacker-controlled DNS is
   involved; any other name (e.g. `mybox.local`) must be listed.
 - The capture endpoint accepts only same-origin JSON POSTs; the capture page only
   accepts `postMessage` from `https://moxfield.com` with a one-time nonce. The
-  same-tab form endpoint requires the installation's capture token, which only the
-  user's own same-tab bookmarklet carries (its `Origin` is `null` in practice; see
-  `moxfield-integration.md`).
+  same-tab form endpoint requires a valid bookmarklet key, which decides whose
+  workspace receives the deck (its `Origin` is `null` in practice; see
+  `moxfield-integration.md`). Since any member can post their own key from any page,
+  the sign-in it hands off never changes who a browser is without a same-origin
+  confirmation on `/signin/bookmarklet`.
 - The server only ever requests fixed Moxfield API hosts; user input is parsed into a
   validated deck id, never used as a URL.
 - No secrets are exposed to the browser (`MOXFIELD_USER_AGENT` is server-only).
@@ -317,5 +325,13 @@ export of a chosen version.
   `pnpm dev:lan` / `pnpm start:lan` listen on every network interface. The socket
   binding is the boundary: a host-name check cannot keep a LAN client out, since it can
   send any `Host`.
-- Optional HTTP Basic auth (`BASIC_AUTH_USER`/`BASIC_AUTH_PASSWORD`) for exposing the
-  app beyond localhost; recommended with the `:lan` scripts.
+- Accounts (ADR 0006) replace the former optional HTTP Basic auth: every page and
+  endpoint resolves the signed-in user from the session cookie, and deck data is only
+  reachable through services bound to that user's workspace (ADR 0007). Account
+  cookies use the `__Host-` prefix wherever they are `Secure`, so a sibling subdomain
+  cannot plant them, and a cookie sent twice is treated as absent.
+- `next` redirect targets are validated after dot-segment normalization, so
+  `/.//evil` never becomes a protocol-relative `//evil` (`src/server/auth/paths.ts`).
+- The end-to-end suite's `/api/e2e/*` endpoints exist only in development and test
+  builds with `GIT_MOXFIELD_E2E=true`; production builds compile them away and the
+  configuration refuses the flag with `NODE_ENV=production`.
