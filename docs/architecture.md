@@ -406,15 +406,14 @@ head (step 3) is what keeps two instances from committing over each other. The f
 step 2 happens outside any transaction; transactions hold no network request other than
 their own statements.
 
-Known limitation (remote mode only): reads outside a transaction see whatever is committed
-when each statement runs. Loading a deck's working state reads its latest observation and
-then that observation's snapshot in separate statements, and the commit's pre-checks
-(step 1) read outside a transaction too. If another instance ingests the same deck twice in
-between, pruning removes that snapshot and the request fails with "Snapshot … is missing"
-instead of answering with the newer state or `stale`. A stress test of 6 processes on one
-deck hit it in 2 of 240 rounds; real use would need two captures of one deck within
-milliseconds. History stays consistent. Planned fix: read the pre-checks in one short
-transaction and retry the working-state read when its snapshot is gone.
+Reads outside a transaction see whatever is committed when each statement runs, and
+another instance may ingest the same deck (and prune the state it replaces) between two
+statements. So an observation is always read together with its snapshot in one statement
+(`observations.latestWithSnapshot`, `getWithSnapshot`), and so is HEAD
+(`commits.headWithSnapshot`); the commit's pre-checks compare snapshots already in
+memory. One statement sees one consistent state, so a read can never find a pruned
+snapshot. A read-only transaction would also be consistent but costs a round trip per
+statement remotely, and retrying after a miss would only make the failure rarer.
 
 Request-handling code gets services from `src/server/access` (`servicesFor(user)`,
 `shareLinkServicesFor(user)`, `sharedDeckServices(token)`) and the auth service from
@@ -508,7 +507,12 @@ Design and rationale: [ADR 0007](./adr/0007-access-control-and-share-links.md). 
 ## Deployment
 
 Design, limits and rationale: [ADR 0008](./adr/0008-hosting-netlify-and-turso.md); the
-steps are in the README. The hosted instance is one Netlify site and one Turso database:
+steps are in the README. The hosted instance is one Netlify site and one Turso database.
+Every route renders dynamically, so nothing is prefetched: all internal links and GET
+forms go through `src/components/ui/navigation.tsx` (`Link` always passes
+`prefetch={false}`, `Form` replaces `next/form`, and a thin progress bar shows waits over
+200 ms), and an ESLint rule forbids importing `next/link` or `next/form` anywhere else.
+A page view is one request.
 
 ```
 browser ──HTTPS──► Netlify CDN ─────────── static assets (.next/static, icons, manifest)

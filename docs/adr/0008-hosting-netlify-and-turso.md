@@ -153,8 +153,11 @@ above:
   against sqld.
   Not yet verified on Turso Cloud or Netlify themselves: real latency between them, the
   exact shape of the quota error, and how the build servers apply `ignore`.
-- **Open issues**, found by that verification and listed in the README: Next.js link
-  prefetching multiplies function invocations and rows read per page view; a capture
-  rewrites every card fact of the deck; and two captures of one deck within milliseconds
-  on different instances can make a concurrent read fail (a read skew between two
-  statements outside a transaction; history stays consistent).
+- **Issues found by that verification, all fixed before the first deploy:** Next.js
+  link prefetching multiplied function invocations and rows read per page view (no
+  link or form prefetches any more: 18 instead of 373 requests and 3,884 instead of
+  39,457 rows read across 18 page views); a capture rewrote every card fact of the deck
+  (unchanged facts are skipped); and two captures of one deck within milliseconds on
+  different instances could make a concurrent read fail (observations and HEAD are now
+  read together with their snapshots in one statement; 0 failures in about 4,700
+  stress-test rounds, against about 5% before).

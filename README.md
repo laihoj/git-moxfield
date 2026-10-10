@@ -321,21 +321,21 @@ computer with `pnpm install` done.
    repository). A token with an expiration would take the site down when it expires.
 
 4. **Push the repository to GitHub.** Netlify builds from Git. Create an empty private
-   repository on GitHub (no README, no license), then push the `master` branch:
+   repository on GitHub (no README, no license), then push the `main` branch:
 
    ```bash
    git remote add origin git@github.com:<you>/git-moxfield.git
    ```
 
    ```bash
-   git push -u origin master
+   git push -u origin main
    ```
 
 5. **Create the Netlify project.** In Netlify: _Add new project › Import an existing
    project › GitHub_, allow access to the repository and pick it. The build settings come
    from [`netlify.toml`](netlify.toml) (build command `pnpm run build`, publish directory
    `.next`, Node 24): leave them as they are, with no base directory, and deploy the
-   `master` branch. This first deploy fails at its last step, the migration, which
+   `main` branch. This first deploy fails at its last step, the migration, which
    refuses to run without `TURSO_DATABASE_URL`. That is expected, and failed deploys cost
    no credits. (If the import page already lets you choose the project name and add
    environment variables, do steps 6 and 7 there, and the first deploy succeeds.)
@@ -366,7 +366,7 @@ computer with `pnpm install` done.
    write the production database. `netlify.toml` cancels such builds anyway; this keeps
    them from starting.
 
-9. **Deploy.** _Deploys › Trigger deploy_ (or push to `master`). Production builds run
+9. **Deploy.** _Deploys › Trigger deploy_ (or push to `main`). Production builds run
    `pnpm run build && pnpm run db:migrate`: if the build succeeds, the migrations are
    applied to the Turso database (the deploy log shows "Applied N migrations" and
    "Referential integrity verified"), and only then is the deploy published. A failed
@@ -397,7 +397,7 @@ computer with `pnpm install` done.
 12. **Bring your local history** (optional): see
     [Moving your local history to the hosted instance](#moving-your-local-history-to-the-hosted-instance).
 
-**Updating.** Every push to `master` builds, migrates and publishes a new deploy (15
+**Updating.** Every push to `main` builds, migrates and publishes a new deploy (15
 credits). Migrations run before publishing, so the deploy still live keeps serving on
 them for a moment; that is why every migration stays compatible with the previous
 release (expand, then contract), and why the app tolerates, and logs, a database that is
@@ -430,11 +430,12 @@ Neither plan bills you: when a limit is reached, things stop until the next mont
 What that means in practice:
 
 - **Deploys are the cost you control.** 20 deploys would use every credit before anyone
-  visits the site; push to `master` in batches, a few times a month at most.
-- **Rows.** Measured against the official libSQL server with a 113-card deck: a capture
-  writes about 470 to 590 rows, a commit about 10; a page view in the browser reads up
-  to about 2,300 rows, most of it for the pages Next.js prefetches from its links. That
-  is roughly 17,000 captures and 200,000 page views a month.
+  visits the site; push to `main` in batches, a few times a month at most.
+- **Rows.** Measured against the official libSQL server with a 100-card deck: a capture
+  that changes the deck writes about 430 rows, a commit about 10; a page view reads
+  30 to 450 rows, at most about 850 (a version page). Links never prefetch, so a page
+  view is one request. That is roughly 20,000 captures and well over 500,000 page views
+  a month.
 - **Platform limits** that shape the app: request bodies of at most 6 MB (captures are
   compressed in the browser: a typical deck travels as about 0.15 MB), 60 seconds per
   request, functions in Ohio only. Turso refuses values over 5 MB; the app refuses to
@@ -857,19 +858,6 @@ Verified against live Moxfield on 2026-10-09.
   tag is deck-specific or global.
 - Restore text uses `Front // Back` names for double-faced cards. Moxfield's own
   export currently writes `Front / Back`, and both are expected to resolve.
-- **Hosted, Next.js prefetching multiplies the cost of a page view.** Each page view
-  prefetches the pages it links to (about 16 to 25 server renders), each a function
-  invocation that queries the database: a version page view becomes 26 invocations and
-  about 2,300 rows read instead of 1 and 760. Turning prefetching off for deck
-  navigation is planned.
-- **Hosted, a capture rewrites the deck's card details** (`card_catalog`) even when
-  nothing changed: a quarter to half of the rows a capture writes.
-- **A rare error page when one deck is captured twice within milliseconds** on different
-  servers of the hosted instance: a page that reads the deck's latest state in between
-  can fail with "Snapshot … is missing" (seen in 2 of 240 rounds of a 6-process stress
-  test). Reloading shows the deck; no data is affected.
-- `pnpm db:migrate` with a missing or wrong `TURSO_AUTH_TOKEN` only says "Server
-  returned HTTP status 401".
 - Verified against the official libSQL server and Netlify's build tooling run offline,
   not yet on Turso Cloud and Netlify themselves: real latency between the two (each
   query is one HTTPS round trip; a version page makes 37), and the exact shape of
@@ -883,8 +871,8 @@ Verified against live Moxfield on 2026-10-09.
 
 ## Roadmap
 
-1. **Cheaper hosted page views.** No prefetching for deck navigation and version links,
-   and card details written only when they change, to stretch the free plans.
+1. **Cheaper captures.** Index a state's cards (`snapshot_cards`) only once it is
+   committed: a capture that changes the deck would write about 15 rows instead of 430.
 2. **Experiments (branches).** "Start experiment from v36: Broodlord package". The
    `branches` table already exists, with `kind = 'experiment'` and `base_commit_id`.
    Commits get associated with the active experiment, and experiment tips can be
