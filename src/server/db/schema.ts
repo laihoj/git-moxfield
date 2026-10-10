@@ -63,6 +63,35 @@ export const decks = sqliteTable(
   (t) => [uniqueIndex('decks_workspace_source_external_uq').on(t.workspaceId, t.source, t.externalId)],
 );
 
+/**
+ * The record of a deck's changes of source deck ("Change Moxfield deck"): the user deleted
+ * the deck on Moxfield and made it again, which gave it a new public id, and the deck's
+ * history continues with the new one. One row per change, oldest first by `created_at`;
+ * the deck row holds the current reference.
+ *
+ * Commits keep the reference they were made under: a commit's id hashes `deck
+ * <source>:<externalId>` as it was at commit time, so versions from before a change hash
+ * `previous_external_id` (or an even earlier one). These rows are how that stays
+ * verifiable. Removed with the deck.
+ */
+export const deckRelinks = sqliteTable(
+  'deck_relinks',
+  {
+    id: text('id').primaryKey(),
+    deckId: text('deck_id')
+      .notNull()
+      .references(() => decks.id, { onDelete: 'cascade' }),
+    /** The source deck the deck followed until this change (same source as the deck). */
+    previousExternalId: text('previous_external_id').notNull(),
+    previousUrl: text('previous_url').notNull(),
+    /** The source deck the deck followed from this change on. */
+    externalId: text('external_id').notNull(),
+    url: text('url').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [index('deck_relinks_deck_idx').on(t.deckId, t.createdAt)],
+);
+
 /** Canonical snapshots, content-addressed. Immutable. */
 export const snapshots = sqliteTable('snapshots', {
   hash: text('hash').primaryKey(),

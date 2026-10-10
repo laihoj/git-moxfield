@@ -216,6 +216,108 @@ describe('decks repository', () => {
     expect(await repos.decks.delete(deck.id)).toBe(false);
   });
 
+  it('points a deck at another source deck, recording the change and clearing its fetch status', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos, { externalId: 'OldDeckId' });
+    const v1 = await commitTestSnapshot(repos, deck, buildSnapshot(baseDeckSpec()));
+    await repos.decks.recordFetchAttempt(deck.id, '2026-01-02T00:00:00.000Z');
+    await repos.decks.recordFetchError(deck.id, {
+      code: 'not-found',
+      message: 'Gone',
+      at: '2026-01-02T00:00:00.000Z',
+      retryAfterSeconds: null,
+    });
+
+    const relink = await repos.decks.relink(deck.id, {
+      expectedExternalId: 'OldDeckId',
+      externalId: 'NewDeckId',
+      url: 'https://moxfield.com/decks/NewDeckId',
+    });
+    expect(relink).toEqual({
+      id: expect.stringMatching(/^id-/) as unknown,
+      deckId: deck.id,
+      previousExternalId: 'OldDeckId',
+      previousUrl: 'https://moxfield.com/decks/OldDeckId',
+      externalId: 'NewDeckId',
+      url: 'https://moxfield.com/decks/NewDeckId',
+      createdAt: expect.any(String) as unknown,
+    });
+    const relinked = await repos.decks.getById(deck.id);
+    expect(relinked).toMatchObject({
+      externalId: 'NewDeckId',
+      url: 'https://moxfield.com/decks/NewDeckId',
+      name: deck.name,
+      lastFetchAttemptAt: null,
+      lastFetchError: null,
+      updatedAt: relink.createdAt,
+    });
+    expect(await repos.decks.getBySourceExternal('moxfield', 'OldDeckId')).toBeNull();
+    expect((await repos.decks.getBySourceExternal('moxfield', 'NewDeckId'))?.id).toBe(deck.id);
+    // The history is untouched.
+    expect((await repos.commits.lineage(deck.id)).map((commit) => commit.id)).toEqual([v1.id]);
+
+    const again = await repos.decks.relink(deck.id, {
+      expectedExternalId: 'NewDeckId',
+      externalId: 'NewestDeckId',
+      url: 'https://moxfield.com/decks/NewestDeckId',
+    });
+    expect(await repos.decks.listRelinks(deck.id)).toEqual([relink, again]);
+  });
+
+  it('refuses a source deck change that is stale, unchanged or taken, changing nothing', async () => {
+    const { db, repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos, { externalId: 'OldDeckId' });
+    await createTestDeck(repos, { externalId: 'TakenDeckId' });
+    const change = (expectedExternalId: string, externalId: string) =>
+      repos.decks.relink(deck.id, {
+        expectedExternalId,
+        externalId,
+        url: `https://moxfield.com/decks/${externalId}`,
+      });
+
+    await expectRepositoryError(change('SomethingElse', 'NewDeckId'), 'conflict');
+    await expectRepositoryError(change('OldDeckId', 'OldDeckId'), 'invalid-input');
+    await expectRepositoryError(change('OldDeckId', 'TakenDeckId'), 'conflict');
+    await expectRepositoryError(change('OldDeckId', ''), 'invalid-input');
+    await expectRepositoryError(
+      repos.decks.relink('no-such-deck', {
+        expectedExternalId: 'x',
+        externalId: 'y',
+        url: 'https://moxfield.com/decks/y',
+      }),
+      'not-found',
+    );
+    expect((await repos.decks.getById(deck.id))?.externalId).toBe('OldDeckId');
+    expect(await countRows(db, 'deck_relinks')).toBe(0);
+  });
+
+  it('keeps source deck changes within the workspace and removes them with the deck', async () => {
+    const { db, repos } = await createTestRepositories();
+    await db.insert(workspaces).values({ id: 'team', name: 'Team', createdAt: '2026-01-01T00:00:00.000Z' });
+    const team = createRepositories(db, { workspaceId: 'team' });
+    const deck = await createTestDeck(repos, { externalId: 'OldDeckId' });
+    // Another workspace tracking the new deck does not stand in the way…
+    await createTestDeck(team, { externalId: 'NewDeckId' });
+    await repos.decks.relink(deck.id, {
+      expectedExternalId: 'OldDeckId',
+      externalId: 'NewDeckId',
+      url: 'https://moxfield.com/decks/NewDeckId',
+    });
+    // …and cannot see or change this workspace's deck.
+    expect(await team.decks.listRelinks(deck.id)).toEqual([]);
+    await expectRepositoryError(
+      team.decks.relink(deck.id, {
+        expectedExternalId: 'NewDeckId',
+        externalId: 'OtherDeckId',
+        url: 'https://moxfield.com/decks/OtherDeckId',
+      }),
+      'not-found',
+    );
+    expect(await repos.decks.listRelinks(deck.id)).toHaveLength(1);
+    expect(await repos.decks.delete(deck.id)).toBe(true);
+    expect(await countRows(db, 'deck_relinks')).toBe(0);
+  });
+
   it('scopes decks to the configured workspace', async () => {
     const { db, repos } = await createTestRepositories();
     await db.insert(workspaces).values({ id: 'team', name: 'Team', createdAt: '2026-01-01T00:00:00.000Z' });

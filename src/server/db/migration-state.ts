@@ -175,6 +175,33 @@ export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<Migr
   return state;
 }
 
+/**
+ * The app's runtime check of a remote database (migrated by the deploy, never by the app):
+ * resolves when every migration of `journal` (default: the ones this build ships) is
+ * applied, with the state. That is `up-to-date`, or `ahead` with nothing pending: a newer
+ * build added migrations, which are backward compatible with the deploy that was live when
+ * they were applied (ADR 0008: expand, then contract). The caller should log an `ahead`
+ * state.
+ *
+ * Tolerating `ahead` keeps the live deploy working while a new deploy is published (its
+ * migrations run before the publish, and stay applied if the publish fails), and after an
+ * instant rollback to an earlier deploy. Never migrate an `ahead` database with this build
+ * ({@link applyMigrations} refuses).
+ *
+ * @throws {MigrationStateError} when a migration of `journal` is not applied (the database
+ *   is `missing`, `behind`, or `ahead` along another line of migrations), with a message
+ *   that says what to do.
+ */
+export async function assertMigrationsApplied(
+  db: LibsqlExecutor,
+  journal: readonly MigrationJournalEntry[] = bundledMigrations(),
+): Promise<MigrationState> {
+  const state = await checkMigrationState(db, journal);
+  const servable = state.status === 'up-to-date' || (state.status === 'ahead' && state.pending.length === 0);
+  if (!servable) throw new MigrationStateError(state);
+  return state;
+}
+
 /** A row of `PRAGMA foreign_key_check`. */
 interface ForeignKeyViolation {
   table: string;

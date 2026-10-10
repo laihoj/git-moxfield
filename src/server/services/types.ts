@@ -80,9 +80,28 @@ export interface VersionListItemDTO extends VersionRefDTO {
   ingestMethod: IngestMethod;
 }
 
+/**
+ * A change of the deck's Moxfield deck ("Change Moxfield deck", or "Continue an existing
+ * deck's history" when capturing): the deck was deleted on Moxfield and made again under
+ * a new public id, and its history continues with the new one. For the owner only: it
+ * names decks on Moxfield.
+ */
+export interface DeckRelinkDTO {
+  /** The Moxfield deck followed before the change. */
+  previousExternalId: string;
+  previousUrl: string;
+  /** The Moxfield deck followed from the change on. */
+  externalId: string;
+  url: string;
+  /** When the change was made. */
+  at: string;
+}
+
 export interface DeckOverviewDTO extends DeckSummaryDTO {
   /** HEAD → working diff (HEAD missing ⇒ diff from the empty deck). Null without a working state. */
   diff: DeckDiff | null;
+  /** The deck's changes of Moxfield deck, newest first. */
+  relinks: DeckRelinkDTO[];
   warnings: IngestWarning[];
   recentVersions: VersionListItemDTO[];
   serverFetch: ServerFetchStatus;
@@ -166,9 +185,35 @@ export type FetchOutcome =
   | { ok: true; observationId: string; changedSinceLastObservation: boolean }
   | { ok: false; error: FetchErrorDTO };
 
+/**
+ * A deck of the workspace that a captured deck the workspace does not track can continue
+ * ("Continue an existing deck's history", see `DeckServices.ingestCapture`).
+ */
+export interface RelinkCandidateDTO {
+  id: string;
+  /** Cached deck name (the Moxfield public id until the deck's first capture or fetch). */
+  name: string;
+  /** The Moxfield deck it follows now. */
+  externalId: string;
+  format: string;
+  versionCount: number;
+  /** Last change to the deck's cached info or to its history. */
+  updatedAt: string;
+}
+
 export type CaptureOutcome =
   | { status: 'ingested'; deckId: string; changedSinceLastObservation: boolean }
-  | { status: 'untracked'; source: string; externalId: string; name: string };
+  | {
+      status: 'untracked';
+      source: string;
+      externalId: string;
+      name: string;
+      /**
+       * The workspace's decks, most recently updated first: the captured deck can continue
+       * one of them instead of being tracked as a new deck.
+       */
+      decks: RelinkCandidateDTO[];
+    };
 
 export type CommitOutcome =
   | { ok: true; version: VersionRefDTO }

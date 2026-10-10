@@ -59,7 +59,8 @@ describe('a remote libSQL database', () => {
   });
 
   it('loads no native module (as in a serverless function)', async () => {
-    const probe = await probeDatabaseEntryInChildProcess(remoteTarget().url);
+    const { url, authToken } = remoteTarget();
+    const probe = await probeDatabaseEntryInChildProcess(url, authToken);
     expect(probe).toEqual({ kind: 'remote', foreignKeys: 1, nativeModules: [] });
   });
 });

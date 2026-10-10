@@ -333,6 +333,34 @@ describe('database migrations', () => {
       expect(history.map((version) => version.commitId)).toEqual([v1.id]);
     });
 
+    it('adds the record of source deck changes to a database with history (0009)', async () => {
+      const restoreJournal = journalBefore('0009_deck_relinks');
+      const fresh = `file:${join(dir, 'before-0009.db')}`;
+      const old = await openFile(fresh);
+      const repos = createRepositories(old.db);
+      const deck = await createTestDeck(repos, { externalId: 'OldDeckId' });
+      const v1 = await commitTestSnapshot(repos, deck, buildSnapshot(baseDeckSpec()));
+      expect(await sqliteNames(old.db, 'table')).not.toContain('deck_relinks');
+      old.close();
+
+      restoreJournal();
+      const db = (await openFile(fresh)).db;
+      expect(await sqliteNames(db, 'index')).toContain('deck_relinks_deck_idx');
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+      const upgraded = createRepositories(db);
+      await upgraded.decks.relink(deck.id, {
+        expectedExternalId: 'OldDeckId',
+        externalId: 'NewDeckId',
+        url: 'https://moxfield.com/decks/NewDeckId',
+      });
+      expect((await upgraded.commits.lineage(deck.id)).map((commit) => commit.id)).toEqual([v1.id]);
+      expect(await upgraded.decks.listRelinks(deck.id)).toHaveLength(1);
+      expect(await pragma(db, 'foreign_key_check')).toEqual([]);
+      // The record goes with its deck.
+      expect(await upgraded.decks.delete(deck.id)).toBe(true);
+      expect(await countRows(db, 'deck_relinks')).toBe(0);
+    });
+
     it('opens an up-to-date database unchanged', async () => {
       const db = await reopen();
       expect(await rowCounts(db)).toEqual(before);

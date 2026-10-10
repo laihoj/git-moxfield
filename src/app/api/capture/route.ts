@@ -4,7 +4,7 @@
  * (`CaptureRequestBody` in `capture-protocol.ts`):
  *
  *     { "payload": <envelope JSON string | object>, "method": "browser-capture" | "manual-paste",
- *       "track": boolean, "key"?: "gmk_…" }
+ *       "track": boolean, "relinkDeckId"?: "<deck id>", "key"?: "gmk_…" }
  *
  * Who is capturing: the bookmarklet `key` when one is sent (popup mode hands it over with
  * the deck), otherwise the session cookie. A key signs the browser in as its owner (the
@@ -14,7 +14,9 @@
  * origin with a one-time nonce, so a third-party site cannot get another member's key
  * posted here. A wrong or revoked key is an error even when the browser has a session,
  * so a broken bookmarklet is noticed. The deck goes into the authenticated user's
- * workspace.
+ * workspace. With `relinkDeckId` ("Continue an existing deck's history", offered for an
+ * untracked deck), that deck of the user's workspace continues with the captured Moxfield
+ * deck instead of a new deck being tracked (`DeckServices.ingestCapture`).
  *
  * A string `payload` is a capture payload (`capture-codec-protocol.ts`): compressed by the
  * bookmarklet or the capture page, or plain JSON. It is decoded, within hard size limits,
@@ -53,6 +55,7 @@ const bodySchema = z.object({
   payload: z.union([z.string().min(1), z.record(z.string(), z.unknown())]),
   method: z.enum(['browser-capture', 'manual-paste']),
   track: z.boolean(),
+  relinkDeckId: z.string().trim().min(1).max(128).optional(),
   /** Bounded so that junk is rejected by shape; the auth service checks the exact format. */
   key: z.string().max(256).optional(),
 });
@@ -131,7 +134,12 @@ async function ingest(user: SessionUser, input: z.infer<typeof bodySchema>): Pro
     const data =
       typeof input.payload === 'string' ? await decodeCapturePayload(input.payload) : input.payload;
     const services = await servicesFor(user);
-    const outcome = await services.ingestCapture({ data, method: input.method, track: input.track });
+    const outcome = await services.ingestCapture({
+      data,
+      method: input.method,
+      track: input.track,
+      ...(input.relinkDeckId === undefined ? {} : { relinkDeckId: input.relinkDeckId }),
+    });
     return Response.json(outcome, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     const rejected = classifyRejectedCapture(error);

@@ -23,7 +23,8 @@ import {
   type VersionRefDTO,
 } from '@/server/services';
 import { createDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
-import { openTestDatabase } from '@tests/support/db';
+import type { LibsqlDatabase } from '@/server/db/libsql';
+import { openTestDatabaseHandle } from '@tests/support/db';
 import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
 /** A clock that only moves when told to. */
@@ -76,6 +77,8 @@ export interface ServiceHarness {
   api: FakeMoxfieldApi;
   clock: ManualClock;
   db: Db;
+  /** The database's handle (closed when the test finishes; close it earlier to release a file). */
+  handle: LibsqlDatabase;
   /** Repositories on the same database, for assertions that bypass the services. */
   repos: Repositories;
   config: AppConfig;
@@ -96,11 +99,13 @@ export interface ServiceHarnessOptions {
   env?: Record<string, string | undefined>;
   /** Replaces the registry built from the config (e.g. to wrap a source). */
   sources?: (defaults: DeckSourceRegistry) => DeckSourceRegistry;
+  /** The database to use, e.g. a `file:` URL in a temporary directory. Default: a private in-memory one. */
+  databaseUrl?: string;
 }
 
 /**
- * Services over a fresh in-memory database, closed when the current test finishes (see
- * `openTestDatabase`). Defaults: no request spacing, a 10 s refresh cooldown, auto refresh
+ * Services over a fresh in-memory database (or `options.databaseUrl`), closed when the
+ * current test finishes (see `openTestDatabase`). Defaults: no request spacing, a 10 s refresh cooldown, auto refresh
  * after 300 s and a one-hour block backoff.
  */
 export async function createServiceHarness(options: ServiceHarnessOptions = {}): Promise<ServiceHarness> {
@@ -122,7 +127,10 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     logger,
   });
   const sources = options.sources ? options.sources(defaults) : defaults;
-  const db = await openTestDatabase();
+  const handle = await openTestDatabaseHandle(
+    options.databaseUrl === undefined ? {} : { url: options.databaseUrl },
+  );
+  const { db } = handle;
   const locks = new KeyedMutex();
   const servicesForWorkspace = (workspaceId: string): DeckServices =>
     createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks });
@@ -133,6 +141,7 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     api,
     clock,
     db,
+    handle,
     repos,
     config,
     sources,

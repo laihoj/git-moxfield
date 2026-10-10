@@ -15,11 +15,16 @@ import { v1Primer, v3Deck } from '@/integrations/moxfield/test-fixtures';
 
 import { PasteCapture } from './paste-capture';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), replace: navigation.replace }),
+}));
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  navigation.replace.mockClear();
   fetchMock = vi.fn().mockResolvedValue(
     new Response(JSON.stringify({ status: 'untracked', name: 'Fixture Blue Farm', externalId: 'abc' }), {
       status: 200,
@@ -223,5 +228,107 @@ describe('PasteCapture sending', () => {
     const alert = await screen.findByText('The deck could not be imported');
     expect(alert.closest('[role="alert"]')).toHaveTextContent('this browser cannot compress it');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('PasteCapture continuing an existing deck’s history', () => {
+  const candidate = (id: string, name: string, versionCount: number) => ({
+    id,
+    name,
+    externalId: `${id}-moxfield`,
+    format: 'commander',
+    versionCount,
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  });
+
+  function answer(...bodies: unknown[]): void {
+    fetchMock.mockReset();
+    for (const body of bodies) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
+      );
+    }
+  }
+
+  async function importPasted(): Promise<void> {
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('Deck JSON'));
+    await user.paste(DECK_JSON);
+    await user.click(screen.getByRole('button', { name: 'Import deck' }));
+  }
+
+  function postedBodies(): Record<string, unknown>[] {
+    return fetchMock.mock.calls.map((call) => {
+      const body = (call[1] as RequestInit | undefined)?.body;
+      if (typeof body !== 'string') throw new Error('No JSON body was sent');
+      return JSON.parse(body) as Record<string, unknown>;
+    });
+  }
+
+  it('continues the chosen deck (preselected by name) instead of tracking a new one', async () => {
+    answer(
+      {
+        status: 'untracked',
+        source: 'moxfield',
+        name: 'Fixture Blue Farm',
+        externalId: 'NewPublicId',
+        decks: [candidate('deck-2', 'Another deck', 1), candidate('deck-1', 'Fixture Blue Farm', 3)],
+      },
+      { status: 'ingested', deckId: 'deck-1', changedSinceLastObservation: true },
+    );
+    const user = userEvent.setup();
+    renderPasteCapture();
+    await importPasted();
+
+    const region = await screen.findByRole('region', { name: 'Or continue an existing deck’s history' });
+    expect(region).toHaveTextContent('Deleted a deck on Moxfield and made it again?');
+    const select = within(region).getByLabelText('Deck to continue');
+    expect(select).toHaveValue('deck-1');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Choose one of your decks…', 'Another deck · 1 version', 'Fixture Blue Farm · 3 versions']);
+    await user.selectOptions(select, 'deck-2');
+    expect(within(region).getByRole('button', { name: 'Continue “Another deck”' })).toBeEnabled();
+    await user.selectOptions(select, 'deck-1');
+    await user.click(within(region).getByRole('button', { name: 'Continue “Fixture Blue Farm”' }));
+
+    expect(await screen.findByText(/The deck now continues from this Moxfield deck/)).toBeInTheDocument();
+    const [first, second] = postedBodies();
+    expect(second).toEqual({ ...first, track: false, relinkDeckId: 'deck-1' });
+    expect(navigation.replace).toHaveBeenCalledWith('/decks/deck-1?captured=1&relinked=1');
+  });
+
+  it('preselects nothing when no single deck has the captured deck’s name', async () => {
+    answer({
+      status: 'untracked',
+      source: 'moxfield',
+      name: 'Fixture Blue Farm',
+      externalId: 'NewPublicId',
+      decks: [candidate('deck-1', 'Fixture Blue Farm', 3), candidate('deck-2', 'fixture  blue farm', 0)],
+    });
+    renderPasteCapture();
+    await importPasted();
+
+    const region = await screen.findByRole('region', { name: 'Or continue an existing deck’s history' });
+    expect(within(region).getByLabelText('Deck to continue')).toHaveValue('');
+    expect(within(region).getByRole('button', { name: 'Continue the chosen deck' })).toBeDisabled();
+  });
+
+  it('offers nothing to continue to a user without decks', async () => {
+    answer({
+      status: 'untracked',
+      source: 'moxfield',
+      name: 'Fixture Blue Farm',
+      externalId: 'x',
+      decks: [],
+    });
+    renderPasteCapture();
+    await importPasted();
+    expect(await screen.findByRole('heading', { name: 'Track “Fixture Blue Farm”?' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'Or continue an existing deck’s history' }),
+    ).not.toBeInTheDocument();
   });
 });

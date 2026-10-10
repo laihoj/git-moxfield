@@ -316,3 +316,83 @@ describe('POST /api/capture with compressed payloads', () => {
     expect(response.status).toBe(401);
   });
 });
+
+describe('POST /api/capture continuing an existing deck’s history', () => {
+  /** The Blue Farm deck deleted on Moxfield and made again: same cards, a new public id. */
+  const recreated = () =>
+    JSON.stringify(buildCaptureEnvelope(blueFarmSpec({ publicId: 'BlueFarmRecreated00002' })));
+
+  async function trackedDeck(): Promise<string> {
+    const response = await capture({ payload: envelope(), method: 'browser-capture', track: true, key });
+    const outcome = (await response.json()) as { deckId: string };
+    return outcome.deckId;
+  }
+
+  it('offers the user’s decks with an untracked deck, then continues the chosen one', async () => {
+    const deckId = await trackedDeck();
+    const untracked = await capture({ payload: recreated(), method: 'browser-capture', track: false, key });
+    expect(await untracked.json()).toMatchObject({
+      status: 'untracked',
+      externalId: 'BlueFarmRecreated00002',
+      decks: [{ id: deckId, name: 'Blue Farm', versionCount: 0 }],
+    });
+
+    const continued = await capture({
+      payload: await encodeCapturePayload(recreated()),
+      method: 'browser-capture',
+      track: false,
+      relinkDeckId: deckId,
+      key,
+    });
+    expect(continued.status).toBe(200);
+    expect(await continued.json()).toEqual({ status: 'ingested', deckId, changedSinceLastObservation: true });
+    const overview = await harness().servicesForWorkspace(owner.user.workspaceId).getOverview(deckId);
+    expect(overview).toMatchObject({
+      externalId: 'BlueFarmRecreated00002',
+      relinks: [{ externalId: 'BlueFarmRecreated00002' }],
+    });
+    expect(await decksOf(owner.user)).toEqual(['Blue Farm']);
+  });
+
+  it('answers 404 for a deck that is not the user’s, and 400 for a deck tracked twice', async () => {
+    const other = await signUp(harness().auth, 'Pekka');
+    const theirs = await harness()
+      .servicesForWorkspace(other.user.workspaceId)
+      .ingestCapture({ data: buildCaptureEnvelope(blueFarmSpec()), method: 'browser-capture', track: true });
+    if (theirs.status !== 'ingested') throw new Error('not ingested');
+    const notFound = await capture({
+      payload: recreated(),
+      method: 'browser-capture',
+      track: false,
+      relinkDeckId: theirs.deckId,
+      key,
+    });
+    expect(notFound.status).toBe(404);
+
+    const deckId = await trackedDeck();
+    await capture({ payload: recreated(), method: 'browser-capture', track: true, key });
+    const taken = await capture({
+      payload: recreated(),
+      method: 'browser-capture',
+      track: false,
+      relinkDeckId: deckId,
+      key,
+    });
+    expect(taken.status).toBe(400);
+    expect(((await taken.json()) as { error: string }).error).toContain(
+      'already tracks that Moxfield deck. To continue this deck’s history with it instead',
+    );
+  });
+
+  it('rejects a malformed deck id by shape', async () => {
+    const response = await capture({
+      payload: recreated(),
+      method: 'browser-capture',
+      track: false,
+      relinkDeckId: 'x'.repeat(129),
+      key,
+    });
+    expect(response.status).toBe(400);
+    expect(await decksOf(owner.user)).toEqual([]);
+  });
+});

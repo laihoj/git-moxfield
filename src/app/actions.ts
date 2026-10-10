@@ -22,6 +22,7 @@ import type {
   CommitState,
   NoteState,
   RefreshResult,
+  RelinkDeckState,
   TagResult,
   TrackDeckState,
   UntrackResult,
@@ -233,6 +234,44 @@ export async function setNoteAction(_previous: NoteState, formData: FormData): P
   } catch (error) {
     return { status: 'error', message: failureMessage(error, 'setNote', { deckId, sequence }) };
   }
+}
+
+/**
+ * Points a deck at another Moxfield deck ("Change Moxfield deck": the deck was deleted on
+ * Moxfield and made again under a new link). Keeps every version; on success opens the
+ * deck's Status page, which greets the change.
+ */
+export async function relinkDeckAction(
+  _previous: RelinkDeckState,
+  formData: FormData,
+): Promise<RelinkDeckState> {
+  const services = await ownerServices();
+  const input = formString(formData, 'deck').trim();
+  const id = deckIdSchema.safeParse(formString(formData, 'deckId'));
+  if (!id.success) return { status: 'error', message: 'Invalid request.', input };
+  const deckId = id.data;
+  if (input === '') return { status: 'error', message: 'Paste the new Moxfield deck URL.', input };
+  if (input.length > 2048)
+    return { status: 'error', message: 'That is too long to be a Moxfield deck URL.', input };
+
+  try {
+    const outcome = await services.relinkDeck(deckId, input);
+    if (!outcome.ok) {
+      const { trackedBy } = outcome;
+      return trackedBy === undefined
+        ? { status: 'error', message: outcome.message, input }
+        : {
+            status: 'error',
+            message: outcome.message,
+            input,
+            trackedBy: { deckId: trackedBy.deckId, name: trackedBy.name },
+          };
+    }
+  } catch (error) {
+    return { status: 'error', message: failureMessage(error, 'relinkDeck', { deckId }), input };
+  }
+  revalidateDeck(deckId);
+  redirect(routes.deck(deckId, { relinked: true }));
 }
 
 /** Deletes a deck and its whole history from git-moxfield (never touches Moxfield). */

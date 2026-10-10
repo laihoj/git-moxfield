@@ -20,7 +20,12 @@ export function snapshotHash(snapshot: CanonicalSnapshot): string {
 export const COMMIT_OBJECT_VERSION = 1 as const;
 
 export interface CommitObject {
-  /** `<source>:<externalId>`, e.g. `moxfield:FixtureDeckId_00000001`. */
+  /**
+   * `<source>:<externalId>` of the deck **at commit time**, e.g.
+   * `moxfield:FixtureDeckId_00000001`. A deck that later follows another source deck
+   * ("Change Moxfield deck") keeps the ids of its earlier versions: they hash the
+   * reference they were committed under.
+   */
   deck: string;
   snapshotHash: string;
   parentId: string | null;

@@ -47,6 +47,7 @@ import {
   type BranchRecord,
   type CommitRecord,
   type DeckRecord,
+  type DeckRelinkRecord,
   type FetchErrorRecord,
   type ObservationRecord,
   type Repositories,
@@ -54,7 +55,14 @@ import {
 import type { DeckSourceRegistry } from '@/server/sources';
 
 import { mapConcurrently } from './concurrency';
-import type { DeckServices, SetupInfoDTO, TagOutcome, TrackDeckOutcome, VersionRef } from './contract';
+import type {
+  DeckServices,
+  RelinkDeckOutcome,
+  SetupInfoDTO,
+  TagOutcome,
+  TrackDeckOutcome,
+  VersionRef,
+} from './contract';
 import {
   deckStatus,
   diffCardKeys,
@@ -77,9 +85,11 @@ import type {
   CommitOutcome,
   CompareDTO,
   DeckOverviewDTO,
+  DeckRelinkDTO,
   DeckSummaryDTO,
   FetchErrorDTO,
   FetchOutcome,
+  RelinkCandidateDTO,
   RestoreDTO,
   TagCountDTO,
   VersionDetailDTO,
@@ -127,6 +137,15 @@ interface Ingested {
   observation: ObservationRecord;
   changed: boolean;
 }
+
+/** Points the deck at another source deck before ingesting (see {@link DefaultDeckServices.ingest}). */
+interface IngestRelink {
+  externalId: string;
+  url: string;
+}
+
+/** A failed change of source deck, as {@link RelinkDeckOutcome} reports it. */
+type RelinkFailure = Extract<RelinkDeckOutcome, { ok: false }>;
 
 type FetchResult = ({ ok: true } & Ingested) | { ok: false; error: FetchErrorDTO };
 
@@ -205,12 +224,61 @@ class DefaultDeckServices implements DeckServices {
     });
   }
 
+  async relinkDeck(deckId: string, input: string): Promise<RelinkDeckOutcome> {
+    const source = this.sources.require((await this.requireDeck(deckId)).source);
+    const parsed = source.parseDeckUrl(input);
+    if (!parsed.ok) return { ok: false, reason: 'invalid-ref', message: parsed.reason };
+    const { externalId } = parsed.ref;
+    const url = parsed.canonicalUrl;
+
+    const failure = await this.locks.run(deckId, async (): Promise<RelinkFailure | null> => {
+      const deck = await this.requireDeck(deckId);
+      if (deck.externalId === externalId) {
+        return {
+          ok: false,
+          reason: 'unchanged',
+          message: `This deck already follows that ${source.displayName} deck.`,
+        };
+      }
+      const refused = await this.relinkRefusal(deck, source, externalId);
+      if (refused) return refused;
+      try {
+        await this.repos.transaction(async (tx) => {
+          await tx.decks.relink(deck.id, { expectedExternalId: deck.externalId, externalId, url });
+          // The working state is the old source deck's: it must not be committed as this one.
+          await tx.observations.pruneForDeck(deck.id, []);
+        });
+      } catch (error) {
+        // Another request (or function instance) got there first.
+        if (!isRepositoryError(error, 'conflict')) throw error;
+        const current = await this.requireDeck(deckId);
+        if (current.externalId === externalId) return null;
+        const raced = await this.relinkRefusal(current, source, externalId);
+        if (raced) return raced;
+        throw error;
+      }
+      this.logger.info('Deck relinked', {
+        deckId,
+        source: deck.source,
+        previousExternalId: deck.externalId,
+        externalId,
+      });
+      return null;
+    });
+    if (failure) return failure;
+
+    const fetch =
+      source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+    return { ok: true, externalId, url, fetch };
+  }
+
   async getOverview(deckId: string): Promise<DeckOverviewDTO | null> {
     const deck = await this.repos.decks.getById(deckId);
     if (!deck) return null;
-    const [state, commits] = await Promise.all([
+    const [state, commits, relinks] = await Promise.all([
       this.loadState(deck),
       this.repos.commits.listForDeck(deck.id),
+      this.repos.decks.listRelinks(deck.id),
     ]);
     const { head, working, diff } = state;
     const serverFetch = this.sources.require(deck.source).serverFetchStatus();
@@ -226,6 +294,7 @@ class DefaultDeckServices implements DeckServices {
     return {
       ...this.summarize(state),
       diff,
+      relinks: relinks.map(toDeckRelinkDTO).reverse(),
       warnings: working?.warnings ?? [],
       recentVersions,
       serverFetch,
@@ -274,6 +343,7 @@ class DefaultDeckServices implements DeckServices {
     data: unknown;
     method: Exclude<IngestMethod, 'server'>;
     track: boolean;
+    relinkDeckId?: string;
   }): Promise<CaptureOutcome> {
     const source = this.sources.require(CAPTURE_SOURCE_ID);
     // Both throw DeckSourceError('schema') for unusable data; callers answer 400.
@@ -286,11 +356,23 @@ class DefaultDeckServices implements DeckServices {
       });
     }
     const { externalId } = parsed.ref;
+    if (input.relinkDeckId !== undefined) {
+      return this.ingestContinuing(input.relinkDeckId, source, raw, input.method, {
+        normalized,
+        relink: { externalId, url: parsed.canonicalUrl },
+      });
+    }
 
     let deck = await this.repos.decks.getBySourceExternal(source.id, externalId);
     if (!deck) {
       if (!input.track) {
-        return { status: 'untracked', source: source.id, externalId, name: normalized.metadata.name };
+        return {
+          status: 'untracked',
+          source: source.id,
+          externalId,
+          name: normalized.metadata.name,
+          decks: await this.relinkCandidates(),
+        };
       }
       ({ deck } = await this.createDeck(source, {
         externalId,
@@ -306,6 +388,96 @@ class DefaultDeckServices implements DeckServices {
     );
     this.logger.info('Deck captured', { deckId, method: input.method, changed });
     return { status: 'ingested', deckId, changedSinceLastObservation: changed };
+  }
+
+  /**
+   * "Continue an existing deck's history": points the workspace's deck `deckId` at the
+   * captured source deck (unless it follows it already) and ingests the capture as its
+   * working state, in one transaction (see {@link ingest}).
+   */
+  private async ingestContinuing(
+    deckId: string,
+    source: DeckSource,
+    raw: RawSourcePayload,
+    method: Exclude<IngestMethod, 'server'>,
+    options: { normalized: NormalizedDeck; relink: IngestRelink },
+  ): Promise<CaptureOutcome> {
+    const { externalId } = options.relink;
+    const refuse = (refusal: RelinkFailure): never => {
+      throw new ServiceError('invalid-input', refusal.message);
+    };
+    const { changed, relinked } = await this.locks.run(deckId, async () => {
+      const deck = await this.requireDeck(deckId);
+      if (deck.source !== source.id) {
+        throw new ServiceError('invalid-input', `This deck does not come from ${source.displayName}.`);
+      }
+      const relinked = deck.externalId !== externalId;
+      if (relinked) {
+        const refused = await this.relinkRefusal(deck, source, externalId);
+        if (refused) refuse(refused);
+      }
+      try {
+        const ingested = await this.ingest(deck, source, raw, method, {
+          normalized: options.normalized,
+          ...(relinked ? { relink: options.relink } : {}),
+        });
+        return { changed: ingested.changed, relinked };
+      } catch (error) {
+        if (!isRepositoryError(error, 'conflict')) throw error;
+        // Another request tracked the captured deck, or changed this one, meanwhile.
+        const refused = await this.relinkRefusal(await this.requireDeck(deckId), source, externalId);
+        if (refused) refuse(refused);
+        throw error;
+      }
+    });
+    if (relinked) this.logger.info('Deck relinked', { deckId, source: source.id, externalId });
+    this.logger.info('Deck captured', { deckId, method, changed });
+    return { status: 'ingested', deckId, changedSinceLastObservation: changed };
+  }
+
+  /**
+   * Why `deck` cannot follow the source deck `externalId`: another deck of the workspace
+   * tracks it. `null` when nothing stands in the way.
+   */
+  private async relinkRefusal(
+    deck: DeckRecord,
+    source: DeckSource,
+    externalId: string,
+  ): Promise<RelinkFailure | null> {
+    const other = await this.repos.decks.getBySourceExternal(deck.source, externalId);
+    if (!other || other.id === deck.id) return null;
+    const versionCount = await this.repos.commits.count(other.id);
+    const name = other.name.trim() === '' ? other.externalId : other.name;
+    const consequence =
+      versionCount === 0
+        ? 'it has no versions, so nothing is lost'
+        : `that deletes its ${versionCount} version${versionCount === 1 ? '' : 's'} in git-moxfield`;
+    return {
+      ok: false,
+      reason: 'already-tracked',
+      message:
+        `Your deck “${name}” already tracks that ${source.displayName} deck. To continue this ` +
+        `deck’s history with it instead, stop tracking “${name}” first (${consequence}), then try again.`,
+      trackedBy: { deckId: other.id, name, versionCount },
+    };
+  }
+
+  /**
+   * The workspace's decks a captured deck could continue (those from the capture's source),
+   * most recently updated first.
+   */
+  private async relinkCandidates(): Promise<RelinkCandidateDTO[]> {
+    const [decks, counts] = await Promise.all([this.repos.decks.list(), this.repos.commits.countByDeck()]);
+    return decks
+      .filter((deck) => deck.source === CAPTURE_SOURCE_ID)
+      .map((deck) => ({
+        id: deck.id,
+        name: deck.name,
+        externalId: deck.externalId,
+        format: deck.format,
+        versionCount: counts.get(deck.id) ?? 0,
+        updatedAt: deck.updatedAt,
+      }));
   }
 
   // -------------------------------------------------------------------------
@@ -466,12 +638,14 @@ class DefaultDeckServices implements DeckServices {
     reviewed: ObservationRecord,
     input: { message: string; expectedHeadCommitId: string | null; tags: string[] },
   ): Promise<CommitOutcome> {
+    // Another process may have pruned the reviewed observation, with its snapshot and raw
+    // payload, since the checks before this transaction. First, as `commitTarget` reads
+    // that snapshot.
+    if (!(await tx.observations.getById(reviewed.id))) return reviewOutdated();
     const target = await this.commitTarget(tx, deck, source, reviewed, input.expectedHeadCommitId);
     if (!target.ok) return target.outcome;
     const { branch } = target;
     const parentId = branch.headCommitId;
-    // Another process may have pruned the reviewed observation (and its raw payload).
-    if (!(await tx.observations.getById(reviewed.id))) return reviewOutdated();
 
     const sequence = ((await tx.commits.maxSequence(deck.id)) ?? 0) + 1;
     const createdAt = this.now().toISOString();
@@ -758,25 +932,40 @@ class DefaultDeckServices implements DeckServices {
    * (a page rendered just before this ingest can still commit it) and `options.retain`
    * (an observation a commit in progress is about to record).
    *
+   * With `options.relink`, the deck is first pointed at that source deck (recorded as a
+   * relink) and its observations of the previous one are dropped, in the same
+   * transaction: the payload must then describe the new source deck.
+   *
    * @throws {DeckSourceError} `schema` when the payload is unusable or describes another deck.
+   * @throws {RepositoryError} `conflict` when relinking loses a race (see `DeckRepository.relink`).
    */
   private async ingest(
     deck: DeckRecord,
     source: DeckSource,
     raw: RawSourcePayload,
     method: IngestMethod,
-    options: { normalized?: NormalizedDeck; retain?: readonly string[] } = {},
+    options: { normalized?: NormalizedDeck; retain?: readonly string[]; relink?: IngestRelink } = {},
   ): Promise<Ingested> {
     const { metadata, snapshot, catalog, warnings } = options.normalized ?? source.normalizeDeck(raw);
-    if (metadata.source !== deck.source || metadata.externalId !== deck.externalId) {
+    const { relink } = options;
+    const expectedExternalId = relink?.externalId ?? deck.externalId;
+    if (metadata.source !== deck.source || metadata.externalId !== expectedExternalId) {
       throw new DeckSourceError(
         'schema',
-        `${source.displayName} returned deck ${metadata.externalId} instead of ${deck.externalId}.`,
+        `${source.displayName} returned deck ${metadata.externalId} instead of ${expectedExternalId}.`,
         { source: source.id },
       );
     }
     const fetchedAt = this.now().toISOString();
     return this.repos.transaction(async (tx) => {
+      if (relink) {
+        await tx.decks.relink(deck.id, {
+          expectedExternalId: deck.externalId,
+          externalId: relink.externalId,
+          url: relink.url,
+        });
+        await tx.observations.pruneForDeck(deck.id, []);
+      }
       const previous = await tx.observations.latestForDeck(deck.id);
       const rawBlobHash = await tx.rawBlobs.put({ mediaType: raw.mediaType, data: raw.data });
       const snapshotHash = await tx.snapshots.put(snapshot);
@@ -933,6 +1122,16 @@ function unavailableError(status: ServerFetchStatus, now: Date): FetchErrorDTO |
       };
     }
   }
+}
+
+function toDeckRelinkDTO(relink: DeckRelinkRecord): DeckRelinkDTO {
+  return {
+    previousExternalId: relink.previousExternalId,
+    previousUrl: relink.previousUrl,
+    externalId: relink.externalId,
+    url: relink.url,
+    at: relink.createdAt,
+  };
 }
 
 function commitFailure(reason: CommitFailureReason, message: string): CommitOutcome {

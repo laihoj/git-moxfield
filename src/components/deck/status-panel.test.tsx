@@ -162,6 +162,27 @@ describe('StatusPanel', () => {
     expect(screen.getByRole('link', { name: 'Bookmarklet setup' })).toHaveAttribute('href', '/setup');
   });
 
+  it('suggests changing the Moxfield deck when the deck is gone from Moxfield', () => {
+    renderWithProviders(
+      <StatusPanel
+        deck={deck({
+          lastFetchError: {
+            code: 'not-found',
+            message: 'The deck does not exist on Moxfield (deleted or wrong id).',
+            at: '2026-10-09T12:30:00.000Z',
+            retryAfterSeconds: null,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText('Deck not found on Moxfield')).toBeInTheDocument();
+    expect(screen.getByText(/Deleted it and made it again\?/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Change the Moxfield deck' })).toHaveAttribute(
+      'href',
+      '#moxfield-deck',
+    );
+  });
+
   it('explains a block before the first snapshot without repeating the steps’ actions', () => {
     renderWithProviders(
       <StatusPanel

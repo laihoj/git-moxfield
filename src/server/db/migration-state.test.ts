@@ -9,6 +9,7 @@ import { countRows, seedDeckHistory, tempDir, tempFileUrl } from '@tests/support
 import { createLibsqlDatabase, type LibsqlDatabase } from './libsql';
 import {
   applyMigrations,
+  assertMigrationsApplied,
   assertMigrationsUpToDate,
   bundledMigrations,
   checkMigrationState,
@@ -236,6 +237,44 @@ describe('checkMigrationState', () => {
     await expect(failure).rejects.toBeInstanceOf(MigrationStateError);
     await expect(failure).rejects.toMatchObject({ state: { status: 'ahead' } });
     expect(await countRows(db, '__drizzle_migrations')).toBe(all.length);
+  });
+
+  it('lets a build serve a database with newer migrations, but not one missing its own', async () => {
+    const all = bundledMigrations();
+    const last = all.at(-1)?.when ?? 0;
+    const newer: ExtraMigration = {
+      tag: '9999_newer_build',
+      when: last + 1,
+      sql: 'CREATE TABLE added_by_a_newer_build (id TEXT PRIMARY KEY);',
+    };
+
+    // Up to date, and ahead with every migration of this build applied: servable.
+    const { db } = await open();
+    await expect(assertMigrationsApplied(db)).rejects.toThrow(/not been migrated yet/);
+    await applyMigrations(db);
+    await expect(assertMigrationsApplied(db)).resolves.toMatchObject({ status: 'up-to-date' });
+    await applyMigrations(db, { migrationsFolder: migrationsFolder(all, [newer]) });
+    await expect(assertMigrationsApplied(db)).resolves.toEqual({
+      status: 'ahead',
+      applied: all.length + 1,
+      expected: all.length,
+      pending: [],
+      unknown: 1,
+    });
+    // The exact check still refuses it, and so does migrating it with this build.
+    await expect(assertMigrationsUpToDate(db)).rejects.toMatchObject({ state: { status: 'ahead' } });
+    await expect(applyMigrations(db)).rejects.toBeInstanceOf(MigrationStateError);
+
+    // Behind, and ahead along another line of migrations (this build's last one is missing).
+    const { db: other } = await open();
+    await applyMigrations(other, { migrationsFolder: migrationsFolder(all.slice(0, -1)) });
+    await expect(assertMigrationsApplied(other)).rejects.toMatchObject({ state: { status: 'behind' } });
+    await applyMigrations(other, { migrationsFolder: migrationsFolder(all.slice(0, -1), [newer]) });
+    const diverged = assertMigrationsApplied(other);
+    await expect(diverged).rejects.toBeInstanceOf(MigrationStateError);
+    await expect(diverged).rejects.toMatchObject({
+      state: { status: 'ahead', pending: tags(all.slice(-1)), unknown: 1 },
+    });
   });
 
   it('treats an empty migrations table as missing', async () => {

@@ -197,7 +197,10 @@ const LIBSQL_MODULE = join(process.cwd(), 'src/server/db/libsql.ts');
 const PROBE = `
 import { createRequire } from 'node:module';
 const { createLibsqlDatabase } = await import(process.env.PROBE_MODULE);
-const handle = await createLibsqlDatabase({ url: process.env.PROBE_URL });
+const handle = await createLibsqlDatabase({
+  url: process.env.PROBE_URL,
+  authToken: process.env.PROBE_AUTH_TOKEN || undefined,
+});
 const result = await handle.client.execute('PRAGMA foreign_keys');
 handle.close();
 const cached = Object.keys(createRequire(process.cwd() + '/').cache);
@@ -210,16 +213,22 @@ process.stdout.write(JSON.stringify({ kind: handle.kind, foreignKeys: Number(res
 
 /**
  * Opens `url` with `createLibsqlDatabase` in a fresh Node process (as a serverless
- * function would) and reports which libSQL native code that process loaded.
+ * function would) and reports which libSQL native code that process loaded. Pass the
+ * `authToken` of a server that requires one (Turso always does).
  */
-export function probeDatabaseEntryInChildProcess(url: string): Promise<EntryProbe> {
+export function probeDatabaseEntryInChildProcess(url: string, authToken?: string): Promise<EntryProbe> {
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
       ['--import', 'tsx', '--conditions=react-server', '--input-type=module', '--eval', PROBE],
       {
         cwd: process.cwd(),
-        env: { ...process.env, PROBE_URL: url, PROBE_MODULE: LIBSQL_MODULE },
+        env: {
+          ...process.env,
+          PROBE_URL: url,
+          PROBE_AUTH_TOKEN: authToken ?? '',
+          PROBE_MODULE: LIBSQL_MODULE,
+        },
         timeout: 60_000,
       },
       (error, stdout, stderr) => {

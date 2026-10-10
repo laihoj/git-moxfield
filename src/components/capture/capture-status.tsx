@@ -1,26 +1,32 @@
 'use client';
 
-import { Plus } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { History, Plus } from 'lucide-react';
+import { useId, useState, type ReactNode } from 'react';
 
 import { Alert } from '@/components/ui/alert';
 import { Button, ButtonLink } from '@/components/ui/button';
+import { Select } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
+import { pluralize } from '@/lib/format';
 import { routes } from '@/lib/routes';
+import type { RelinkCandidateDTO } from '@/server/services/types';
 
 import type { SubmissionPhase } from './use-capture-submission';
 
 export interface CaptureStatusProps {
   phase: SubmissionPhase;
   onTrack: () => void;
+  /** Continues the history of the user's deck `deckId` with the untracked deck. */
+  onRelink: (deckId: string) => void;
   onCancel: () => void;
 }
 
 /**
- * Progress and outcome of a capture: importing, "Track this deck?" confirmation,
- * success ("Updated from Moxfield", then the deck page opens) and failures.
+ * Progress and outcome of a capture: importing, "Track this deck?" confirmation (or
+ * continuing one of the user's decks with it instead), success ("Updated from Moxfield",
+ * then the deck page opens) and failures.
  */
-export function CaptureStatus({ phase, onTrack, onCancel }: CaptureStatusProps) {
+export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureStatusProps) {
   switch (phase.kind) {
     case 'idle':
       return null;
@@ -28,35 +34,48 @@ export function CaptureStatus({ phase, onTrack, onCancel }: CaptureStatusProps) 
       return <Progress text="Importing the deck…" />;
     case 'tracking':
       return <Progress text={`Tracking “${phase.name}”…`} />;
+    case 'relinking':
+      return <Progress text={`Continuing “${phase.deckName}”…`} />;
     case 'untracked':
       return (
-        <section
-          aria-labelledby="track-confirm"
-          className="flex flex-col gap-3 rounded-lg border border-accent/30 bg-accent-soft/50 p-4"
-        >
-          <h2 id="track-confirm" className="text-base font-semibold break-words text-fg">
-            Track “{phase.name}”?
-          </h2>
-          <p className="text-sm text-muted">
-            git-moxfield does not track this deck yet. Track it to keep its versions here. Nothing is written
-            to Moxfield.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" icon={<Plus aria-hidden="true" className="size-4" />} onClick={onTrack}>
-              Track this deck
-            </Button>
-            <Button variant="secondary" onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
-        </section>
+        <div className="flex flex-col gap-3">
+          <section
+            aria-labelledby="track-confirm"
+            className="flex flex-col gap-3 rounded-lg border border-accent/30 bg-accent-soft/50 p-4"
+          >
+            <h2 id="track-confirm" className="text-base font-semibold break-words text-fg">
+              Track “{phase.name}”?
+            </h2>
+            <p className="text-sm text-muted">
+              git-moxfield does not track this deck yet. Track it to keep its versions here. Nothing is
+              written to Moxfield.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                icon={<Plus aria-hidden="true" className="size-4" />}
+                onClick={onTrack}
+              >
+                Track this deck
+              </Button>
+              <Button variant="secondary" onClick={onCancel}>
+                Cancel
+              </Button>
+            </div>
+          </section>
+          {phase.decks.length > 0 && (
+            <ContinueDeck capturedName={phase.name} decks={phase.decks} onRelink={onRelink} />
+          )}
+        </div>
       );
     case 'done':
       return (
         <Alert tone="success" role="status" title="Updated from Moxfield">
-          {phase.changed
-            ? 'The deck has new changes since the last update.'
-            : 'No changes since the last update.'}{' '}
+          {phase.relinked
+            ? 'The deck now continues from this Moxfield deck.'
+            : phase.changed
+              ? 'The deck has new changes since the last update.'
+              : 'No changes since the last update.'}{' '}
           Opening the deck…
         </Alert>
       );
@@ -88,6 +107,83 @@ export function CaptureStatus({ phase, onTrack, onCancel }: CaptureStatusProps) 
         </Alert>
       );
   }
+}
+
+/** Folds a deck name for comparing: case, spacing and Unicode form do not matter. */
+function foldName(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * "Continue an existing deck's history": for a deck deleted on Moxfield and made again,
+ * whose new copy has a new public id and so arrives as an untracked deck. The user picks
+ * the deck it replaces (preselected when exactly one has the captured deck's name).
+ */
+function ContinueDeck({
+  capturedName,
+  decks,
+  onRelink,
+}: {
+  capturedName: string;
+  decks: readonly RelinkCandidateDTO[];
+  onRelink: (deckId: string) => void;
+}) {
+  const id = useId();
+  const [selected, setSelected] = useState(() => {
+    const wanted = foldName(capturedName);
+    const sameName = decks.filter((deck) => wanted !== '' && foldName(deck.name) === wanted);
+    return sameName.length === 1 ? (sameName[0]?.id ?? '') : '';
+  });
+  const deck = decks.find((candidate) => candidate.id === selected);
+
+  return (
+    <section
+      aria-labelledby={`${id}-heading`}
+      className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2/60 p-4"
+    >
+      <h2 id={`${id}-heading`} className="flex items-start gap-2 text-base font-semibold text-fg">
+        <History aria-hidden="true" className="mt-1 size-4 shrink-0 text-muted" />
+        Or continue an existing deck’s history
+      </h2>
+      <p className="text-sm text-pretty text-muted">
+        Deleted a deck on Moxfield and made it again? The new copy has a new link, so it looks new here.
+        Choose the deck it replaces: that deck then follows this Moxfield deck, keeps all its versions and
+        shows what changed since its latest version.
+      </p>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={id} className="text-sm font-medium text-fg">
+          Deck to continue
+        </label>
+        <Select
+          id={id}
+          value={selected}
+          onChange={(event) => {
+            setSelected(event.target.value);
+          }}
+        >
+          <option value="" disabled>
+            Choose one of your decks…
+          </option>
+          {decks.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.name} · {pluralize(candidate.versionCount, 'version')}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div>
+        <Button
+          variant="secondary"
+          disabled={deck === undefined}
+          onClick={() => {
+            if (deck !== undefined) onRelink(deck.id);
+          }}
+        >
+          {deck === undefined ? 'Continue the chosen deck' : `Continue “${deck.name}”`}
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 function Progress({ text }: { text: string }) {

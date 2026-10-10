@@ -33,7 +33,8 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
     deckId = await trackDeck(page, moxfieldDeckUrl);
     // The name is unknown until Moxfield's data arrives.
     await expect(page.getByRole('heading', { level: 1, name: 'New Moxfield deck' })).toBeVisible();
-    await expect(page.getByText(deck.publicId)).toBeVisible();
+    // The header shows the Moxfield id instead (the Moxfield deck panel links to it as well).
+    await expect(page.getByText(`Moxfield id ${deck.publicId}`)).toBeVisible();
     await expect(
       page.getByRole('heading', { level: 2, name: 'Waiting for the first snapshot from Moxfield' }),
     ).toBeVisible();

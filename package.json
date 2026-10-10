@@ -27,6 +27,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --conditions=react-server scripts/migrate.ts",
     "export:git": "tsx --conditions=react-server scripts/export-git.ts",
+    "import:local": "tsx --conditions=react-server scripts/import-local.ts",
     "mock-moxfield": "tsx --conditions=react-server tests/mock-moxfield/server.ts",
     "seed:demo": "tsx --conditions=react-server scripts/seed-demo.ts",
     "users": "tsx --conditions=react-server scripts/users.ts",

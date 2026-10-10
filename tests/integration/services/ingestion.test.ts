@@ -106,6 +106,17 @@ describe('deck services: server fetch failures', () => {
       source: 'moxfield',
       externalId: OTHER_DECK.publicId,
       name: 'Other Deck',
+      // The workspace's decks it could continue instead ("Continue an existing deck's history").
+      decks: [
+        {
+          id: deckId,
+          name: 'Blue Farm',
+          externalId: BLUE_FARM_PUBLIC_ID,
+          format: 'commander',
+          versionCount: 1,
+          updatedAt: expect.any(String) as unknown,
+        },
+      ],
     });
     expect(await services.listDecks()).toHaveLength(1);
 

@@ -102,20 +102,8 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
     async get(hash) {
       const row = await ctx.db.select().from(rawBlobs).where(eq(rawBlobs.hash, hash)).get();
       if (!row) return null;
-      const what = `Raw blob ${hash}`;
-      if (row.encoding !== GZIP) {
-        throw new RepositoryError('unsupported-version', `${what} uses unknown encoding ${row.encoding}`);
-      }
-      let bytes: Buffer;
-      try {
-        bytes = await gunzip(row.data);
-      } catch (cause) {
-        throw new RepositoryError('corrupt-data', `${what} cannot be decompressed`, { cause });
-      }
-      if (bytes.byteLength !== row.byteLength || sha256Hex(bytes) !== hash) {
-        throw corruptData(what, 'content does not match its hash');
-      }
-      return { mediaType: row.mediaType, data: decodeJson(bytes.toString('utf8'), what) };
+      const bytes = await inflateRawBlob(row);
+      return { mediaType: row.mediaType, data: decodeJson(bytes.toString('utf8'), `Raw blob ${hash}`) };
     },
 
     async info(hash) {
@@ -134,6 +122,28 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
       return row ?? null;
     },
   };
+}
+
+/**
+ * The uncompressed bytes of a stored raw blob row, verified against its hash and length.
+ * @throws {RepositoryError} `unsupported-version` for an unknown encoding; `corrupt-data`
+ *   when the bytes cannot be decompressed or do not match the hash.
+ */
+export async function inflateRawBlob(row: typeof rawBlobs.$inferSelect): Promise<Buffer> {
+  const what = `Raw blob ${row.hash}`;
+  if (row.encoding !== GZIP) {
+    throw new RepositoryError('unsupported-version', `${what} uses unknown encoding ${row.encoding}`);
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await gunzip(row.data);
+  } catch (cause) {
+    throw new RepositoryError('corrupt-data', `${what} cannot be decompressed`, { cause });
+  }
+  if (bytes.byteLength !== row.byteLength || sha256Hex(bytes) !== row.hash) {
+    throw corruptData(what, 'content does not match its hash');
+  }
+  return bytes;
 }
 
 /** `JSON.stringify` typed honestly: it returns `undefined` for `undefined`, functions and symbols. */

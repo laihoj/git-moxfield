@@ -182,6 +182,12 @@ export interface CaptureRequestBody {
   method: CaptureRequestMethod;
   /** `false`: an untracked deck is answered with `status: 'untracked'` instead of being tracked. */
   track: boolean;
+  /**
+   * "Continue an existing deck's history": the id of one of the user's decks that the
+   * captured deck continues (it is pointed at the captured Moxfield deck, which becomes
+   * its working state). Offered for a deck answered with `status: 'untracked'`.
+   */
+  relinkDeckId?: string;
   /** The bookmarklet key from the PAYLOAD message (popup mode); omitted for manual paste. */
   key?: string;
 }

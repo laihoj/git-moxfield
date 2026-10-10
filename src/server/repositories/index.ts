@@ -19,6 +19,9 @@
  * - **Share links** are both: the owner creates, lists and revokes them for decks of the
  *   bound workspace only, while resolving a link's token is installation-wide (the token
  *   is its own authorization; see `./share-links`).
+ * - **History transfer** (operator tools: `pnpm import:local`) reads a deck's stored
+ *   history row for row from the bound workspace, and writes such rows into it, verified
+ *   and unchanged (see `./history-transfer`).
  *
  * Use {@link Repositories.transaction} to make several repository calls atomic, e.g.
  * "verify HEAD, insert commit, move the branch head" when committing.
@@ -36,6 +39,7 @@ import { createCommitRepository, type CommitRepository } from './commits';
 import { withTransaction, type LibsqlExecutor, type RepositoryContext } from './context';
 import { createCredentialRepository, type CredentialRepository } from './credentials';
 import { createDeckRepository, type DeckRepository } from './decks';
+import { createHistoryTransferRepository, type HistoryTransferRepository } from './history-transfer';
 import { createInviteRepository, type InviteRepository } from './invites';
 import { createLoginLinkRepository, type LoginLinkRepository } from './login-links';
 import { createCommitNoteRepository, type CommitNoteRepository } from './notes';
@@ -68,6 +72,8 @@ export interface Repositories {
   readonly loginLinks: LoginLinkRepository;
   readonly invites: InviteRepository;
   readonly shareLinks: ShareLinkRepository;
+  /** Copying stored history between databases (operator tools: `pnpm import:local`). */
+  readonly historyTransfer: HistoryTransferRepository;
   /**
    * Runs `fn` atomically with repositories bound to one `BEGIN IMMEDIATE` transaction: if
    * `fn` throws, every write it made is rolled back. Nested calls use savepoints. The rules
@@ -124,6 +130,7 @@ function bind(ctx: RepositoryContext): Repositories {
     loginLinks: createLoginLinkRepository(ctx),
     invites: createInviteRepository(ctx),
     shareLinks: createShareLinkRepository(ctx),
+    historyTransfer: createHistoryTransferRepository(ctx),
     transaction: (fn, options) => withTransaction(ctx, (tx) => fn(bind(tx)), options),
   };
 }
@@ -134,6 +141,8 @@ export {
   MAIN_BRANCH_NAME,
   type DeckCachedInfo,
   type DeckRecord,
+  type DeckRelinkInput,
+  type DeckRelinkRecord,
   type DeckRepository,
   type FetchErrorRecord,
   type NewDeck,
@@ -178,3 +187,21 @@ export type {
 } from './login-links';
 export type { InviteRecord, InviteRepository, NewInvite } from './invites';
 export type { ActiveShareLink, NewShareLink, ShareLinkRecord, ShareLinkRepository } from './share-links';
+export {
+  assertCommitsContentAddressed,
+  deckReferences,
+  type BranchRow,
+  type CardCatalogRow,
+  type CommitLocation,
+  type CommitNoteRow,
+  type CommitRow,
+  type DeckHistoryRows,
+  type DeckRelinkRow,
+  type DeckRow,
+  type HistoryTransferRepository,
+  type ObservationRow,
+  type RawBlobRow,
+  type SnapshotRow,
+  type TransferIdKind,
+  type VersionTagRow,
+} from './history-transfer';

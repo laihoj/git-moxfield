@@ -111,6 +111,13 @@ describe('deck routes', () => {
     expect(ownerDeckRoutes('d1').scope).toEqual({ kind: 'owner', deckId: 'd1' });
   });
 
+  it('greets a deck just sent from the browser, relinked, or both', () => {
+    expect(routes.deck('d1', { captured: true })).toBe('/decks/d1?captured=1');
+    expect(routes.deck('d1', { relinked: true })).toBe('/decks/d1?relinked=1');
+    expect(routes.deck('d1', { captured: true, relinked: true })).toBe('/decks/d1?captured=1&relinked=1');
+    expect(routes.deck('d1', { captured: false, relinked: false })).toBe('/decks/d1');
+  });
+
   it('builds the owner-only share page', () => {
     expect(routes.deckShare('d1')).toBe('/decks/d1/share');
   });

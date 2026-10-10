@@ -42,7 +42,7 @@ export interface CommitRepository {
   /**
    * Inserts a new version. The caller computes id and sequence; the repository
    * verifies the invariants that can never be repaired later, because commits are
-   * immutable: the id is the commit object hash of the given content (deck
+   * immutable: the id is the commit object hash of the given content (the deck's current
    * `<source>:<externalId>`, snapshot, parent, createdAt, sourceVersion, message), the
    * branch and parent belong to the same deck, and the parent has a lower sequence.
    * Does not move any branch head (see `BranchRepository.setHead`).
@@ -71,6 +71,8 @@ export interface CommitRepository {
   /** All versions of the deck, newest (highest sequence) first. */
   listForDeck(deckId: string): Promise<CommitRecord[]>;
   count(deckId: string): Promise<number>;
+  /** Number of versions of every deck of the workspace that has any, in one query. */
+  countByDeck(): Promise<Map<string, number>>;
   /** Highest sequence of the deck, or `null` before the first version. */
   maxSequence(deckId: string): Promise<number | null>;
 }
@@ -258,6 +260,16 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         .where(and(eq(commits.deckId, deckId), owned()))
         .get();
       return row?.n ?? 0;
+    },
+
+    async countByDeck() {
+      const rows = await ctx.db
+        .select({ deckId: commits.deckId, n: count() })
+        .from(commits)
+        .where(owned())
+        .groupBy(commits.deckId)
+        .all();
+      return new Map(rows.map((row) => [row.deckId, row.n]));
     },
 
     async maxSequence(deckId) {

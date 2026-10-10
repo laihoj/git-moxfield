@@ -7,9 +7,22 @@ import {
   type CaptureErrorBody,
   type CaptureRequestBody,
 } from '@/integrations/moxfield/capture-protocol';
-import type { CaptureOutcome } from '@/server/services/types';
+import type { CaptureOutcome, RelinkCandidateDTO } from '@/server/services/types';
 
 export type CaptureMethod = CaptureRequestBody['method'];
+
+/** What to do with the deck, and who sends it (see {@link postCapture}). */
+export interface CaptureRequestOptions {
+  /** `false`: an untracked deck is answered with `status: 'untracked'` instead of being tracked. */
+  track: boolean;
+  /** "Continue an existing deck's history": the user's deck the captured deck continues. */
+  relinkDeckId?: string;
+  /**
+   * The bookmarklet key that came with the deck (popup mode): it authenticates the capture
+   * and signs this browser in. Without it the browser's session is used.
+   */
+  key?: string;
+}
 
 /**
  * Why the capture was refused, when the server says: `unauthenticated` (no bookmarklet
@@ -23,10 +36,45 @@ export type CaptureResponse =
 
 const NETWORK_ERROR = 'Could not reach git-moxfield. Check that it is still running and try again.';
 
-function isCaptureOutcome(value: unknown): value is CaptureOutcome {
-  if (typeof value !== 'object' || value === null || !('status' in value)) return false;
-  const { status } = value;
-  return status === 'ingested' || status === 'untracked';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRelinkCandidate(value: unknown): value is RelinkCandidateDTO {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.externalId === 'string' &&
+    typeof value.format === 'string' &&
+    typeof value.versionCount === 'number' &&
+    typeof value.updatedAt === 'string'
+  );
+}
+
+/** The server's answer as a {@link CaptureOutcome}, or `null` when it is not one. */
+function toCaptureOutcome(value: unknown): CaptureOutcome | null {
+  if (!isRecord(value)) return null;
+  if (value.status === 'ingested') {
+    return typeof value.deckId === 'string' && typeof value.changedSinceLastObservation === 'boolean'
+      ? {
+          status: 'ingested',
+          deckId: value.deckId,
+          changedSinceLastObservation: value.changedSinceLastObservation,
+        }
+      : null;
+  }
+  if (value.status === 'untracked') {
+    if (typeof value.name !== 'string' || typeof value.externalId !== 'string') return null;
+    return {
+      status: 'untracked',
+      source: typeof value.source === 'string' ? value.source : 'moxfield',
+      externalId: value.externalId,
+      name: value.name,
+      decks: Array.isArray(value.decks) ? value.decks.filter(isRelinkCandidate) : [],
+    };
+  }
+  return null;
 }
 
 function errorMessage(value: unknown, status: number): string {
@@ -46,19 +94,23 @@ function errorCode(value: unknown): CaptureFailureCode | undefined {
 }
 
 /**
- * Sends a capture (envelope JSON string, or `{ deck, primer }` from the paste form) to
- * the server. `key` is the bookmarklet key that came with the deck (popup mode): it
- * authenticates the capture and signs this browser in. Without it the browser's session
- * is used. The key is only ever kept in memory for these requests.
+ * Sends a capture (the capture payload, or `{ deck, primer }` from the paste form) to the
+ * server, to be tracked, continued (`relinkDeckId`) or answered as untracked (see
+ * {@link CaptureRequestOptions}). The bookmarklet key is only ever kept in memory for
+ * these requests.
  */
 export async function postCapture(
   payload: CaptureRequestBody['payload'],
   method: CaptureMethod,
-  track: boolean,
-  key?: string,
+  { track, relinkDeckId, key }: CaptureRequestOptions,
 ): Promise<CaptureResponse> {
-  const body: CaptureRequestBody =
-    key === undefined ? { payload, method, track } : { payload, method, track, key };
+  const body: CaptureRequestBody = {
+    payload,
+    method,
+    track,
+    ...(relinkDeckId === undefined ? {} : { relinkDeckId }),
+    ...(key === undefined ? {} : { key }),
+  };
   let response: Response;
   try {
     response = await fetch(CAPTURE_API_PATH, {
@@ -76,7 +128,8 @@ export async function postCapture(
   } catch {
     // Non-JSON error page (e.g. a proxy); handled below.
   }
-  if (response.ok && isCaptureOutcome(json)) return { ok: true, outcome: json };
+  const outcome = response.ok ? toCaptureOutcome(json) : null;
+  if (outcome !== null) return { ok: true, outcome };
   const code = response.status === 401 ? errorCode(json) : undefined;
   return code === undefined
     ? { ok: false, message: errorMessage(json, response.status) }

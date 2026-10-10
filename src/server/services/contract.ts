@@ -52,6 +52,30 @@ export type TrackDeckOutcome =
 
 export type TagOutcome = { ok: true; tags: string[] } | { ok: false; reason: string };
 
+export type RelinkDeckOutcome =
+  | {
+      ok: true;
+      /** The Moxfield deck the deck follows now, and its URL. */
+      externalId: string;
+      url: string;
+      /** Result of the fetch of the new Moxfield deck, or null when server fetch is unavailable. */
+      fetch: FetchOutcome | null;
+    }
+  | {
+      ok: false;
+      reason:
+        /** The input is not a Moxfield deck URL or id. */
+        | 'invalid-ref'
+        /** The deck already follows that Moxfield deck. */
+        | 'unchanged'
+        /** Another deck of the workspace tracks that Moxfield deck. */
+        | 'already-tracked';
+      /** User-facing; for `already-tracked` it says how to proceed. */
+      message: string;
+      /** For `already-tracked`: the workspace's deck that tracks it. */
+      trackedBy?: { deckId: string; name: string; versionCount: number };
+    };
+
 export interface SetupInfoDTO {
   serverFetch: ServerFetchStatus;
   /** Whether a Moxfield-issued User-Agent is configured (value never exposed). */
@@ -83,19 +107,43 @@ export interface DeckServices {
   trackDeck(input: string): Promise<TrackDeckOutcome>;
   /** Deletes a deck and its entire history. */
   untrackDeck(deckId: string): Promise<void>;
+  /**
+   * Points a deck at another Moxfield deck ("Change Moxfield deck"): for a deck the user
+   * deleted on Moxfield and made again, which gives it a new public id. `input` is a
+   * Moxfield deck URL or public id. The deck keeps its id, name and every version (their
+   * commit ids stay valid: a commit object's `deck` header records the deck reference at
+   * commit time); new versions are committed under the new reference. Its working state
+   * (the last fetch or capture of the old Moxfield deck) is dropped, and the change is
+   * recorded (see {@link DeckOverviewDTO.relinks}). Then, when server fetch is available,
+   * the new Moxfield deck is fetched, as when tracking a deck.
+   *
+   * Refuses a Moxfield deck another deck of the workspace tracks (`already-tracked`, with
+   * how to proceed: stop tracking that deck first).
+   * @throws {ServiceError} `not-found` for a deck that is not the workspace's.
+   */
+  relinkDeck(deckId: string, input: string): Promise<RelinkDeckOutcome>;
 
   getOverview(deckId: string): Promise<DeckOverviewDTO | null>;
   /** Server-side fetch of the current Moxfield state. Respects cooldowns and block backoff. */
   refresh(deckId: string, trigger: 'manual' | 'auto'): Promise<FetchOutcome>;
   /**
    * Ingests a deck handed over by the user's browser (bookmarklet) or pasted manually,
-   * into the workspace. `data` is untrusted. With `track: false`, a deck the workspace
-   * does not track yet yields `status: 'untracked'`.
+   * into the workspace. `data` is untrusted.
+   *
+   * - With `track: false`, a deck the workspace does not track yet yields
+   *   `status: 'untracked'`, with the workspace's decks it could continue instead.
+   * - With `relinkDeckId` ("Continue an existing deck's history"), the captured deck
+   *   becomes the working state of that deck of the workspace, which is first pointed at
+   *   the captured Moxfield deck as {@link relinkDeck} does (both in one transaction);
+   *   `track` is then irrelevant. Refused with a `ServiceError` (`invalid-input`) when
+   *   another deck of the workspace tracks the captured Moxfield deck, and (`not-found`)
+   *   when `relinkDeckId` is not a deck of the workspace.
    */
   ingestCapture(input: {
     data: unknown;
     method: Exclude<IngestMethod, 'server'>;
     track: boolean;
+    relinkDeckId?: string;
   }): Promise<CaptureOutcome>;
 
   commit(

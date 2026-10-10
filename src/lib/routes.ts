@@ -52,12 +52,16 @@ export const routes = {
   admin: (): Route => '/admin',
 
   /**
-   * The owner's deck page (Status). `captured` greets a deck just sent from the browser.
-   * Every other page of a deck, and the deck's pages for share link viewers, are built by
-   * {@link deckRoutes}.
+   * The owner's deck page (Status). `captured` greets a deck just sent from the browser,
+   * `relinked` a deck that now follows another Moxfield deck (both, when a capture
+   * continued the deck). Every other page of a deck, and the deck's pages for share link
+   * viewers, are built by {@link deckRoutes}.
    */
-  deck: (deckId: string, query: { captured?: boolean } = {}): Route =>
-    withQuery(deckBase({ kind: 'owner', deckId }), { captured: query.captured === true ? '1' : undefined }),
+  deck: (deckId: string, query: { captured?: boolean; relinked?: boolean } = {}): Route =>
+    withQuery(deckBase({ kind: 'owner', deckId }), {
+      captured: query.captured === true ? '1' : undefined,
+      relinked: query.relinked === true ? '1' : undefined,
+    }),
 
   /** The owner's share links of a deck (ADR 0007). Owner only, so not a {@link DeckRoutes} page. */
   deckShare: (deckId: string): Route => `${deckBase({ kind: 'owner', deckId })}/share` as Route,

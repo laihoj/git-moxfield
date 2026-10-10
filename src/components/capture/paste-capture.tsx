@@ -89,7 +89,10 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
   const isEnvelope = deck?.kind === 'envelope';
   const deckError = deckProblem(deck);
   const primerError = primerProblem(primer);
-  const busy = submission.phase.kind === 'submitting' || submission.phase.kind === 'tracking';
+  const busy =
+    submission.phase.kind === 'submitting' ||
+    submission.phase.kind === 'tracking' ||
+    submission.phase.kind === 'relinking';
   const canSubmit = deck !== null && deckError === null && primerError === null && !busy;
 
   function importDeck(): void {
@@ -179,6 +182,9 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
           phase={submission.phase}
           onTrack={() => {
             void submission.track();
+          }}
+          onRelink={(deckId) => {
+            void submission.relink(deckId);
           }}
           onCancel={submission.reset}
         />

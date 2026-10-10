@@ -288,6 +288,9 @@ export function CaptureClient({
           onTrack={() => {
             void submission.track();
           }}
+          onRelink={(deckId) => {
+            void submission.relink(deckId);
+          }}
           onCancel={() => {
             window.close();
             submission.reset();

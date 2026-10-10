@@ -10,13 +10,17 @@
  * development convenience. A **remote** database (Turso, any libSQL server) is never
  * migrated at runtime: concurrent cold starts would race, and the integrity check after
  * migrating reads every row. The deploy step migrates it (`pnpm db:migrate`); the app only
- * checks that it is up to date and refuses to work otherwise, with a message that says so.
+ * checks that every migration it ships is applied and refuses to work otherwise, with a
+ * message that says so. Newer migrations (a database `ahead` of this build) are logged and
+ * tolerated: they are backward compatible with the deploy that was live when they ran, which
+ * keeps that deploy working until the next one is published, and after a rollback.
  */
 import 'server-only';
 
 import { eq } from 'drizzle-orm';
 
 import { getConfig, type DatabaseLocation } from '../config';
+import { createLogger } from '../logger';
 import { runsOnNetlify } from '../platform';
 import {
   createLibsqlDatabase,
@@ -25,7 +29,7 @@ import {
   type LibsqlDatabaseOptions,
   type LibsqlDb,
 } from './libsql';
-import { applyMigrations, assertMigrationsUpToDate } from './migration-state';
+import { applyMigrations, assertMigrationsApplied } from './migration-state';
 import { workspaces } from './schema';
 import { runWrite } from './transaction';
 
@@ -68,14 +72,15 @@ export async function ensureLocalWorkspace(db: LibsqlDb): Promise<void> {
 
 /**
  * Opens a database for the app, a script or a test: verifies it (`createLibsqlDatabase`),
- * migrates a local one or checks that a remote one is up to date, and makes sure the
+ * migrates a local one or checks that a remote one has every migration of this build
+ * (logging a warning when it also has newer ones), and makes sure the
  * `local` workspace exists. Pass `{ url: ':memory:' }` for an isolated in-memory database.
  * The caller owns the handle and closes it.
  *
  * @throws {DatabaseConfigError} for an unusable URL or database.
- * @throws {MigrationStateError} when a remote database is not exactly at this build's
- *   migrations (the message says to run `pnpm db:migrate`), or a local one was migrated by
- *   a newer build.
+ * @throws {MigrationStateError} when a migration of this build is not applied to a remote
+ *   database (the message says to run `pnpm db:migrate`), or a local one was migrated by a
+ *   newer build.
  * @throws {Error} when migrating a local database fails (the migration batch is rolled back)
  *   or leaves dangling references.
  */
@@ -86,7 +91,15 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<Libsql
     if (handle.kind === 'local') {
       await applyMigrations(handle.db, migrationsFolder === undefined ? {} : { migrationsFolder });
     } else {
-      await assertMigrationsUpToDate(handle.db);
+      const state = await assertMigrationsApplied(handle.db);
+      if (state.status === 'ahead') {
+        createLogger('db').warn(
+          'The database has migrations newer than this build. Serving it: migrations stay ' +
+            'compatible with the previous deploy (expand, then contract). Expected while a new ' +
+            'deploy is being published, or after rolling back to an earlier one.',
+          { migrations: { applied: state.applied, shipped: state.expected, newer: state.unknown } },
+        );
+      }
     }
     await ensureLocalWorkspace(handle.db);
     return handle;

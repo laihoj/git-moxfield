@@ -1,22 +1,25 @@
 /**
  * The app's migrations on a remote libSQL server: they apply unchanged (including the
- * hand-written trigger migration), the triggers fire, foreign keys and cascades work.
+ * hand-written trigger migration), the triggers fire, foreign keys and cascades work, and
+ * the app keeps serving a database that a newer deploy has migrated already.
  */
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { openDatabase } from '@/server/db/client';
 import type { LibsqlDatabase } from '@/server/db/libsql';
 import {
   applyMigrations,
   assertMigrationsUpToDate,
   bundledMigrations,
   checkMigrationState,
+  MIGRATIONS_TABLE,
 } from '@/server/db/migration-state';
 import * as schema from '@/server/db/schema';
 import { classifySqlError } from '@/server/db/sql-errors';
 import { countRows, seedDeckHistory } from '@tests/support/libsql';
 
-import { openRemote, wipeRemoteDatabase } from './support';
+import { openRemote, remoteTarget, wipeRemoteDatabase } from './support';
 
 let handle: LibsqlDatabase;
 
@@ -101,5 +104,30 @@ describe('migrations on a remote database', () => {
     expect(await countRows(db, 'commits')).toBe(commitsBefore - 1);
     expect(await db.all(sql`SELECT id FROM branches WHERE deck_id = ${seeded.deckId}`)).toEqual([]);
     expect(await db.all(sql`PRAGMA foreign_key_check`)).toEqual([]);
+  });
+
+  it('are checked when the app opens the database, which serves one a newer deploy migrated', async () => {
+    const { db } = handle;
+    const { url, authToken } = remoteTarget();
+    const newest = Math.max(...bundledMigrations().map((entry) => entry.when));
+    // What a newer deploy's `pnpm db:migrate` records before that deploy is published.
+    await db.run(
+      sql`INSERT INTO ${sql.identifier(MIGRATIONS_TABLE)} (hash, created_at) VALUES ('newer-deploy', ${newest + 1})`,
+    );
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const app = await openDatabase({ url, authToken });
+      app.close();
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
+        level: 'warn',
+        scope: 'db',
+        message: expect.stringContaining('migrations newer than this build') as string,
+        migrations: { newer: 1 },
+      });
+    } finally {
+      await db.run(sql`DELETE FROM ${sql.identifier(MIGRATIONS_TABLE)} WHERE hash = 'newer-deploy'`);
+    }
+    await expect(checkMigrationState(db)).resolves.toMatchObject({ status: 'up-to-date' });
   });
 });

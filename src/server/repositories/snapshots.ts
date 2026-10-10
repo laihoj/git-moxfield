@@ -56,15 +56,7 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
         .get();
       // A known snapshot was indexed when it was first stored.
       if (known) return hash;
-      const rows = Object.entries(snapshot.zones).flatMap(([zone, cards]) =>
-        (cards ?? []).map((card) => ({
-          snapshotHash: hash,
-          zone,
-          cardKey: card.key,
-          name: card.name,
-          quantity: card.quantity,
-        })),
-      );
+      const rows = snapshotCardRows(hash, snapshot);
       // Snapshot and card index rows are written together or not at all. If another writer
       // stored the same snapshot since the check above, every insert is a no-op.
       await writeAll(ctx, (db) => [
@@ -95,6 +87,22 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
   };
 }
 
+/** The `snapshot_cards` rows (card index) of a snapshot stored under `hash`. */
+export function snapshotCardRows(
+  hash: string,
+  snapshot: CanonicalSnapshot,
+): (typeof snapshotCards.$inferInsert)[] {
+  return Object.entries(snapshot.zones).flatMap(([zone, cards]) =>
+    (cards ?? []).map((card) => ({
+      snapshotHash: hash,
+      zone,
+      cardKey: card.key,
+      name: card.name,
+      quantity: card.quantity,
+    })),
+  );
+}
+
 function assertCanonical(snapshot: CanonicalSnapshot): void {
   let canonical: CanonicalSnapshot;
   try {
@@ -110,7 +118,11 @@ function assertCanonical(snapshot: CanonicalSnapshot): void {
   }
 }
 
-function decodeSnapshot(row: typeof snapshots.$inferSelect): CanonicalSnapshot {
+/**
+ * Decodes a stored snapshot row.
+ * @throws {RepositoryError} `unsupported-version` or `corrupt-data`.
+ */
+export function decodeSnapshot(row: typeof snapshots.$inferSelect): CanonicalSnapshot {
   const what = `Snapshot ${row.hash}`;
   if (row.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
     throw new RepositoryError(

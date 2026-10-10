@@ -3,8 +3,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import type { IngestWarning } from '@/core/model';
+import type { DeckOverviewDTO } from '@/server/services/types';
 import { CommitForm } from '@/components/deck/commit-form';
 import { DiffView, diffCountLabel, initialPlayedCount } from '@/components/deck/diff-view';
+import { MoxfieldDeckPanel } from '@/components/deck/moxfield-deck-panel';
 import { SummaryChips } from '@/components/deck/summary-chips';
 import { StatusPanel } from '@/components/deck/status-panel';
 import { UntrackDeckButton } from '@/components/deck/untrack-deck-button';
@@ -23,7 +25,7 @@ export const dynamic = 'force-dynamic';
 /** Deck status: Moxfield state, uncommitted changes, commit form and recent versions. */
 export default async function DeckStatusPage({ params, searchParams }: PageProps<'/decks/[deckId]'>) {
   const deckId = decodeSegment((await params).deckId);
-  const { captured } = await searchParams;
+  const { captured, relinked } = await searchParams;
   const [overview, tags] = await Promise.all([loadOverview(deckId), loadTags(deckId)]);
   if (overview === null) notFound();
 
@@ -39,25 +41,8 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
   return (
     <div className="grid items-start gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="flex min-w-0 flex-col gap-5 md:gap-6">
-        {captured === '1' && (
-          <Alert
-            tone="success"
-            role="status"
-            title="Updated from Moxfield"
-            trailing={
-              <Link
-                href={routes.deck(overview.id)}
-                replace
-                scroll={false}
-                aria-label="Dismiss"
-                className="-m-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-fg"
-              >
-                <X aria-hidden="true" className="size-4" />
-              </Link>
-            }
-          >
-            The deck sent from your browser is now the current Moxfield state below.
-          </Alert>
+        {(captured === '1' || relinked === '1') && (
+          <Greeting deck={overview} captured={captured === '1'} relinked={relinked === '1'} />
         )}
 
         <StatusPanel deck={overview}>
@@ -114,6 +99,12 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
           headSequence={head?.sequence ?? null}
           emptyDescription="Your first commit becomes v1."
         />
+        <MoxfieldDeckPanel
+          deckId={overview.id}
+          externalId={overview.externalId}
+          url={overview.url}
+          relinks={overview.relinks}
+        />
         <div className="flex justify-end lg:justify-start">
           <UntrackDeckButton
             deckId={overview.id}
@@ -123,6 +114,60 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
         </div>
       </aside>
     </div>
+  );
+}
+
+/**
+ * The notice after arriving from the bookmarklet (`captured`), from "Change Moxfield deck"
+ * (`relinked`), or from a capture that continued the deck's history (both).
+ */
+function Greeting({
+  deck,
+  captured,
+  relinked,
+}: {
+  deck: Pick<DeckOverviewDTO, 'id' | 'head' | 'working' | 'status'>;
+  captured: boolean;
+  relinked: boolean;
+}) {
+  const since = deck.head === null ? null : versionLabel(deck.head.sequence);
+  let title = 'Updated from Moxfield';
+  let text = 'The deck sent from your browser is now the current Moxfield state below.';
+  if (relinked && captured) {
+    title = 'Continued with the new Moxfield deck';
+    if (since === null) {
+      text = 'This deck now follows the Moxfield deck you sent, which is its current Moxfield state below.';
+    } else if (deck.status === 'clean') {
+      text = `This deck now follows the Moxfield deck you sent. Its versions are kept, and the deck matches ${since}.`;
+    } else {
+      text = `This deck now follows the Moxfield deck you sent. Its versions are kept; below is what changed since ${since}.`;
+    }
+  } else if (relinked) {
+    title = 'Moxfield deck changed';
+    text =
+      deck.working === null
+        ? 'This deck now follows the new Moxfield deck, and its versions are kept. Send the new deck with the bookmarklet to see what changed.'
+        : 'This deck now follows the new Moxfield deck, and its versions are kept.';
+  }
+  return (
+    <Alert
+      tone="success"
+      role="status"
+      title={title}
+      trailing={
+        <Link
+          href={routes.deck(deck.id)}
+          replace
+          scroll={false}
+          aria-label="Dismiss"
+          className="-m-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-fg"
+        >
+          <X aria-hidden="true" className="size-4" />
+        </Link>
+      }
+    >
+      {text}
+    </Alert>
   );
 }
 

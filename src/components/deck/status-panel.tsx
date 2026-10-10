@@ -15,6 +15,7 @@ import { describeFetchError, describeStatus } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 
 import { AutoRefresh } from './auto-refresh';
+import { ChangeMoxfieldDeckLink } from './moxfield-deck-panel';
 import { RefreshButton } from './refresh-button';
 import { StatusIndicator } from './status-indicator';
 
@@ -240,6 +241,13 @@ function FetchErrorBanner({
         )}
         {(error.code === 'not-found' || error.code === 'forbidden') && (
           <> Check that the deck still exists and is public or unlisted on Moxfield.</>
+        )}
+        {error.code === 'not-found' && (
+          <>
+            {' '}
+            Deleted it and made it again?{' '}
+            <ChangeMoxfieldDeckLink>Change the Moxfield deck</ChangeMoxfieldDeckLink> to the new one.
+          </>
         )}
       </p>
       <p className="mt-1 text-xs text-muted">

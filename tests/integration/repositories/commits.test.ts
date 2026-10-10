@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { commitId } from '@/core/hash';
 import type { CanonicalSnapshot } from '@/core/model';
 import { commits } from '@/server/db/schema';
-import type { CommitRecord, DeckRecord, Repositories } from '@/server/repositories';
+import {
+  createRepositories,
+  type CommitRecord,
+  type DeckRecord,
+  type Repositories,
+} from '@/server/repositories';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   commitTestSnapshot,
@@ -215,7 +220,7 @@ describe('commits repository', () => {
   });
 
   it('lists, counts and finds the highest sequence per deck', async () => {
-    const { repos } = await createTestRepositories();
+    const { db, repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);
     const other = await createTestDeck(repos);
     expect(await repos.commits.listForDeck(deck.id)).toEqual([]);
@@ -229,6 +234,19 @@ describe('commits repository', () => {
     expect(await repos.commits.count(deck.id)).toBe(3);
     expect(await repos.commits.maxSequence(deck.id)).toBe(3);
     expect(await repos.commits.maxSequence(other.id)).toBe(1);
+    expect(await repos.commits.countByDeck()).toEqual(
+      new Map([
+        [deck.id, 3],
+        [other.id, 1],
+      ]),
+    );
+    // Decks without versions are absent, and other workspaces' versions are not counted.
+    await createTestDeck(repos);
+    const team = await repos.users.create({ displayName: 'Team', role: 'member' });
+    const theirs = createRepositories(db, { workspaceId: team.workspaceId });
+    await commitTestSnapshot(theirs, await createTestDeck(theirs), version(1));
+    expect([...(await repos.commits.countByDeck()).keys()].sort()).toEqual([deck.id, other.id].sort());
+    expect([...(await theirs.commits.countByDeck()).values()]).toEqual([1]);
   });
 
   describe('findByIdPrefix', () => {

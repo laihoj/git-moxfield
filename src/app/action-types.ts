@@ -30,6 +30,20 @@ export type NoteState =
   | { status: 'saved'; text: string; savedAt: string }
   | { status: 'error'; message: string };
 
+/**
+ * State of "Change Moxfield deck" (`useActionState`). Success redirects to the deck's
+ * Status page instead of returning. `trackedBy` names the user's deck that already tracks
+ * the Moxfield deck asked for, so the form can link to it.
+ */
+export type RelinkDeckState =
+  | { status: 'idle' }
+  | {
+      status: 'error';
+      message: string;
+      input: string;
+      trackedBy?: { deckId: string; name: string };
+    };
+
 /** Result of untracking a deck (on success the action redirects instead of returning). */
 export interface UntrackResult {
   ok: false;
