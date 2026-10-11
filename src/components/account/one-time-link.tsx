@@ -17,6 +17,18 @@ export interface OneTimeLinkProps {
   meta?: ReactNode;
 }
 
+/** A secret URL shown as selectable text, once: a tap selects all of it. */
+export function SecretUrl({ url }: { url: string }) {
+  return (
+    <p className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2.5">
+      <Link2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
+      <span className="min-w-0 font-mono text-[0.8125rem] leading-relaxed break-all text-fg select-all">
+        {url}
+      </span>
+    </p>
+  );
+}
+
 /**
  * A freshly created one-time link (device link, invite, recovery link), shown to the
  * person who made it, once: the URL as selectable text (a tap selects all of it), a copy
@@ -26,12 +38,7 @@ export function OneTimeLink({ url, expiresAt, subject, children, meta }: OneTime
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {children !== undefined && <div className="text-sm text-pretty text-fg">{children}</div>}
-      <p className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2.5">
-        <Link2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
-        <span className="min-w-0 font-mono text-[0.8125rem] leading-relaxed break-all text-fg select-all">
-          {url}
-        </span>
-      </p>
+      <SecretUrl url={url} />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <CopyButton text={url} label={`Copy ${subject.toLowerCase()}`} subject={subject} variant="primary" />
         <MetaList className="text-xs text-muted">

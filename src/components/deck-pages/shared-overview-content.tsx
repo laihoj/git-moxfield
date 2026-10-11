@@ -1,6 +1,6 @@
 import { History, Undo2 } from 'lucide-react';
 
-import { DiffView, diffCountLabel } from '@/components/deck/diff-view';
+import { changesTitle, DiffView, diffCountLabel, initialDescription } from '@/components/deck/diff-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
 import { VersionBadge } from '@/components/deck/version-row';
 import { VersionTags } from '@/components/deck/version-tags';
@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
+import { SidebarLayout } from '@/components/ui/sidebar-layout';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { SharedOverviewDTO, SharedVersionDetailDTO } from '@/server/services/types';
@@ -30,7 +31,7 @@ export interface SharedOverviewContentProps {
  */
 export function SharedOverviewContent({ scope, overview, latest }: SharedOverviewContentProps) {
   return (
-    <div className="grid items-start gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <SidebarLayout>
       <div className="flex min-w-0 flex-col gap-5 md:gap-6">
         {latest === null ? (
           <EmptyState
@@ -51,7 +52,7 @@ export function SharedOverviewContent({ scope, overview, latest }: SharedOvervie
           emptyDescription="Versions show up here once they are committed."
         />
       </aside>
-    </div>
+    </SidebarLayout>
   );
 }
 
@@ -107,10 +108,8 @@ function LatestVersion({ scope, detail }: { scope: DeckScope; detail: SharedVers
       <Card as="section" aria-labelledby="changes-heading">
         <CardHeader
           id="changes-heading"
-          title={initial ? 'Initial version' : `Changes since ${versionLabel(version.parentSequence ?? 0)}`}
-          description={
-            initial ? `${pluralize(version.playedCardCount, 'card')} in the deck` : diffCountLabel(diff)
-          }
+          title={changesTitle(version.parentSequence)}
+          description={initial ? initialDescription(version.playedCardCount) : diffCountLabel(diff)}
           className="mb-4"
         />
         <DiffView

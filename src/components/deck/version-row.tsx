@@ -11,6 +11,7 @@ import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { DiffStatsInline } from './diff-stats';
+import { TagChip } from './tag-chip';
 
 /** `v47` in a compact pill; the latest version is highlighted. */
 export function VersionBadge({ sequence, latest = false }: { sequence: number; latest?: boolean }) {
@@ -23,6 +24,26 @@ export function VersionBadge({ sequence, latest = false }: { sequence: number; l
     >
       {versionLabel(sequence)}
     </span>
+  );
+}
+
+/** The title of a version's page: its badge, then the heading (the commit message, or what the page does). */
+export function VersionTitle({
+  sequence,
+  latest = false,
+  children,
+}: {
+  sequence: number;
+  latest?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <VersionBadge sequence={sequence} latest={latest} />
+      <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
+        {children}
+      </h2>
+    </div>
   );
 }
 
@@ -81,12 +102,7 @@ export function VersionRow({
           {version.tags.length > 0 && (
             <ul aria-label="Tags" className="flex flex-wrap gap-1">
               {version.tags.map((tag) => (
-                <li
-                  key={tag}
-                  className="rounded-full bg-accent-soft px-2 text-xs leading-5 font-medium text-accent"
-                >
-                  {tag}
-                </li>
+                <TagChip key={tag} tag={tag} size="sm" />
               ))}
             </ul>
           )}

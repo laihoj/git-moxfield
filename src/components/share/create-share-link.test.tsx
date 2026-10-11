@@ -34,7 +34,7 @@ describe('CreateShareLink', () => {
   it('creates a labelled link with notes and shows its URL once, with a copy button and a warning', async () => {
     const user = userEvent.setup();
     createShareLinkAction.mockResolvedValue(created('For Mikko', true));
-    render(<CreateShareLink deckId="d1" maxLabelLength={60} />);
+    render(<CreateShareLink deckId="d1" />);
 
     const label = screen.getByLabelText('Who is it for?');
     expect(label).toHaveAttribute('maxlength', '60');
@@ -59,7 +59,7 @@ describe('CreateShareLink', () => {
   it('forgets the URL when done, and starts over with an empty form', async () => {
     const user = userEvent.setup();
     createShareLinkAction.mockResolvedValue(created('Playgroup', false));
-    render(<CreateShareLink deckId="d1" maxLabelLength={60} />);
+    render(<CreateShareLink deckId="d1" />);
     await user.type(screen.getByLabelText('Who is it for?'), 'Playgroup');
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     expect(await screen.findByText(URL)).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe('CreateShareLink', () => {
       field: 'label',
       message: 'Name the link, e.g. “For Mikko”.',
     });
-    render(<CreateShareLink deckId="d1" maxLabelLength={60} />);
+    render(<CreateShareLink deckId="d1" />);
     await user.type(screen.getByLabelText('Who is it for?'), '   ');
     await user.click(screen.getByRole('button', { name: 'Create link' }));
 
@@ -97,7 +97,7 @@ describe('CreateShareLink', () => {
       status: 'error',
       message: 'You were signed out. Sign in again.',
     });
-    render(<CreateShareLink deckId="d1" maxLabelLength={60} />);
+    render(<CreateShareLink deckId="d1" />);
     await user.type(screen.getByLabelText('Who is it for?'), 'For Mikko');
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('You were signed out');

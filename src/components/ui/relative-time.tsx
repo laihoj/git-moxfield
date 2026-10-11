@@ -96,39 +96,53 @@ export interface RelativeTimeProps {
 }
 
 /**
+ * The `<time>` element all of the time components render: it follows the clock (see
+ * {@link Clock}), so its `key` flips when the clock goes live and the text is rendered again
+ * from `now`; the server's text and the first client render agree, hence
+ * `suppressHydrationWarning`. The tooltip shows the full local date and time.
+ */
+function ClockedTime({
+  value,
+  className,
+  text,
+}: {
+  value: string;
+  className?: string;
+  /** The text for the moment `now` (milliseconds since the epoch). */
+  text: (now: number) => string;
+}) {
+  const clock = useClock();
+  return (
+    <time
+      key={clockKey(clock)}
+      dateTime={value}
+      title={formatFullDateTime(value)}
+      className={className}
+      suppressHydrationWarning
+    >
+      {text(clock.now)}
+    </time>
+  );
+}
+
+/**
  * `<time>` showing a relative time ("23 min ago") that stays fresh. The server renders
  * the same relative text (see `renderClock`), so nothing shifts on hydration. The
  * tooltip shows the full local date and time.
  */
 export function RelativeTime({ value, style = 'long', future = false, className }: RelativeTimeProps) {
-  const clock = useClock();
   return (
-    <time
-      key={clockKey(clock)}
-      dateTime={value}
-      title={formatFullDateTime(value)}
+    <ClockedTime
+      value={value}
       className={className}
-      suppressHydrationWarning
-    >
-      {formatRelativeTime(value, clock.now, style, { future })}
-    </time>
+      text={(now) => formatRelativeTime(value, now, style, { future })}
+    />
   );
 }
 
 /** `<time>` with an absolute local date and time (`Oct 9, 2026, 2:03 PM`). */
 export function AbsoluteTime({ value, className }: { value: string; className?: string }) {
-  const clock = useClock();
-  return (
-    <time
-      key={clockKey(clock)}
-      dateTime={value}
-      title={formatFullDateTime(value)}
-      className={className}
-      suppressHydrationWarning
-    >
-      {formatDateTime(value)}
-    </time>
-  );
+  return <ClockedTime value={value} className={className} text={() => formatDateTime(value)} />;
 }
 
 /**
@@ -136,18 +150,7 @@ export function AbsoluteTime({ value, className }: { value: string; className?: 
  * day. For moments like "paused until 9:47 PM".
  */
 export function ClockTime({ value, className }: { value: string; className?: string }) {
-  const clock = useClock();
-  return (
-    <time
-      key={clockKey(clock)}
-      dateTime={value}
-      title={formatFullDateTime(value)}
-      className={className}
-      suppressHydrationWarning
-    >
-      {formatClockTime(value, clock.now)}
-    </time>
-  );
+  return <ClockedTime value={value} className={className} text={(now) => formatClockTime(value, now)} />;
 }
 
 /**
@@ -155,23 +158,37 @@ export function ClockTime({ value, className }: { value: string; className?: str
  * `Expires in less than a minute`, then `Expired`.
  */
 export function ExpiryTime({ value, className }: { value: string; className?: string }) {
-  const clock = useClock();
-  const remaining = Date.parse(value) - clock.now;
-  const text =
-    remaining <= 0
-      ? 'Expired'
-      : remaining < 60_000
-        ? 'Expires in less than a minute'
-        : `Expires ${formatRelativeTime(value, clock.now, 'long', { future: true })}`;
   return (
-    <time
-      key={clockKey(clock)}
-      dateTime={value}
-      title={formatFullDateTime(value)}
+    <ClockedTime
+      value={value}
       className={className}
-      suppressHydrationWarning
-    >
-      {text}
-    </time>
+      text={(now) => {
+        const remaining = Date.parse(value) - now;
+        if (remaining <= 0) return 'Expired';
+        if (remaining < 60_000) return 'Expires in less than a minute';
+        return `Expires ${formatRelativeTime(value, now, 'long', { future: true })}`;
+      }}
+    />
+  );
+}
+
+/**
+ * A fact about a moment that may not have happened: `Last used <RelativeTime>`, or the
+ * `fallback` (`Never used`) when `value` is `null`.
+ */
+export function LabeledTime({
+  label,
+  value,
+  fallback,
+}: {
+  label: string;
+  value: string | null;
+  fallback: string;
+}) {
+  if (value === null) return fallback;
+  return (
+    <>
+      {label} <RelativeTime value={value} />
+    </>
   );
 }

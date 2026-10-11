@@ -1,11 +1,11 @@
-import { ArrowRight, History } from 'lucide-react';
+import { History } from 'lucide-react';
 
 import { VersionTimeline } from '@/components/deck/version-timeline';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Link } from '@/components/ui/navigation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { VersionListItemDTO } from '@/server/services/types';
+import { ArrowLink } from '@/components/ui/text-link';
 
 export interface RecentVersionsProps {
   scope: DeckScope;
@@ -34,15 +34,7 @@ export function RecentVersions({
         <h2 id="recent-heading" className="text-base font-semibold text-fg">
           Recent versions
         </h2>
-        {versionCount > 0 && (
-          <Link
-            href={deckRoutes(scope).history()}
-            className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-accent hover:underline md:min-h-0"
-          >
-            All {versionCount}
-            <ArrowRight aria-hidden="true" className="size-3.5" />
-          </Link>
-        )}
+        {versionCount > 0 && <ArrowLink href={deckRoutes(scope).history()}>All {versionCount}</ArrowLink>}
       </div>
       {versions.length > 0 ? (
         <VersionTimeline

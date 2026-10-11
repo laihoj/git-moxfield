@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { ArrowUpRight, Bookmark, ClipboardPaste } from 'lucide-react';
+import { Bookmark, ClipboardPaste } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { upperFirst } from '@/core/text';
@@ -9,11 +9,11 @@ import { Alert } from '@/components/ui/alert';
 import { ButtonLink, ExternalButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
-import { Link } from '@/components/ui/navigation';
 import { ClockTime, RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
-import { describeFetchError, describeStatus } from '@/lib/presentation';
+import { currentFetchError, describeFetchError, describeStatus } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
+import { TextLink } from '@/components/ui/text-link';
 
 import { AutoRefresh } from './auto-refresh';
 import { ChangeMoxfieldDeckLink } from './moxfield-deck-panel';
@@ -41,14 +41,6 @@ function observedVerb(method: ObservationDTO['method']): string {
     case 'manual-paste':
       return 'pasted';
   }
-}
-
-/** A fetch error is current when it happened after the latest successful observation. */
-function currentFetchError(deck: StatusPanelDeck): FetchErrorDTO | null {
-  const error = deck.lastFetchError;
-  if (error === null) return null;
-  if (deck.working === null) return error;
-  return Date.parse(error.at) > Date.parse(deck.working.fetchedAt) ? error : null;
 }
 
 /**
@@ -140,7 +132,6 @@ function RefreshControl({ deck, serverAvailable }: { deck: StatusPanelDeck; serv
       href={deck.url}
       size="sm"
       variant={deck.status === 'never-fetched' ? 'primary' : 'secondary'}
-      trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
       title="Opens the deck on Moxfield. Click the git-moxfield bookmarklet there to send the current deck."
     >
       Update from Moxfield
@@ -153,10 +144,7 @@ function FirstSnapshotHelp({ serverAvailable }: { serverAvailable: boolean }) {
     return (
       <p className="text-sm text-muted sm:pl-6">
         Refresh to fetch the deck from Moxfield, or send it with the{' '}
-        <Link href={routes.setup()} className="font-medium text-accent hover:underline">
-          bookmarklet
-        </Link>
-        .
+        <TextLink href={routes.setup()}>bookmarklet</TextLink>.
       </p>
     );
   }
@@ -167,15 +155,10 @@ function FirstSnapshotHelp({ serverAvailable }: { serverAvailable: boolean }) {
       </li>
       <li>
         Click the <span className="font-medium text-fg">Send to git-moxfield</span> bookmarklet there.{' '}
-        <Link href={routes.setup()} className="font-medium text-accent hover:underline">
-          Set it up
-        </Link>
+        <TextLink href={routes.setup()}>Set it up</TextLink>
       </li>
       <li>
-        Or paste the deck JSON:{' '}
-        <Link href={routes.capturePaste()} className="font-medium text-accent hover:underline">
-          paste instead
-        </Link>
+        Or paste the deck JSON: <TextLink href={routes.capturePaste()}>paste instead</TextLink>
       </li>
     </ol>
   );
@@ -196,11 +179,7 @@ function FetchErrorBanner({
   const tone = error.code === 'rate-limited' || error.code === 'blocked' ? 'warn' : 'error';
   const bookmarkletActions = (
     <>
-      <ExternalButtonLink
-        href={deckUrl}
-        size="sm"
-        trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
-      >
+      <ExternalButtonLink href={deckUrl} size="sm">
         Open deck in Moxfield
       </ExternalButtonLink>
       <ButtonLink
@@ -272,10 +251,7 @@ function ServerFetchNote({
       ) : (
         <>Server fetching is off.</>
       )}{' '}
-      Use the bookmarklet on Moxfield to send changes.{' '}
-      <Link href={routes.setup()} className="font-medium text-accent hover:underline">
-        Setup
-      </Link>
+      Use the bookmarklet on Moxfield to send changes. <TextLink href={routes.setup()}>Setup</TextLink>
     </p>
   );
 }

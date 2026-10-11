@@ -14,11 +14,11 @@ import type { ReactNode } from 'react';
 
 import { CompareMenu, type CompareMenuItem } from '@/components/deck/compare-menu';
 import { DeckList } from '@/components/deck/deck-list';
-import { DiffView } from '@/components/deck/diff-view';
+import { changesTitle, DiffView, initialDescription } from '@/components/deck/diff-view';
 import { PrimerDiffView } from '@/components/deck/primer-diff-view';
 import { PrimerView } from '@/components/deck/primer-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
-import { VersionBadge } from '@/components/deck/version-row';
+import { VersionTitle } from '@/components/deck/version-row';
 import { Badge } from '@/components/ui/badge';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -26,13 +26,17 @@ import { CopyButton } from '@/components/ui/copy-button';
 import { Disclosure } from '@/components/ui/disclosure';
 import { Link } from '@/components/ui/navigation';
 import { AbsoluteTime, RelativeTime } from '@/components/ui/relative-time';
+import { SidebarLayout } from '@/components/ui/sidebar-layout';
 import { SegmentedLinks } from '@/components/ui/tabs';
 import { playedCardCount } from '@/core/canonical';
 import { diffChangeCount } from '@/core/diff';
-import { pluralize, versionLabel } from '@/lib/format';
+import { versionLabel } from '@/lib/format';
 import { describeIngestMethod } from '@/lib/presentation';
 import { deckRoutes, type DeckRoutes, type DeckScope, type VersionTab } from '@/lib/routes';
 import type { SharedVersionDetailDTO } from '@/server/services/types';
+import { TextLink } from '@/components/ui/text-link';
+import { BackLink } from '@/components/ui/back-link';
+import { EMPTY_REF, WORKING_REF } from '@/lib/version-refs';
 
 export interface VersionContentProps {
   scope: DeckScope;
@@ -65,13 +69,9 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
   return (
     <div className="flex flex-col gap-5 md:gap-6">
       <nav aria-label="Versions" className="flex items-center justify-between gap-2">
-        <Link
-          href={routes.history()}
-          className="-ml-2 inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-sm font-medium text-muted hover:text-fg md:min-h-9"
-        >
-          <History aria-hidden="true" className="size-4" />
+        <BackLink href={routes.history()} icon={<History aria-hidden="true" className="size-4" />}>
           History
-        </Link>
+        </BackLink>
         <div className="flex items-center gap-1">
           <StepLink
             href={previous === null ? null : routes.version(previous.sequence, tab)}
@@ -87,13 +87,10 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
       </nav>
 
       <header className="flex flex-col gap-3">
-        <div className="flex items-start gap-3">
-          <VersionBadge sequence={version.sequence} latest={isLatest} />
-          <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
-            <span className="sr-only">{versionLabel(version.sequence)}: </span>
-            {version.message}
-          </h2>
-        </div>
+        <VersionTitle sequence={version.sequence} latest={isLatest}>
+          <span className="sr-only">{versionLabel(version.sequence)}: </span>
+          {version.message}
+        </VersionTitle>
         <ul
           className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted"
           aria-label="About this version"
@@ -132,7 +129,7 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
         </div>
       </header>
 
-      <div className="grid items-start gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <SidebarLayout>
         <div className="flex min-w-0 flex-col gap-4">
           <SegmentedLinks
             label="Version content"
@@ -164,24 +161,15 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
           />
 
           {tab === 'changes' && (
-            <Card
-              as="section"
-              aria-label={
-                initial ? 'Initial version' : `Changes since ${versionLabel(version.parentSequence ?? 0)}`
-              }
-            >
+            <Card as="section" aria-label={changesTitle(version.parentSequence)}>
               {initial ? (
                 <div className="mb-4">
-                  <h3 className="text-base font-semibold text-fg">Initial version</h3>
-                  <p className="text-sm text-muted">
-                    {pluralize(playedCardCount(snapshot), 'card')} in the deck
-                  </p>
+                  <h3 className="text-base font-semibold text-fg">{changesTitle(null)}</h3>
+                  <p className="text-sm text-muted">{initialDescription(playedCardCount(snapshot))}</p>
                 </div>
               ) : (
                 <div className="mb-4 flex flex-col gap-2">
-                  <h3 className="text-base font-semibold text-fg">
-                    Changes since {versionLabel(version.parentSequence ?? 0)}
-                  </h3>
+                  <h3 className="text-base font-semibold text-fg">{changesTitle(version.parentSequence)}</h3>
                   <SummaryChips diff={diff} />
                 </div>
               )}
@@ -284,12 +272,9 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
                 {previous === null ? (
                   <span className="text-muted">None (first version)</span>
                 ) : (
-                  <Link
-                    href={routes.version(previous.sequence)}
-                    className="font-medium text-accent hover:underline"
-                  >
+                  <TextLink href={routes.version(previous.sequence)}>
                     {versionLabel(previous.sequence)}
-                  </Link>
+                  </TextLink>
                 )}
               </Detail>
               <Detail term="Version id">
@@ -309,7 +294,7 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
             </dl>
           </Card>
         </aside>
-      </div>
+      </SidebarLayout>
     </div>
   );
 }
@@ -336,7 +321,7 @@ function compareItems(
     items.push({
       label: 'With current Moxfield deck',
       detail: isLatest ? 'Uncommitted changes since this version' : 'What changed since this version',
-      href: routes.compare({ from: versionLabel(version.sequence), to: 'working' }),
+      href: routes.compare({ from: versionLabel(version.sequence), to: WORKING_REF }),
     });
   }
   if (deck.head !== null && !isLatest) {
@@ -350,7 +335,7 @@ function compareItems(
     items.push({
       label: 'With the empty deck',
       detail: 'Every card in this version',
-      href: routes.compare({ from: 'empty', to: versionLabel(version.sequence) }),
+      href: routes.compare({ from: EMPTY_REF, to: versionLabel(version.sequence) }),
     });
   }
   return items;

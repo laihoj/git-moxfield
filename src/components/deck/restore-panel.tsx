@@ -1,5 +1,6 @@
 import clsx from 'clsx';
-import { ArrowUpRight, Download, Eraser, Eye, Hand, Info } from 'lucide-react';
+import { Download, Eraser, Eye, Hand, Info } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import type {
   RestoreExport,
@@ -12,7 +13,8 @@ import { buttonClasses, ExternalButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CopyButton } from '@/components/ui/copy-button';
 import { Disclosure } from '@/components/ui/disclosure';
-import { pluralize } from '@/lib/format';
+import { domIdSlug, pluralize } from '@/lib/format';
+import { PAGE_ANCHORS } from '@/lib/routes';
 
 import { zoneTextClass } from './zone-badge';
 
@@ -51,12 +53,7 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
           </h2>
           <div className="flex flex-wrap gap-2">
             {deckUrl !== undefined && (
-              <ExternalButtonLink
-                href={deckUrl}
-                size="sm"
-                variant="primary"
-                trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
-              >
+              <ExternalButtonLink href={deckUrl} size="sm" variant="primary">
                 Open deck in Moxfield
               </ExternalButtonLink>
             )}
@@ -145,52 +142,98 @@ const KIND_NOTES: Record<Exclude<RestoreSectionKind, 'paste'>, { badge: string; 
   },
 };
 
-function SectionBlock({ section }: { section: RestoreSection }) {
-  const id = `restore-${section.zone.replace(/[^a-z0-9-]/gi, '-')}`;
-  const empty = section.cardCount === 0;
-  const { kind } = section;
-  const lines = lineCount(section.text);
+/** The anatomy both kinds of block share: heading with its count, where it goes, then the text to copy (or a notice that there is none). */
+function RestoreBlock({
+  id,
+  headingId,
+  headingClassName,
+  heading,
+  badge,
+  count,
+  target,
+  note,
+  empty,
+  emptyText,
+  className,
+  children,
+}: {
+  id?: string;
+  headingId: string;
+  headingClassName: string;
+  heading: ReactNode;
+  badge?: ReactNode;
+  count?: ReactNode;
+  target: string;
+  note?: ReactNode;
+  empty: boolean;
+  emptyText: ReactNode;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <Card
-      as="article"
-      aria-labelledby={`${id}-label`}
-      className={clsx('flex flex-col gap-3', kind !== 'paste' && 'bg-surface-2/40 shadow-none')}
-    >
+    <Card as="article" id={id} aria-labelledby={headingId} className={clsx('flex flex-col gap-3', className)}>
       <div className="flex flex-col gap-0.5">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3
-              id={`${id}-label`}
-              className={clsx('text-sm font-semibold tracking-wide uppercase', zoneTextClass(section.zone))}
+              id={headingId}
+              className={clsx('text-sm font-semibold tracking-wide uppercase', headingClassName)}
             >
-              {section.label}
+              {heading}
             </h3>
-            {kind !== 'paste' && (
-              <Badge
-                tone="outline"
-                icon={
-                  kind === 'manual' ? (
-                    <Hand aria-hidden="true" className="size-3" />
-                  ) : (
-                    <Eye aria-hidden="true" className="size-3" />
-                  )
-                }
-              >
-                {KIND_NOTES[kind].badge}
-              </Badge>
-            )}
+            {badge}
           </div>
-          <span className="text-sm text-muted tabular">{pluralize(section.cardCount, 'card')}</span>
+          {count}
         </div>
-        <p className="text-sm break-words text-muted">{section.target}</p>
+        <p className="text-sm break-words text-muted">{target}</p>
       </div>
-      {kind !== 'paste' && <p className="-mt-1 text-sm text-fg/85">{KIND_NOTES[kind].note}</p>}
+      {note}
       {empty ? (
         <p className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-3 text-sm text-fg">
           <Eraser aria-hidden="true" className="size-4 shrink-0 text-muted" />
-          Clear this tab in Moxfield: this version has no {section.label} cards.
+          {emptyText}
         </p>
-      ) : kind === 'paste' ? (
+      ) : (
+        children
+      )}
+    </Card>
+  );
+}
+
+function SectionBlock({ section }: { section: RestoreSection }) {
+  const id = `restore-${domIdSlug(section.zone)}`;
+  const empty = section.cardCount === 0;
+  const { kind } = section;
+  const lines = lineCount(section.text);
+  return (
+    <RestoreBlock
+      headingId={`${id}-label`}
+      headingClassName={zoneTextClass(section.zone)}
+      heading={section.label}
+      badge={
+        kind !== 'paste' && (
+          <Badge
+            tone="outline"
+            icon={
+              kind === 'manual' ? (
+                <Hand aria-hidden="true" className="size-3" />
+              ) : (
+                <Eye aria-hidden="true" className="size-3" />
+              )
+            }
+          >
+            {KIND_NOTES[kind].badge}
+          </Badge>
+        )
+      }
+      count={<span className="text-sm text-muted tabular">{pluralize(section.cardCount, 'card')}</span>}
+      target={section.target}
+      note={kind !== 'paste' && <p className="-mt-1 text-sm text-fg/85">{KIND_NOTES[kind].note}</p>}
+      empty={empty}
+      emptyText={`Clear this tab in Moxfield: this version has no ${section.label} cards.`}
+      className={kind !== 'paste' ? 'bg-surface-2/40 shadow-none' : undefined}
+    >
+      {kind === 'paste' ? (
         <div className="flex flex-col gap-1">
           <TextBlock id={id} label={`${section.label} restore text`} text={section.text} />
           <p className="text-right text-xs text-muted tabular">{pluralize(lines, 'line')}</p>
@@ -219,7 +262,7 @@ function SectionBlock({ section }: { section: RestoreSection }) {
           </div>
         </div>
       )}
-    </Card>
+    </RestoreBlock>
   );
 }
 
@@ -231,46 +274,35 @@ function SectionBlock({ section }: { section: RestoreSection }) {
 function PrimerBlock({ primer }: { primer: RestorePrimer }) {
   const lines = lineCount(primer.text);
   return (
-    <Card
-      as="article"
-      id="restore-primer"
-      aria-labelledby="restore-primer-label"
-      className="flex scroll-mt-4 flex-col gap-3"
+    <RestoreBlock
+      id={PAGE_ANCHORS.restorePrimer}
+      headingId={`${PAGE_ANCHORS.restorePrimer}-label`}
+      headingClassName="text-fg"
+      heading="Primer"
+      count={
+        primer.text !== '' && <span className="text-sm text-muted tabular">{pluralize(lines, 'line')}</span>
+      }
+      target={primer.target}
+      empty={primer.text === ''}
+      emptyText="Clear the primer in Moxfield if it has one: this version has no primer."
+      className="scroll-mt-4"
     >
-      <div className="flex flex-col gap-0.5">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <h3 id="restore-primer-label" className="text-sm font-semibold tracking-wide text-fg uppercase">
-            Primer
-          </h3>
-          {primer.text !== '' && (
-            <span className="text-sm text-muted tabular">{pluralize(lines, 'line')}</span>
-          )}
-        </div>
-        <p className="text-sm break-words text-muted">{primer.target}</p>
-      </div>
-      {primer.text === '' ? (
-        <p className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-3 text-sm text-fg">
-          <Eraser aria-hidden="true" className="size-4 shrink-0 text-muted" />
-          Clear the primer in Moxfield if it has one: this version has no primer.
+      <div className="flex flex-col gap-1">
+        <TextBlock id="restore-primer-text" label="Primer source" text={primer.text} />
+        <p className="text-xs text-muted">
+          Moxfield markup, exactly as captured. Paste it into the primer editor as is.
         </p>
-      ) : (
-        <div className="flex flex-col gap-1">
-          <TextBlock id="restore-primer-text" label="Primer source" text={primer.text} />
-          <p className="text-xs text-muted">
-            Moxfield markup, exactly as captured. Paste it into the primer editor as is.
-          </p>
-          <CopyButton
-            text={primer.text}
-            label="Copy primer"
-            subject="Primer"
-            variant="primary"
-            size="lg"
-            block
-            className="mt-2"
-          />
-        </div>
-      )}
-    </Card>
+        <CopyButton
+          text={primer.text}
+          label="Copy primer"
+          subject="Primer"
+          variant="primary"
+          size="lg"
+          block
+          className="mt-2"
+        />
+      </div>
+    </RestoreBlock>
   );
 }
 

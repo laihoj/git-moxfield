@@ -166,3 +166,8 @@ export function formatDuration(ms: number): string {
   if (ms >= HOUR && ms % HOUR === 0) return pluralize(ms / HOUR, 'hour');
   return pluralize(Math.max(1, Math.round(ms / MINUTE)), 'minute');
 }
+
+/** Text made safe for an element id: everything but letters, digits and `-` becomes `-`. */
+export function domIdSlug(value: string): string {
+  return value.replace(/[^a-z0-9-]/gi, '-');
+}

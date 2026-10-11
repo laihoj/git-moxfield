@@ -1,15 +1,7 @@
 import clsx from 'clsx';
 
-import { summarizeDiff, type DeckDiff, type SummaryChipTone } from '@/core/diff';
-import { Badge, type BadgeTone } from '@/components/ui/badge';
-
-const TONES: Record<SummaryChipTone, BadgeTone> = {
-  add: 'add',
-  remove: 'remove',
-  move: 'move',
-  neutral: 'neutral',
-  cosmetic: 'cosmetic',
-};
+import { summarizeDiff, type DeckDiff } from '@/core/diff';
+import { Badge } from '@/components/ui/badge';
 
 export interface SummaryChipsProps {
   diff: DeckDiff;
@@ -28,7 +20,7 @@ export function SummaryChips({ diff, className }: SummaryChipsProps) {
     <ul aria-label="Summary of changes" className={clsx('flex flex-wrap gap-1.5', className)}>
       {chips.map((chip) => (
         <li key={chip.label} className="max-w-full">
-          <Badge tone={TONES[chip.tone]} size="md">
+          <Badge tone={chip.tone} size="md">
             {chip.label}
           </Badge>
         </li>

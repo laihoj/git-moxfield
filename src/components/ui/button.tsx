@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import type { Route } from 'next';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
+import { ExternalLink, type ExternalLinkProps } from './external-link';
 import { Link } from './navigation';
 import { Spinner } from './spinner';
 
@@ -18,6 +19,11 @@ const VARIANTS: Record<ButtonVariant, string> = {
   ghost: 'text-muted hover:bg-surface-2 hover:text-fg active:bg-surface-3',
   danger: 'bg-remove text-surface shadow-card hover:opacity-90 active:opacity-80',
 };
+
+/** The look of a button variant: colors, border and hover states (the icon buttons share it). */
+export function buttonVariantClasses(variant: ButtonVariant): string {
+  return VARIANTS[variant];
+}
 
 /**
  * Heights follow the touch-target rule: every size is at least 44px tall on small
@@ -106,37 +112,24 @@ export function ButtonLink({
   );
 }
 
-export interface ExternalButtonLinkProps
-  extends Omit<ComponentPropsWithoutRef<'a'>, 'target' | 'rel'>, ButtonStyleOptions {
-  href: string;
+export interface ExternalButtonLinkProps extends ExternalLinkProps, ButtonStyleOptions {
   icon?: ReactNode;
-  /** Trailing icon, typically the ↗ arrow. */
-  trailingIcon?: ReactNode;
 }
 
-/** A link to another site, styled as a button. Opens in a new tab without leaking the opener. */
+/** A link to another site, styled as a button (see {@link ExternalLink}). */
 export function ExternalButtonLink({
-  href,
   variant,
   size,
   block,
   icon,
-  trailingIcon,
   className,
   children,
   ...props
 }: ExternalButtonLinkProps) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={clsx(buttonClasses({ variant, size, block }), className)}
-      {...props}
-    >
+    <ExternalLink className={clsx(buttonClasses({ variant, size, block }), className)} {...props}>
       {icon}
       {children}
-      {trailingIcon}
-    </a>
+    </ExternalLink>
   );
 }

@@ -1,12 +1,14 @@
 'use client';
 
-import { Plus, X } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useId, useOptimistic, useRef, useState, useTransition, type SubmitEvent } from 'react';
 
 import { addTagAction, removeTagAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/field';
-import { normalizeTagInput, tagProblem } from '@/core/tags';
+import { ErrorText, fieldControlProps, fieldDescriptionIds, Input } from '@/components/ui/field';
+import { MAX_VERSION_TAG_LENGTH, parseTagDraft } from '@/core/tags';
+
+import { TagChip, TagSuggestions } from './tag-chip';
 
 export interface TagEditorProps {
   deckId: string;
@@ -42,8 +44,6 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
         : current.filter((tag) => tag !== update.tag),
   );
 
-  const available = suggestions.filter((tag) => !optimisticTags.includes(tag)).slice(0, 6);
-
   function save(update: TagUpdate): void {
     setError(null);
     startTransition(async () => {
@@ -58,18 +58,17 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
 
   function submit(event: SubmitEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const tag = normalizeTagInput(draft);
-    if (tag === '') {
+    const parsed = parseTagDraft(draft);
+    if (parsed.kind === 'empty') {
       setAdding(false);
       return;
     }
-    const problem = tagProblem(tag);
-    if (problem !== null) {
-      setError(problem);
+    if (parsed.kind === 'invalid') {
+      setError(parsed.problem);
       return;
     }
     setDraft('');
-    save({ type: 'add', tag });
+    save({ type: 'add', tag: parsed.tag });
     input.current?.focus();
   }
 
@@ -78,22 +77,13 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
       <ul aria-label="Tags" className="flex flex-wrap items-center gap-1.5">
         {optimisticTags.length === 0 && !adding && <li className="text-sm text-muted">No tags yet.</li>}
         {optimisticTags.map((tag) => (
-          <li
+          <TagChip
             key={tag}
-            className="inline-flex h-7 items-center gap-0.5 rounded-full bg-accent-soft pr-0.5 pl-2.5 text-sm font-medium text-accent"
-          >
-            {tag}
-            <button
-              type="button"
-              aria-label={`Remove tag ${tag}`}
-              className="relative flex size-6 items-center justify-center rounded-full after:absolute after:-inset-2 after:content-[''] hover:bg-accent/15 md:after:hidden"
-              onClick={() => {
-                save({ type: 'remove', tag });
-              }}
-            >
-              <X aria-hidden="true" className="size-3.5" />
-            </button>
-          </li>
+            tag={tag}
+            onRemove={() => {
+              save({ type: 'remove', tag });
+            }}
+          />
         ))}
         {!adding && (
           <li>
@@ -112,11 +102,7 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
         )}
       </ul>
 
-      {!adding && error !== null && (
-        <p role="alert" className="text-sm text-remove">
-          {error}
-        </p>
-      )}
+      {!adding && error !== null && <ErrorText>{error}</ErrorText>}
       {adding && (
         <form onSubmit={submit} className="flex flex-col gap-2">
           <label htmlFor={inputId} className="sr-only">
@@ -125,14 +111,14 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
           <div className="flex gap-2">
             <Input
               ref={input}
-              id={inputId}
+              {...fieldControlProps(inputId, { invalid: error !== null, hint: false })}
               value={draft}
               placeholder="tournament, stable, pre-ban…"
               autoComplete="off"
               autoCapitalize="none"
               enterKeyHint="done"
-              maxLength={80}
-              aria-invalid={error !== null || undefined}
+              // Room for the capitals and spaces that normalizing removes.
+              maxLength={2 * MAX_VERSION_TAG_LENGTH}
               className="min-w-0 flex-1"
               onChange={(event) => {
                 setDraft(event.target.value);
@@ -161,29 +147,14 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
               Done
             </Button>
           </div>
-          {error !== null && (
-            <p role="alert" className="text-sm text-remove">
-              {error}
-            </p>
-          )}
-          {available.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-muted">Used before:</span>
-              {available.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className="relative inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-border-strong px-2.5 text-xs font-medium text-muted after:absolute after:-inset-y-2 after:inset-x-0 after:content-[''] hover:border-accent hover:text-accent md:after:hidden"
-                  onClick={() => {
-                    save({ type: 'add', tag });
-                  }}
-                >
-                  <Plus aria-hidden="true" className="size-3" />
-                  {tag}
-                </button>
-              ))}
-            </div>
-          )}
+          {error !== null && <ErrorText id={fieldDescriptionIds(inputId).error}>{error}</ErrorText>}
+          <TagSuggestions
+            tags={suggestions}
+            exclude={optimisticTags}
+            onPick={(tag) => {
+              save({ type: 'add', tag });
+            }}
+          />
         </form>
       )}
     </div>

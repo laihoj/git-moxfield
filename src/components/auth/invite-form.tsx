@@ -4,22 +4,21 @@ import { useActionState, useId } from 'react';
 
 import type { SignInFormState } from '@/app/action-types';
 import { acceptInviteAction } from '@/app/auth-actions';
+import { DisplayNameInput } from '@/components/account/display-name-input';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
+import { Field, fieldControlProps } from '@/components/ui/field';
 
 export interface InviteFormProps {
   /** The invite token from the link (also in the page's URL). */
   token: string;
-  /** Longest display name the server accepts. */
-  maxNameLength: number;
 }
 
 /**
  * Accepting an invite: the new user picks a display name. On success the server action
  * creates the account, signs this browser in and continues to creating a bookmarklet.
  */
-export function InviteForm({ token, maxNameLength }: InviteFormProps) {
+export function InviteForm({ token }: InviteFormProps) {
   const nameId = useId();
   const [state, action, pending] = useActionState<SignInFormState, FormData>(acceptInviteAction, {
     status: 'idle',
@@ -36,17 +35,11 @@ export function InviteForm({ token, maxNameLength }: InviteFormProps) {
         hint="How you appear in git-moxfield and on your share links. You can change it later."
         error={nameError}
       >
-        <Input
+        <DisplayNameInput
           key={error === null ? 'idle' : `name:${error.values?.name ?? ''}`}
-          id={nameId}
-          name="name"
-          required
-          maxLength={maxNameLength}
-          autoComplete="nickname"
           autoFocus
           defaultValue={error?.values?.name ?? ''}
-          aria-invalid={nameError !== undefined || undefined}
-          aria-describedby={fieldDescriptionIds(nameId)[nameError === undefined ? 'hint' : 'error']}
+          {...fieldControlProps(nameId, { invalid: nameError !== undefined })}
         />
       </Field>
       {error !== null && error.field === undefined && (

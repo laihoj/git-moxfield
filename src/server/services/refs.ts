@@ -12,6 +12,7 @@
  * it as a sequence first and falls back to the prefix (see {@link ParsedVersionRef}).
  */
 import { parseSequenceText } from '@/core/sequence';
+import { EMPTY_REF, HEAD_REF, WORKING_REF } from '@/lib/version-refs';
 import { isCommitIdPrefix } from '@/server/repositories';
 
 export type ParsedVersionRef =
@@ -29,7 +30,7 @@ export type ParsedVersionRef =
 /** Parses a version reference, or returns `null` when it has none of the accepted forms. */
 export function parseVersionRef(ref: string): ParsedVersionRef | null {
   const text = ref.trim().toLowerCase();
-  if (text === 'head' || text === 'working' || text === 'empty') return { kind: text };
+  if (text === HEAD_REF || text === WORKING_REF || text === EMPTY_REF) return { kind: text };
 
   const sequenceText = parseSequenceText(text);
   if (sequenceText) {

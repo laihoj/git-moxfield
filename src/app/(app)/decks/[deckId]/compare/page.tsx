@@ -10,6 +10,7 @@ import {
 } from '@/components/deck-pages/compare-content';
 import { versionLabel } from '@/lib/format';
 import type { DeckOverviewDTO } from '@/server/services/types';
+import { EMPTY_REF, HEAD_REF, WORKING_REF } from '@/lib/version-refs';
 
 import { deckServices, decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
@@ -23,7 +24,7 @@ export const generateMetadata = ownerSectionMetadata('Compare');
  */
 function defaultRefs(overview: DeckOverviewDTO): CompareRefs | null {
   if (overview.working !== null && overview.status !== 'clean') {
-    return { from: overview.head === null ? 'empty' : 'head', to: 'working' };
+    return { from: overview.head === null ? EMPTY_REF : HEAD_REF, to: WORKING_REF };
   }
   return latestVersionsRefs(overview.recentVersions);
 }
@@ -46,7 +47,7 @@ export default async function ComparePage({ params, searchParams }: PageProps<'/
   if (comparison === null) {
     // The pickers list concrete versions, so `head` is shown as the version it points to.
     const pickerRef = (ref: string): string =>
-      ref === 'head' ? (overview.head === null ? 'empty' : versionLabel(overview.head.sequence)) : ref;
+      ref === HEAD_REF ? (overview.head === null ? EMPTY_REF : versionLabel(overview.head.sequence)) : ref;
     return (
       <CompareSidesNotFound
         scope={scope}

@@ -14,7 +14,9 @@ export interface FieldProps {
   /** Id of the control, so the label is associated with it. */
   htmlFor: string;
   hint?: ReactNode;
-  /** Validation error; also set `aria-invalid` and `aria-describedby` on the control. */
+  /** `status` when the hint reports the outcome of the form (`Saved.`): it is announced politely. */
+  hintRole?: 'status';
+  /** Validation error; also set `aria-invalid` and `aria-describedby` on the control (see {@link fieldControlProps}). */
   error?: ReactNode;
   /** Content next to the label (e.g. a "Use suggestion" button). */
   aside?: ReactNode;
@@ -27,8 +29,51 @@ export function fieldDescriptionIds(id: string): { hint: string; error: string }
   return { hint: `${id}-hint`, error: `${id}-error` };
 }
 
+/**
+ * What a control inside a {@link Field} needs: its `id` (the field's `htmlFor`),
+ * `aria-invalid` while `invalid`, and `aria-describedby` pointing at the error shown, else
+ * at the hint (`hint: false` for a field that has none).
+ */
+export function fieldControlProps(
+  id: string,
+  { invalid = false, hint = true }: { invalid?: boolean; hint?: boolean } = {},
+): { id: string; 'aria-invalid': true | undefined; 'aria-describedby': string | undefined } {
+  const ids = fieldDescriptionIds(id);
+  return {
+    id,
+    'aria-invalid': invalid || undefined,
+    'aria-describedby': invalid ? ids.error : hint ? ids.hint : undefined,
+  };
+}
+
+/**
+ * An error message announced when it appears. `id` is what the control's
+ * `aria-describedby` points at; `xs` for the cramped places beside a button.
+ */
+export function ErrorText({
+  id,
+  size = 'sm',
+  className,
+  children,
+}: {
+  id?: string;
+  size?: 'sm' | 'xs';
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <p
+      id={id}
+      role="alert"
+      className={clsx(size === 'sm' ? 'text-sm' : 'text-xs', 'text-pretty text-remove', className)}
+    >
+      {children}
+    </p>
+  );
+}
+
 /** Label, control, hint and error message, stacked with consistent spacing. */
-export function Field({ label, htmlFor, hint, error, aside, className, children }: FieldProps) {
+export function Field({ label, htmlFor, hint, hintRole, error, aside, className, children }: FieldProps) {
   const ids = fieldDescriptionIds(htmlFor);
   return (
     <div className={clsx('flex flex-col gap-1.5', className)}>
@@ -40,15 +85,11 @@ export function Field({ label, htmlFor, hint, error, aside, className, children 
       </div>
       {children}
       {hint !== undefined && error === undefined && (
-        <p id={ids.hint} className="text-xs text-muted">
+        <p id={ids.hint} role={hintRole} className="text-xs text-muted">
           {hint}
         </p>
       )}
-      {error !== undefined && (
-        <p id={ids.error} className="text-sm text-remove" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorText id={ids.error}>{error}</ErrorText>}
     </div>
   );
 }
@@ -59,7 +100,23 @@ export function Input({ className, ...props }: ComponentPropsWithRef<'input'>) {
 }
 
 export function Textarea({ className, ...props }: ComponentPropsWithoutRef<'textarea'>) {
-  return <textarea className={clsx(CONTROL, 'min-h-24 px-3 py-2.5 leading-relaxed', className)} {...props} />;
+  return (
+    <textarea
+      className={clsx(CONTROL, 'min-h-28 resize-y px-3 py-2.5 leading-relaxed', className)}
+      {...props}
+    />
+  );
+}
+
+/** A checkbox (the label is the caller's: it sits beside it). */
+export function Checkbox({ className, ...props }: Omit<ComponentPropsWithoutRef<'input'>, 'type'>) {
+  return (
+    <input
+      type="checkbox"
+      className={clsx('mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)', className)}
+      {...props}
+    />
+  );
 }
 
 export function Select({ className, children, ...props }: ComponentPropsWithoutRef<'select'>) {

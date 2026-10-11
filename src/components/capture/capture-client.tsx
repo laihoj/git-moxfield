@@ -18,6 +18,7 @@ import {
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 
 import { CaptureRemedyAction } from './capture-remedy';
 import { CaptureStatus, WaitingPanel } from './capture-status';
@@ -303,7 +304,7 @@ export function CaptureClient({
 function Shell({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5">
-      <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
+      <PageHeader title={title} />
       {children}
     </div>
   );

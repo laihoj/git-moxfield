@@ -64,7 +64,7 @@ function everyDeckPage(deck: DeckRoutes): string[] {
     deck.restore(3, 'primer'),
     deck.restoreText(3),
     deck.compare(),
-    deck.compare({ from: 'v1', to: 'head', hash: 'primer' }),
+    deck.compare({ from: 'v1', to: 'head', section: 'primer' }),
     deck.compare({ from: 'empty', to: 'working' }),
     deck.cards(),
     deck.cards({ q: 'Dress Down' }),
@@ -158,7 +158,7 @@ describe('form submission routes', () => {
   });
 
   it('replaces the query and fragment of the action, and adds none without fields', () => {
-    const action = ownerDeckRoutes('d1').compare({ from: 'v1', to: 'v2', hash: 'primer' });
+    const action = ownerDeckRoutes('d1').compare({ from: 'v1', to: 'v2', section: 'primer' });
     expect(formSubmissionRoute(action, [['to', 'v3']])).toBe('/decks/d1/compare?to=v3');
     expect(formSubmissionRoute(action, [])).toBe('/decks/d1/compare');
   });

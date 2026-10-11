@@ -3,6 +3,7 @@ import { ChevronRight, Search, SearchX } from 'lucide-react';
 import { CardSearch } from '@/components/deck/card-search';
 import { ManaCost } from '@/components/deck/mana-cost';
 import { ZoneBadge } from '@/components/deck/zone-badge';
+import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
@@ -86,7 +87,7 @@ export function CardsContent({ scope, query, versionCount, results }: CardsConte
               ? `First ${CARD_RESULT_LIMIT} matches`
               : pluralize(results.length, 'match', 'matches')}
           </p>
-          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface shadow-card">
+          <Card as="ul" flush className="divide-y divide-border overflow-hidden">
             {results.map((result) => (
               <li
                 key={result.key}
@@ -123,7 +124,7 @@ export function CardsContent({ scope, query, versionCount, results }: CardsConte
                 <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-subtle" />
               </li>
             ))}
-          </ul>
+          </Card>
         </section>
       )}
     </div>

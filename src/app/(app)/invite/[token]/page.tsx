@@ -4,17 +4,11 @@ import type { Metadata } from 'next';
 import { AuthPanel } from '@/components/auth/auth-panel';
 import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
 import { InviteForm } from '@/components/auth/invite-form';
-import { Badge } from '@/components/ui/badge';
+import { RoleBadge } from '@/components/account/role-badge';
 import { Card } from '@/components/ui/card';
 import { ExpiryTime } from '@/components/ui/relative-time';
-import { roleLabel } from '@/lib/accounts';
 import { formatDuration } from '@/lib/format';
-import {
-  getAuthService,
-  INVITE_LIFETIME_MS,
-  MAX_DISPLAY_NAME_LENGTH,
-  type OneTimeLinkProblem,
-} from '@/server/auth';
+import { getAuthService, INVITE_LIFETIME_MS, type OneTimeLinkProblem } from '@/server/auth';
 import { getCurrentUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -46,7 +40,7 @@ export default async function InvitePage({ params }: PageProps<'/invite/[token]'
       <Card className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Badge tone={invite.role === 'admin' ? 'accent' : 'neutral'}>{roleLabel(invite.role)}</Badge>
+            <RoleBadge role={invite.role} showMember />
             <ExpiryTime value={invite.expiresAt} className="text-xs text-muted" />
           </div>
           <p className="text-sm text-pretty text-muted">
@@ -60,7 +54,7 @@ export default async function InvitePage({ params }: PageProps<'/invite/[token]'
             This invite creates a new account, and this browser switches to it.
           </SignedInAsAlert>
         )}
-        <InviteForm token={token} maxNameLength={MAX_DISPLAY_NAME_LENGTH} />
+        <InviteForm token={token} />
       </Card>
     </AuthPanel>
   );

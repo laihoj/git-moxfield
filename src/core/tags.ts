@@ -18,6 +18,17 @@ export function normalizeTagInput(input: string): string {
   return normalizeInlineText(input.toLowerCase());
 }
 
+/** What someone typed into a tag field: nothing, a tag that cannot be used, or the tag to store. */
+export type TagDraft = { kind: 'empty' } | { kind: 'invalid'; problem: string } | { kind: 'ok'; tag: string };
+
+/** Reads a tag field's text: normalized the way it will be stored, and checked. */
+export function parseTagDraft(raw: string): TagDraft {
+  const tag = normalizeTagInput(raw);
+  if (tag === '') return { kind: 'empty' };
+  const problem = tagProblem(tag);
+  return problem === null ? { kind: 'ok', tag } : { kind: 'invalid', problem };
+}
+
 /** A reason why `tag` (already normalized) is not a valid tag, or `null` when it is. */
 export function tagProblem(tag: string): string | null {
   if (tag === '') return 'Enter a tag.';

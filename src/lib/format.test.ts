@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatClockTime, formatDuration, formatRelativeTime } from './format';
+import { domIdSlug, formatClockTime, formatDuration, formatRelativeTime } from './format';
 
 const NOW = Date.parse('2026-10-09T12:00:00.000Z');
 const DAY = 86_400_000;
@@ -79,5 +79,13 @@ describe('formatDuration', () => {
     [30_000, '1 minute'],
   ])('writes %i ms as %s', (ms, text) => {
     expect(formatDuration(ms)).toBe(text);
+  });
+});
+
+describe('domIdSlug', () => {
+  it('keeps letters, digits and dashes, and turns the rest into dashes', () => {
+    expect(domIdSlug('mainboard')).toBe('mainboard');
+    expect(domIdSlug('Other Zone')).toBe('Other-Zone');
+    expect(domIdSlug('a.b_c:d')).toBe('a-b-c-d');
   });
 });

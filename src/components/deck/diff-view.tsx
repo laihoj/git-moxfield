@@ -17,15 +17,15 @@ import { isPlayedZone, zoneEntries, zoneLabel, type ZoneId } from '@/core/zones'
 import { Overline } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
-import { Link } from '@/components/ui/navigation';
-import { MINUS_SIGN, pluralize } from '@/lib/format';
+import { domIdSlug, MINUS_SIGN, pluralize, versionLabel } from '@/lib/format';
 import { formatLabel } from '@/lib/presentation';
-import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { type DeckScope } from '@/lib/routes';
+import { ArrowLink, TextLink } from '@/components/ui/text-link';
 
-import { CardName } from './card-name';
+import { CardRows } from './card-rows';
 import { DiffRow } from './diff-row';
-import { ManaCost } from './mana-cost';
-import { zoneTextClass } from './zone-badge';
+import { PrimerLineCounts } from './primer-line-counts';
+import { zoneTextClass, ZoneOverline } from './zone-badge';
 
 const COSMETIC_KINDS: ReadonlySet<DiffSection['kind']> = new Set(['printings', 'tags', 'renames']);
 
@@ -104,6 +104,16 @@ export function initialPlayedCount(diff: DeckDiff): number {
   );
 }
 
+/** Heading of the card that lists a version's (or the working deck's) changes: `Initial version`, or `Changes since v3`. */
+export function changesTitle(parentSequence: number | null): string {
+  return parentSequence === null ? 'Initial version' : `Changes since ${versionLabel(parentSequence)}`;
+}
+
+/** Under an initial version's heading: how big the deck is, `100 cards in the deck`. */
+export function initialDescription(cardCount: number): string {
+  return `${pluralize(cardCount, 'card')} in the deck`;
+}
+
 /** Number of differences, for headings: `12 changes`. */
 export function diffCountLabel(diff: DeckDiff): string {
   return pluralize(diffChangeCount(diff), 'change');
@@ -124,16 +134,12 @@ function ChangeSection({
   catalog: Record<CardKey, CardFacts>;
   scope: DeckScope;
 }) {
-  const headingId = `diff-${section.id.replace(/[^a-z0-9-]/gi, '-')}`;
+  const headingId = `diff-${domIdSlug(section.id)}`;
   return (
     <section aria-labelledby={headingId}>
-      <Overline
-        id={headingId}
-        className={clsx('mb-1', section.zone !== undefined && zoneTextClass(section.zone))}
-      >
+      <ZoneOverline id={headingId} zone={section.zone} count={section.changes.length}>
         {section.title}
-        <span className="ml-1.5 font-medium text-subtle normal-case tabular">{section.changes.length}</span>
-      </Overline>
+      </ZoneOverline>
       <ul className="divide-y divide-border">
         {section.changes.map((change) => (
           <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
@@ -216,15 +222,7 @@ function PrimerSection({ diff, primerHref }: { diff: DeckDiff; primerHref: Route
       <div className="flex items-baseline gap-3">
         <Overline id="diff-primer">Primer</Overline>
         {diff.primer.status === 'changed' ? (
-          <span className="text-sm font-medium tabular">
-            <span className="text-add">+{diff.primer.addedLines}</span>
-            <span className="text-subtle"> / </span>
-            <span className="text-remove">
-              {MINUS_SIGN}
-              {diff.primer.removedLines}
-            </span>
-            <span className="text-muted"> lines</span>
-          </span>
+          <PrimerLineCounts added={diff.primer.addedLines} removed={diff.primer.removedLines} />
         ) : (
           <span className="text-sm text-muted">
             {diff.primer.status === 'captured'
@@ -234,13 +232,7 @@ function PrimerSection({ diff, primerHref }: { diff: DeckDiff; primerHref: Route
         )}
       </div>
       {diff.primer.status === 'changed' && primerHref !== undefined && (
-        <Link
-          href={primerHref}
-          className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-accent hover:underline md:min-h-0"
-        >
-          View diff
-          <ArrowRight aria-hidden="true" className="size-3.5" />
-        </Link>
+        <ArrowLink href={primerHref}>View diff</ArrowLink>
       )}
     </section>
   );
@@ -258,7 +250,6 @@ function InitialVersionView({
   scope: DeckScope;
   primerHref: Route | undefined;
 }) {
-  const routes = deckRoutes(scope);
   const byZone = new Map<ZoneId, AddedChange[]>();
   for (const change of diff.changes) {
     if (change.type !== 'added') continue;
@@ -289,9 +280,7 @@ function InitialVersionView({
           <MetaItem>{pluralize(diff.primer.addedLines, 'line')}</MetaItem>
           {primerHref !== undefined && (
             <MetaItem>
-              <Link href={primerHref} className="font-medium text-accent hover:underline">
-                Read primer
-              </Link>
+              <TextLink href={primerHref}>Read primer</TextLink>
             </MetaItem>
           )}
         </MetaList>
@@ -301,27 +290,10 @@ function InitialVersionView({
         <div className="flex flex-col gap-4">
           {zones.map(({ zone, changes, count }) => (
             <section key={zone} aria-label={zoneLabel(zone)}>
-              <Overline className={clsx('mb-1', zoneTextClass(zone))}>
+              <ZoneOverline zone={zone} count={count}>
                 {zoneLabel(zone)}
-                <span className="ml-1.5 font-medium text-subtle normal-case tabular">{count}</span>
-              </Overline>
-              <ul className="divide-y divide-border">
-                {changes.map((change) => {
-                  const facts = catalog[change.key];
-                  return (
-                    <li key={change.key} className="flex items-center gap-3 py-1.5 text-sm">
-                      <span className="w-6 shrink-0 text-right text-muted tabular">{change.quantity}</span>
-                      <CardName
-                        name={change.name}
-                        scryfallId={facts?.scryfallId}
-                        href={routes.card(change.key)}
-                        className="min-w-0 flex-1 text-fg"
-                      />
-                      {facts !== undefined && <ManaCost cost={facts.manaCost} />}
-                    </li>
-                  );
-                })}
-              </ul>
+              </ZoneOverline>
+              <CardRows cards={changes} catalog={catalog} scope={scope} divided />
             </section>
           ))}
         </div>

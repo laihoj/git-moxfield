@@ -1,9 +1,10 @@
 'use client';
 
 import { Check, Copy } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import { Button, type ButtonSize, type ButtonVariant } from './button';
+import { useRestartableTimeout } from './use-timeout';
 
 /** How long the "Copied" confirmation stays visible. */
 const FEEDBACK_MS = 2000;
@@ -81,20 +82,12 @@ export function CopyButton({
   className,
 }: CopyButtonProps) {
   const [state, setState] = useState<CopyState>('idle');
-  const timer = useRef<number | undefined>(undefined);
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(timer.current);
-    },
-    [],
-  );
+  const feedback = useRestartableTimeout();
 
   async function handleClick(): Promise<void> {
     const ok = await copyToClipboard(text);
     setState(ok ? 'copied' : 'failed');
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    feedback.start(() => {
       setState('idle');
     }, FEEDBACK_MS);
   }

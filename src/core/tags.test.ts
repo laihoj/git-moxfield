@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_VERSION_TAG_LENGTH, normalizeTagInput, normalizeVersionTag, tagProblem } from './tags';
+import {
+  MAX_VERSION_TAG_LENGTH,
+  normalizeTagInput,
+  normalizeVersionTag,
+  parseTagDraft,
+  tagProblem,
+} from './tags';
 
 describe('normalizeVersionTag', () => {
   it.each([
@@ -43,5 +49,17 @@ describe('normalizeTagInput and tagProblem (what the editors preview)', () => {
       const result = normalizeVersionTag(input);
       expect(tagProblem(normalizeTagInput(input))).toBe(result.ok ? null : result.reason);
     }
+  });
+});
+
+describe('parseTagDraft', () => {
+  it('normalizes a tag the way it will be stored', () => {
+    expect(parseTagDraft('  Pre   Ban ')).toEqual({ kind: 'ok', tag: 'pre ban' });
+  });
+
+  it('tells nothing from a tag that cannot be used', () => {
+    expect(parseTagDraft('   ')).toEqual({ kind: 'empty' });
+    expect(parseTagDraft('#!?')).toEqual({ kind: 'invalid', problem: tagProblem('#!?') });
+    expect(parseTagDraft('x'.repeat(MAX_VERSION_TAG_LENGTH + 1))).toMatchObject({ kind: 'invalid' });
   });
 });

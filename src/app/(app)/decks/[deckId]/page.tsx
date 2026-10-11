@@ -4,7 +4,13 @@ import { notFound } from 'next/navigation';
 import type { IngestWarning } from '@/core/model';
 import type { DeckOverviewDTO } from '@/server/services/types';
 import { CommitForm } from '@/components/deck/commit-form';
-import { DiffView, diffCountLabel, initialPlayedCount } from '@/components/deck/diff-view';
+import {
+  changesTitle,
+  DiffView,
+  diffCountLabel,
+  initialDescription,
+  initialPlayedCount,
+} from '@/components/deck/diff-view';
 import { MoxfieldDeckPanel } from '@/components/deck/moxfield-deck-panel';
 import { SummaryChips } from '@/components/deck/summary-chips';
 import { StatusPanel } from '@/components/deck/status-panel';
@@ -14,9 +20,11 @@ import { Alert } from '@/components/ui/alert';
 import { Card, CardHeader } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { Link } from '@/components/ui/navigation';
+import { SidebarLayout } from '@/components/ui/sidebar-layout';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { ownerDeckRoutes, routes } from '@/lib/routes';
+import { EMPTY_REF, HEAD_REF, WORKING_REF } from '@/lib/version-refs';
 
 import { decodeSegment, loadOverview, loadTags } from './data';
 
@@ -39,7 +47,7 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
     overview.status !== 'never-fetched';
 
   return (
-    <div className="grid items-start gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <SidebarLayout>
       <div className="flex min-w-0 flex-col gap-5 md:gap-6">
         {(captured === '1' || relinked === '1') && (
           <Greeting deck={overview} captured={captured === '1'} relinked={relinked === '1'} />
@@ -68,10 +76,10 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
           <Card as="section" aria-labelledby="changes-heading">
             <CardHeader
               id="changes-heading"
-              title={head === null ? 'Initial version' : `Changes since ${versionLabel(head.sequence)}`}
+              title={changesTitle(head?.sequence ?? null)}
               description={
                 head === null
-                  ? `${pluralize(initialPlayedCount(diff), 'card')} in the deck. All of it becomes v1.`
+                  ? `${initialDescription(initialPlayedCount(diff))}. All of it becomes v1.`
                   : diffCountLabel(diff)
               }
               className="mb-4"
@@ -82,9 +90,9 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
               scope={links.scope}
               initial={head === null}
               primerHref={links.compare({
-                from: head === null ? 'empty' : 'head',
-                to: 'working',
-                hash: 'primer',
+                from: head === null ? EMPTY_REF : HEAD_REF,
+                to: WORKING_REF,
+                section: 'primer',
               })}
             />
           </Card>
@@ -113,7 +121,7 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
           />
         </div>
       </aside>
-    </div>
+    </SidebarLayout>
   );
 }
 

@@ -28,7 +28,7 @@ export function UntrackDeckButton({ deckId, deckName, versionCount }: UntrackDec
       }
       confirmLabel="Stop tracking and delete history"
       // Success redirects to the deck list, so only a failure ever returns.
-      onConfirm={async () => (await untrackDeckAction(deckId)).message}
+      onConfirm={() => untrackDeckAction(deckId)}
     />
   );
 }

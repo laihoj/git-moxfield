@@ -34,6 +34,9 @@ function withQuery(path: string, query: Record<string, string | undefined>, hash
 
 export type VersionTab = 'changes' | 'deck' | 'primer';
 
+/** The ids of the page sections other pages link to (`#restore-primer`, `#primer`), where the links and the sections agree. */
+export const PAGE_ANCHORS = { restorePrimer: 'restore-primer', comparePrimer: 'primer' } as const;
+
 /**
  * Why the Connect Moxfield page is opened right after signing in (`/setup?welcome=…`),
  * so it can greet the user and lead with creating a bookmarklet: a new account from an
@@ -106,7 +109,8 @@ export interface DeckRoutes {
   restore: (sequence: number, section?: 'primer') => Route;
   /** The plain-text download of a version's restore export (a route handler, not a page). */
   restoreText: (sequence: number) => string;
-  compare: (query?: { from?: VersionRef; to?: VersionRef; hash?: string }) => Route;
+  /** `section: 'primer'` links straight to the primer of the comparison. */
+  compare: (query?: { from?: VersionRef; to?: VersionRef; section?: 'primer' }) => Route;
   cards: (query?: { q?: string }) => Route;
   card: (cardKey: string, query?: { all?: boolean }) => Route;
 }
@@ -126,9 +130,14 @@ export function deckRoutes(scope: DeckScope): DeckRoutes {
     version: (sequence, tab, hash) =>
       withQuery(`${base}/versions/${sequence}`, { tab: tab === 'changes' ? undefined : tab }, hash),
     restore: (sequence, section) =>
-      `${base}/versions/${sequence}/restore${section === 'primer' ? '#restore-primer' : ''}` as Route,
+      `${base}/versions/${sequence}/restore${section === 'primer' ? `#${PAGE_ANCHORS.restorePrimer}` : ''}` as Route,
     restoreText: (sequence) => `${base}/versions/${sequence}/restore.txt`,
-    compare: (query = {}) => withQuery(`${base}/compare`, { from: query.from, to: query.to }, query.hash),
+    compare: (query = {}) =>
+      withQuery(
+        `${base}/compare`,
+        { from: query.from, to: query.to },
+        query.section === 'primer' ? PAGE_ANCHORS.comparePrimer : undefined,
+      ),
     cards: (query = {}) => withQuery(`${base}/cards`, { q: query.q }),
     card: (cardKey, query = {}) =>
       withQuery(`${base}/cards/${enc(cardKey)}`, { all: query.all === true ? '1' : undefined }),

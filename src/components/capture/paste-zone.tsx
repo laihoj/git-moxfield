@@ -7,6 +7,8 @@ import { useId, useRef, useState, type DragEvent } from 'react';
 import { isRecord } from '@/core/guards';
 import { isEncodedCapturePayload } from '@/integrations/moxfield/capture-codec-protocol';
 import { classifyCaptureJson, MAX_CAPTURE_BYTES } from '@/integrations/moxfield/capture-protocol';
+import { buttonClasses } from '@/components/ui/button';
+import { ErrorText, fieldControlProps, fieldDescriptionIds } from '@/components/ui/field';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { formatBytes } from '@/lib/format';
 
@@ -198,12 +200,10 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
           onDrop={onDrop}
         >
           <textarea
-            id={id}
             value=""
             rows={3}
             placeholder={description}
-            aria-describedby={message !== null ? `${id}-error` : undefined}
-            aria-invalid={message !== null || undefined}
+            {...fieldControlProps(id, { invalid: message !== null, hint: false })}
             className="block w-full resize-none rounded-md bg-transparent px-1 text-base text-fg placeholder:text-muted focus:outline-none md:text-sm"
             onPaste={(event) => {
               event.preventDefault();
@@ -216,7 +216,12 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
           />
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted">Paste, drop a .json file, or</span>
-            <label className="relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg whitespace-nowrap border border-border-strong bg-surface px-3 text-sm font-medium text-fg shadow-card hover:bg-surface-2 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
+            <label
+              className={clsx(
+                buttonClasses({ variant: 'secondary', size: 'sm' }),
+                'cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent',
+              )}
+            >
               <Upload aria-hidden="true" className="size-4" />
               Choose file
               <input
@@ -242,11 +247,7 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
           }}
         />
       )}
-      {message !== null && (
-        <p id={`${id}-error`} role="alert" className="text-sm text-remove">
-          {message}
-        </p>
-      )}
+      {message !== null && <ErrorText id={fieldDescriptionIds(id).error}>{message}</ErrorText>}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type {
   CommitNoteDTO,
   DeckStatus,
   DeckSummaryDTO,
+  FetchErrorDTO,
   SharedDeckDTO,
   VersionRefDTO,
 } from '@/server/services/types';
@@ -40,6 +41,21 @@ export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): 
         tone: 'success',
       };
   }
+}
+
+/**
+ * The deck's last fetch error while it is current: it happened after the latest
+ * successful observation (or there is none). An error at the very instant of the
+ * observation is not current.
+ */
+export function currentFetchError(deck: {
+  lastFetchError: FetchErrorDTO | null;
+  working: { fetchedAt: string } | null;
+}): FetchErrorDTO | null {
+  const error = deck.lastFetchError;
+  if (error === null) return null;
+  if (deck.working === null) return error;
+  return Date.parse(error.at) > Date.parse(deck.working.fetchedAt) ? error : null;
 }
 
 /** Title shown for a deck whose name is not known yet. */

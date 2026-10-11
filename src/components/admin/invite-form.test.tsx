@@ -25,7 +25,7 @@ describe('InviteForm', () => {
       note: 'Mikko',
       role: 'member',
     });
-    render(<InviteForm maxNoteLength={200} />);
+    render(<InviteForm />);
 
     expect(screen.getByRole('radio', { name: /Member/ })).toBeChecked();
     await user.type(screen.getByLabelText('Who is it for?'), 'Mikko');
@@ -48,7 +48,7 @@ describe('InviteForm', () => {
       message: 'Notes can be at most 200 characters long.',
       values: { note: 'Way too long', role: 'admin' },
     });
-    render(<InviteForm maxNoteLength={200} />);
+    render(<InviteForm />);
     await user.click(screen.getByRole('radio', { name: /Admin/ }));
     await user.type(screen.getByLabelText('Who is it for?'), 'Way too long');
     await user.click(screen.getByRole('button', { name: 'Create invite link' }));

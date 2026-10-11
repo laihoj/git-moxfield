@@ -12,9 +12,10 @@ import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
-import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { deckRoutes, type DeckScope, PAGE_ANCHORS } from '@/lib/routes';
 import { searchParamText } from '@/lib/search-params';
 import type { CompareDTO, CompareSideDTO, VersionRefDTO } from '@/server/services/types';
+import { EMPTY_REF, WORKING_REF } from '@/lib/version-refs';
 
 import { NoVersionsYet } from './no-versions-yet';
 
@@ -33,7 +34,7 @@ export function latestVersionsRefs(newestVersions: readonly VersionRefDTO[]): Co
   const [latest, previous] = newestVersions;
   if (latest === undefined) return null;
   return {
-    from: previous === undefined ? 'empty' : versionLabel(previous.sequence),
+    from: previous === undefined ? EMPTY_REF : versionLabel(previous.sequence),
     to: versionLabel(latest.sequence),
   };
 }
@@ -57,9 +58,9 @@ function sideRef(side: CompareSideDTO): string {
     case 'version':
       return versionLabel(side.version.sequence);
     case 'working':
-      return 'working';
+      return WORKING_REF;
     case 'empty':
-      return 'empty';
+      return EMPTY_REF;
   }
 }
 
@@ -164,7 +165,7 @@ export function CompareContent({ scope, comparison }: CompareContentProps) {
               primerHref={routes.compare({
                 from: sideRef(comparison.from),
                 to: sideRef(comparison.to),
-                hash: 'primer',
+                section: 'primer',
               })}
             />
           </>
@@ -172,9 +173,9 @@ export function CompareContent({ scope, comparison }: CompareContentProps) {
       </Card>
 
       {(primerDiff.unknown || primerDiff.hunks.length > 0) && (
-        <Card as="section" aria-labelledby="primer" className="scroll-mt-4">
+        <Card as="section" aria-labelledby={PAGE_ANCHORS.comparePrimer} className="scroll-mt-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <h2 id="primer" className="text-base font-semibold text-fg">
+            <h2 id={PAGE_ANCHORS.comparePrimer} className="text-base font-semibold text-fg">
               Primer
             </h2>
             <div className="flex flex-wrap gap-2">

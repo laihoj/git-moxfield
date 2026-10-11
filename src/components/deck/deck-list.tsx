@@ -10,10 +10,10 @@ import {
 import { groupInto } from '@/core/collections';
 import type { CanonicalCard, CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { isCommandZone, zoneLabel } from '@/core/zones';
-import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { domIdSlug } from '@/lib/format';
+import { type DeckScope } from '@/lib/routes';
 
-import { CardName } from './card-name';
-import { ManaCost } from './mana-cost';
+import { CardRows } from './card-rows';
 import { zoneTextClass } from './zone-badge';
 
 interface TypeGroup {
@@ -57,7 +57,7 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
     <div className="flex flex-col gap-6">
       {zones.map((zone) => {
         const cards = zoneCards(snapshot, zone);
-        const headingId = `deck-zone-${zone.replace(/[^a-z0-9-]/gi, '-')}`;
+        const headingId = `deck-zone-${domIdSlug(zone)}`;
         return (
           <section key={zone} aria-labelledby={headingId}>
             <h3
@@ -89,36 +89,5 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
         );
       })}
     </div>
-  );
-}
-
-function CardRows({
-  cards,
-  catalog,
-  scope,
-}: {
-  cards: readonly CanonicalCard[];
-  catalog: Record<CardKey, CardFacts>;
-  scope: DeckScope;
-}) {
-  const routes = deckRoutes(scope);
-  return (
-    <ul>
-      {cards.map((card) => {
-        const facts = catalog[card.key];
-        return (
-          <li key={card.key} className="flex min-h-8 items-center gap-2.5 py-0.5 text-sm">
-            <span className="w-5 shrink-0 text-right text-muted tabular">{card.quantity}</span>
-            <CardName
-              name={card.name}
-              scryfallId={facts?.scryfallId}
-              href={routes.card(card.key)}
-              className="min-w-0 flex-1 text-fg"
-            />
-            {facts !== undefined && <ManaCost cost={facts.manaCost} />}
-          </li>
-        );
-      })}
-    </ul>
   );
 }

@@ -9,11 +9,15 @@
 import 'server-only';
 
 import { codePointLength, normalizeInlineText } from '@/core/text';
+import {
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_INVITE_NOTE_LENGTH,
+  MAX_KEY_LABEL_LENGTH,
+  MAX_SHARE_LINK_LABEL_LENGTH,
+} from '@/core/text-limits';
 
-export const MAX_DISPLAY_NAME_LENGTH = 40;
-export const MAX_KEY_LABEL_LENGTH = 60;
-export const MAX_INVITE_NOTE_LENGTH = 200;
-export const MAX_SHARE_LINK_LABEL_LENGTH = 60;
+// The limits live in core (the forms cap their inputs with them too); the auth module exports them.
+export { MAX_DISPLAY_NAME_LENGTH, MAX_INVITE_NOTE_LENGTH, MAX_KEY_LABEL_LENGTH, MAX_SHARE_LINK_LABEL_LENGTH };
 
 /** Longest User-Agent kept with a session (enough to recognize a browser and device). */
 export const MAX_USER_AGENT_LENGTH = 256;

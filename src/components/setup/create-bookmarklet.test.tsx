@@ -17,14 +17,7 @@ const POPUP = 'javascript:void%20(()%20%3D%3E%20%7B%7D)()%2F*popup*%2F';
 const SAME_TAB = 'javascript:void%20(()%20%3D%3E%20%7B%7D)()%2F*same-tab*%2F';
 
 function renderCreate(appUrl = 'https://decks.example.com') {
-  render(
-    <CreateBookmarklet
-      defaultLabel="Chrome on Mac"
-      maxLabelLength={60}
-      siteHost="moxfield.com"
-      appUrl={appUrl}
-    />,
-  );
+  render(<CreateBookmarklet defaultLabel="Chrome on Mac" siteHost="moxfield.com" appUrl={appUrl} />);
 }
 
 describe('CreateBookmarklet', () => {

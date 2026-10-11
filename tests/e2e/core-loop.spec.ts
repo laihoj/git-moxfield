@@ -133,7 +133,9 @@ test('tracks a deck, commits two versions and follows the changes through every 
     const changes = page.getByRole('region', { name: 'Changes since v1' });
     await expect(changes).toContainText('5 changes');
     await expectEditDiff(changes);
-    await expect(changes.getByRole('region', { name: 'Primer' })).toContainText('+2 / −1 lines');
+    await expect(changes.getByRole('region', { name: 'Primer' })).toContainText(
+      '+2 added / −1 removed lines',
+    );
     await expectNoHorizontalOverflow(page);
   });
 

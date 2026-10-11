@@ -4,11 +4,12 @@ import { InviteForm } from '@/components/admin/invite-form';
 import { InviteList } from '@/components/admin/invite-list';
 import { PeopleList } from '@/components/admin/people-list';
 import { RecoveryLinkList } from '@/components/admin/recovery-link-list';
-import { Card, CardHeader } from '@/components/ui/card';
+import { Card, CardHeader, ListCard } from '@/components/ui/card';
 import { formatDuration, pluralize } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getAuthService, INVITE_LIFETIME_MS, MAX_INVITE_NOTE_LENGTH } from '@/server/auth';
+import { getAuthService, INVITE_LIFETIME_MS } from '@/server/auth';
 import { requireAdmin } from '@/server/auth/current-user';
+import { PageHeader } from '@/components/ui/page-header';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,13 +33,10 @@ export default async function AdminPage() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Admin</h1>
-        <p className="mt-1 text-sm text-pretty text-muted">
-          Invite people and help them back in. Admins manage accounts, not decks. A recovery link signs in as
-          the person it is for and signs out their other devices, so give it only to them.
-        </p>
-      </div>
+      <PageHeader
+        title="Admin"
+        description="Invite people and help them back in. Admins manage accounts, not decks. A recovery link signs in as the person it is for and signs out their other devices, so give it only to them."
+      />
 
       <Card as="section" aria-labelledby="invite-heading" className="flex flex-col gap-4">
         <CardHeader
@@ -46,44 +44,34 @@ export default async function AdminPage() {
           title="Invite someone"
           description={`Make a one-time link that creates an account. It works for ${formatDuration(INVITE_LIFETIME_MS)}.`}
         />
-        <InviteForm maxNoteLength={MAX_INVITE_NOTE_LENGTH} />
+        <InviteForm />
       </Card>
 
-      <Card as="section" flush aria-labelledby="people-heading">
-        <CardHeader
-          id="people-heading"
-          title="People"
-          description={pluralize(people.length, 'account')}
-          className="border-b border-border p-4 md:p-5"
-        />
+      <ListCard headingId="people-heading" title="People" description={pluralize(people.length, 'account')}>
         <PeopleList
           people={people}
           currentUserId={admin.id}
           withPendingRecovery={recoveryLinks.map((link) => link.user.id)}
         />
-      </Card>
+      </ListCard>
 
       {recoveryLinks.length > 0 && (
-        <Card as="section" flush aria-labelledby="recovery-links-heading">
-          <CardHeader
-            id="recovery-links-heading"
-            title="Recovery links"
-            description="Links that can still sign someone in. Withdraw any that should no longer work."
-            className="border-b border-border p-4 md:p-5"
-          />
+        <ListCard
+          headingId="recovery-links-heading"
+          title="Recovery links"
+          description="Links that can still sign someone in. Withdraw any that should no longer work."
+        >
           <RecoveryLinkList links={recoveryLinks} />
-        </Card>
+        </ListCard>
       )}
 
-      <Card as="section" flush aria-labelledby="invites-heading">
-        <CardHeader
-          id="invites-heading"
-          title="Invites"
-          description={invites.length === 0 ? undefined : `${pending} pending · ${invites.length} in total`}
-          className="border-b border-border p-4 md:p-5"
-        />
+      <ListCard
+        headingId="invites-heading"
+        title="Invites"
+        description={invites.length === 0 ? undefined : `${pending} pending · ${invites.length} in total`}
+      >
         <InviteList invites={invites} />
-      </Card>
+      </ListCard>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { Card } from '@/components/ui/card';
+import { SidebarLayout } from '@/components/ui/sidebar-layout';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /**
@@ -6,13 +8,9 @@ import { Skeleton } from '@/components/ui/skeleton';
  */
 export function DeckPageSkeleton() {
   return (
-    <div
-      className="grid items-start gap-5 md:gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]"
-      role="status"
-      aria-label="Loading"
-    >
+    <SidebarLayout role="status" aria-label="Loading">
       <div className="flex min-w-0 flex-col gap-5">
-        <div className="rounded-xl border border-border bg-surface p-4 shadow-card md:p-5">
+        <Card>
           <Skeleton className="h-5 w-48" />
           <Skeleton className="mt-3 h-4 w-64 max-w-full" />
           <Skeleton className="mt-2 h-4 w-40" />
@@ -22,8 +20,8 @@ export function DeckPageSkeleton() {
             <Skeleton className="h-7 w-24 rounded-full" />
             <Skeleton className="h-7 w-36 rounded-full" />
           </div>
-        </div>
-        <div className="rounded-xl border border-border bg-surface p-4 shadow-card md:p-5">
+        </Card>
+        <Card>
           <Skeleton className="h-5 w-40" />
           <div className="mt-5 flex flex-col gap-3">
             {[0, 1, 2, 3, 4, 5].map((row) => (
@@ -34,9 +32,9 @@ export function DeckPageSkeleton() {
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       </div>
-      <div className="min-w-0 rounded-xl border border-border bg-surface p-4 shadow-card md:p-5">
+      <Card className="min-w-0">
         <Skeleton className="h-5 w-32" />
         <div className="mt-4 flex flex-col gap-4">
           {[0, 1, 2].map((row) => (
@@ -49,8 +47,8 @@ export function DeckPageSkeleton() {
             </div>
           ))}
         </div>
-      </div>
+      </Card>
       <span className="sr-only">Loading…</span>
-    </div>
+    </SidebarLayout>
   );
 }

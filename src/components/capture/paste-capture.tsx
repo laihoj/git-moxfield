@@ -1,12 +1,14 @@
 'use client';
 
-import { ArrowUpRight, Download } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/field';
+import { ExternalLink } from '@/components/ui/external-link';
+import { DeckUrlInput } from '@/components/deck/deck-url-input';
+import { ErrorText, fieldControlProps, fieldDescriptionIds } from '@/components/ui/field';
 import {
   MOXFIELD_DECK_PATH_PREFIX,
   MOXFIELD_PRIMER_PATH_PREFIX,
@@ -77,6 +79,7 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
 
   const typed = parseMoxfieldDeckInput(deckInput, siteOrigin);
   const publicId = (typed.ok ? typed.ref.externalId : null) ?? deck?.publicId ?? null;
+  const urlProblem = deckInput.trim() !== '' && publicId === null;
   const deckDataUrl =
     apiBaseUrl +
     (publicId === null ? `${MOXFIELD_DECK_PATH_PREFIX}<deck id>` : moxfieldDeckApiPath(publicId));
@@ -112,20 +115,18 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
           <label htmlFor={urlId} className="sr-only">
             Moxfield deck URL
           </label>
-          <Input
-            id={urlId}
+          <DeckUrlInput
             value={deckInput}
-            inputMode="url"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder={`${siteOrigin}/decks/…`}
+            siteOrigin={siteOrigin}
             onChange={(event) => {
               setDeckInput(event.target.value);
             }}
+            {...fieldControlProps(urlId, { invalid: urlProblem, hint: false })}
           />
-          {deckInput.trim() !== '' && publicId === null && (
-            <p className="text-sm text-remove">That does not look like a Moxfield deck URL.</p>
+          {urlProblem && (
+            <ErrorText id={fieldDescriptionIds(urlId).error}>
+              That does not look like a Moxfield deck URL.
+            </ErrorText>
           )}
         </Step>
 
@@ -234,16 +235,12 @@ function DataLink({
     );
   }
   return (
-    <a
+    <ExternalLink
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
       className="group flex min-h-11 items-center gap-2 rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-xs break-all text-accent hover:border-accent/50"
     >
       <span className="min-w-0 flex-1">{label}</span>
-      <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />
-      <span className="sr-only">(opens in a new tab)</span>
-    </a>
+    </ExternalLink>
   );
 }
 

@@ -31,7 +31,7 @@ describe('ClaimForm', () => {
       field: 'code',
       values: { code: 'AAAA-BBBB-CCCC', name: 'Jaakko' },
     });
-    render(<ClaimForm maxNameLength={40} />);
+    render(<ClaimForm />);
 
     expect(screen.getByLabelText('Setup code')).toHaveFocus();
     await user.type(screen.getByLabelText('Setup code'), 'AAAA-BBBB-CCCC');
@@ -57,7 +57,7 @@ describe('ClaimForm', () => {
       message: 'git-moxfield already has an admin. Ask them for an invite.',
       values: { code: 'X', name: 'Y' },
     });
-    render(<ClaimForm maxNameLength={40} />);
+    render(<ClaimForm />);
     await user.type(screen.getByLabelText('Setup code'), 'X');
     await user.type(screen.getByLabelText('Your name'), 'Y');
     await user.click(screen.getByRole('button', { name: 'Become the admin' }));
@@ -74,7 +74,7 @@ describe('InviteForm', () => {
       field: 'name',
       values: { name: 'A very long name' },
     });
-    render(<InviteForm token={INVITE_TOKEN} maxNameLength={40} />);
+    render(<InviteForm token={INVITE_TOKEN} />);
     await user.type(screen.getByLabelText('Your name'), 'A very long name');
     await user.click(screen.getByRole('button', { name: 'Create my account' }));
 

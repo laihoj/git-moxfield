@@ -2,10 +2,11 @@
 
 import { Search, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useState, useTransition } from 'react';
 
 import { Form } from '@/components/ui/navigation';
 import { Spinner } from '@/components/ui/spinner';
+import { useRestartableTimeout } from '@/components/ui/use-timeout';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 const DEBOUNCE_MS = 250;
@@ -27,18 +28,10 @@ export function CardSearch({ scope, query }: CardSearchProps) {
   const routes = deckRoutes(scope);
   const [value, setValue] = useState(query);
   const [pending, startTransition] = useTransition();
-  const timer = useRef<number | undefined>(undefined);
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(timer.current);
-    },
-    [],
-  );
+  const debounce = useRestartableTimeout();
 
   function search(next: string): void {
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    debounce.start(() => {
       startTransition(() => {
         router.replace(routes.cards({ q: next.trim() }), { scroll: false });
       });

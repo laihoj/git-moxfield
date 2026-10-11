@@ -7,14 +7,17 @@ import { useState, useTransition } from 'react';
 import type { IssuedLinkState } from '@/app/action-types';
 import { createRecoveryLinkAction, setUserDisabledAction } from '@/app/admin-actions';
 import { OneTimeLink } from '@/components/account/one-time-link';
+import { RoleBadge } from '@/components/account/role-badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
+import { ErrorText } from '@/components/ui/field';
+import { ItemList, ItemTitle } from '@/components/ui/item-list';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
-import { RelativeTime } from '@/components/ui/relative-time';
-import { roleLabel } from '@/lib/accounts';
+import { LabeledTime, RelativeTime } from '@/components/ui/relative-time';
+import { useActionRunner } from '@/components/ui/use-action-runner';
 import { pluralize } from '@/lib/format';
 import type { UserDTO } from '@/server/auth/types';
 
@@ -37,7 +40,7 @@ export interface PeopleListProps {
  */
 export function PeopleList({ people, currentUserId, withPendingRecovery }: PeopleListProps) {
   return (
-    <ul aria-label="People" className="divide-y divide-border">
+    <ItemList label="People">
       {people.map((person) => (
         <PersonRow
           key={person.id}
@@ -46,7 +49,7 @@ export function PeopleList({ people, currentUserId, withPendingRecovery }: Peopl
           hasPendingRecovery={withPendingRecovery.includes(person.id)}
         />
       ))}
-    </ul>
+    </ItemList>
   );
 }
 
@@ -62,7 +65,7 @@ function PersonRow({
   const disabled = person.disabledAt !== null;
   const [recovery, setRecovery] = useState<IssuedLinkState>({ status: 'idle' });
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const enable = useActionRunner();
 
   return (
     <li className="flex gap-3 px-4 py-3.5 md:px-5">
@@ -71,24 +74,23 @@ function PersonRow({
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5">
           <div className="min-w-[min(100%,12rem)] flex-1">
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-fg">
-              <span className="min-w-0 break-words">{person.displayName}</span>
-              {isSelf && <Badge tone="outline">You</Badge>}
-              {person.role === 'admin' && <Badge tone="accent">{roleLabel(person.role)}</Badge>}
-              {disabled && <Badge tone="remove">Disabled</Badge>}
-            </p>
+            <ItemTitle
+              badges={
+                <>
+                  {isSelf && <Badge tone="outline">You</Badge>}
+                  <RoleBadge role={person.role} />
+                  {disabled && <Badge tone="remove">Disabled</Badge>}
+                </>
+              }
+            >
+              {person.displayName}
+            </ItemTitle>
             <MetaList className="text-xs text-muted tabular">
               <MetaItem>
                 Joined <RelativeTime value={person.createdAt} />
               </MetaItem>
               <MetaItem>
-                {person.lastSeenAt === null ? (
-                  'Not seen yet'
-                ) : (
-                  <>
-                    Active <RelativeTime value={person.lastSeenAt} />
-                  </>
-                )}
+                <LabeledTime label="Active" value={person.lastSeenAt} fallback="Not seen yet" />
               </MetaItem>
               <MetaItem>{pluralize(person.deckCount, 'deck')}</MetaItem>
               <MetaItem>{pluralize(person.activeKeyCount, 'bookmarklet')}</MetaItem>
@@ -117,12 +119,10 @@ function PersonRow({
                   variant="secondary"
                   size="sm"
                   icon={<UserRoundCheck aria-hidden="true" className="size-4" />}
+                  loading={enable.pending}
                   aria-label={`Enable ${person.displayName}`}
                   onClick={() => {
-                    startTransition(async () => {
-                      const result = await setUserDisabledAction(person.id, false);
-                      setError(result.ok ? null : result.message);
-                    });
+                    enable.run(() => setUserDisabledAction(person.id, false));
                   }}
                 >
                   Enable
@@ -144,7 +144,7 @@ function PersonRow({
                   onConfirm={async () => {
                     const result = await setUserDisabledAction(person.id, true);
                     if (result.ok) setRecovery({ status: 'idle' });
-                    return result.ok ? null : result.message;
+                    return result;
                   }}
                 />
               )}
@@ -152,16 +152,8 @@ function PersonRow({
           )}
         </div>
 
-        {error !== null && (
-          <p role="alert" className="text-sm text-remove">
-            {error}
-          </p>
-        )}
-        {recovery.status === 'error' && (
-          <p role="alert" className="text-sm text-remove">
-            {recovery.message}
-          </p>
-        )}
+        {enable.error !== null && <ErrorText>{enable.error}</ErrorText>}
+        {recovery.status === 'error' && <ErrorText>{recovery.message}</ErrorText>}
         {recovery.status === 'created' && hasPendingRecovery && (
           <div className="relative rounded-lg border border-border bg-surface-2/60 p-4 pr-12">
             <OneTimeLink

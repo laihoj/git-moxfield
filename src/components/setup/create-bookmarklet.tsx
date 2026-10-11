@@ -7,14 +7,14 @@ import type { CreateBookmarkletState } from '@/app/action-types';
 import { createBookmarkletAction } from '@/app/account-actions';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { fieldDescriptionIds, Input } from '@/components/ui/field';
+import { Field, fieldControlProps, Input } from '@/components/ui/field';
+import { MAX_KEY_LABEL_LENGTH } from '@/core/text-limits';
 
 import { BookmarkletInstall } from './bookmarklet-install';
 
 export interface CreateBookmarkletProps {
   /** Suggested name, from the browser this page was opened in (`Chrome on Mac`). */
   defaultLabel: string;
-  maxLabelLength: number;
   /** Moxfield's host, e.g. `moxfield.com`. */
   siteHost: string;
   /** git-moxfield's public base URL the bookmarklets send decks to. */
@@ -31,13 +31,11 @@ export interface CreateBookmarkletProps {
  */
 export function CreateBookmarklet({
   defaultLabel,
-  maxLabelLength,
   siteHost,
   appUrl,
   autoFocus = false,
 }: CreateBookmarkletProps) {
   const labelId = useId();
-  const ids = fieldDescriptionIds(labelId);
   const [state, action, pending] = useActionState<CreateBookmarkletState, FormData>(createBookmarkletAction, {
     status: 'idle',
   });
@@ -80,23 +78,23 @@ export function CreateBookmarklet({
           Run it on one of your decks on {siteHost} to send the deck here.
         </Alert>
       )}
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={labelId} className="text-sm font-medium text-fg">
-          {installed === null ? 'Name your bookmarklet' : 'Make another bookmarklet'}
-        </label>
+      <Field
+        label={installed === null ? 'Name your bookmarklet' : 'Make another bookmarklet'}
+        htmlFor={labelId}
+        hint="Tells your bookmarklets apart in Account, e.g. the browser it lives in."
+        error={error?.message}
+      >
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             key={error === null ? `idle:${installed?.id ?? ''}` : `error:${error.label}`}
-            id={labelId}
             name="label"
             required
-            maxLength={maxLabelLength}
+            maxLength={MAX_KEY_LABEL_LENGTH}
             autoComplete="off"
             autoFocus={autoFocus}
             defaultValue={error?.label ?? defaultLabel}
-            aria-invalid={error !== null || undefined}
-            aria-describedby={error === null ? ids.hint : ids.error}
             className="sm:flex-1"
+            {...fieldControlProps(labelId, { invalid: error !== null })}
           />
           <Button
             type="submit"
@@ -113,16 +111,7 @@ export function CreateBookmarklet({
             Create bookmarklet
           </Button>
         </div>
-        {error === null ? (
-          <p id={ids.hint} className="text-xs text-muted">
-            Tells your bookmarklets apart in Account, e.g. the browser it lives in.
-          </p>
-        ) : (
-          <p id={ids.error} role="alert" className="text-sm text-remove">
-            {error.message}
-          </p>
-        )}
-      </div>
+      </Field>
     </form>
   );
 }

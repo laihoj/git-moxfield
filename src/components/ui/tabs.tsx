@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { Link } from './navigation';
 
+/** One segment of {@link SegmentedLinks}. */
 export interface TabLinkItem {
   id: string;
   label: ReactNode;
@@ -11,52 +12,6 @@ export interface TabLinkItem {
   icon?: ReactNode;
   /** Optional counter shown after the label. */
   count?: number;
-}
-
-export interface TabsProps {
-  items: readonly TabLinkItem[];
-  activeId: string;
-  /** Accessible name of the navigation landmark. */
-  label: string;
-  className?: string;
-}
-
-/**
- * Underlined navigation tabs. Each tab is a link (`aria-current="page"` on the active
- * one), so tabs work without JavaScript and are shareable as URLs.
- */
-export function Tabs({ items, activeId, label, className }: TabsProps) {
-  return (
-    <nav aria-label={label} className={clsx('border-b border-border', className)}>
-      <ul className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none]">
-        {items.map((item) => {
-          const active = item.id === activeId;
-          return (
-            <li key={item.id} className="shrink-0">
-              <Link
-                href={item.href}
-                aria-current={active ? 'page' : undefined}
-                className={clsx(
-                  'flex h-11 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors',
-                  active
-                    ? 'border-accent text-fg'
-                    : 'border-transparent text-muted hover:border-border-strong hover:text-fg',
-                )}
-              >
-                {item.icon}
-                {item.label}
-                {item.count !== undefined && (
-                  <span className="rounded-full bg-surface-2 px-1.5 text-xs text-muted tabular">
-                    {item.count}
-                  </span>
-                )}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
-  );
 }
 
 export interface SegmentedLinksProps {

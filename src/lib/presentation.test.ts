@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  currentFetchError,
   deckTitle,
   isUnnamedDeck,
   sharedDeckTitle,
@@ -49,5 +50,32 @@ describe('sharedDeckTitle', () => {
     expect(sharedDeckTitle({ name: '', head })).toBe(UNTITLED_DECK_TITLE);
     expect(sharedDeckTitle({ name: '  ', head })).toBe(UNTITLED_DECK_TITLE);
     expect(UNTITLED_DECK_TITLE).toBe('Untitled deck');
+  });
+});
+
+describe('currentFetchError', () => {
+  const error = {
+    code: 'blocked',
+    message: 'Blocked.',
+    at: '2026-10-09T12:00:00.000Z',
+    retryAfterSeconds: null,
+  } as const;
+
+  it('is the error when there is no observation yet', () => {
+    expect(currentFetchError({ lastFetchError: error, working: null })).toBe(error);
+  });
+
+  it('is the error only when it is later than the latest observation', () => {
+    expect(
+      currentFetchError({ lastFetchError: error, working: { fetchedAt: '2026-10-09T11:00:00.000Z' } }),
+    ).toBe(error);
+    expect(currentFetchError({ lastFetchError: error, working: { fetchedAt: error.at } })).toBeNull();
+    expect(
+      currentFetchError({ lastFetchError: error, working: { fetchedAt: '2026-10-09T13:00:00.000Z' } }),
+    ).toBeNull();
+  });
+
+  it('is null without an error', () => {
+    expect(currentFetchError({ lastFetchError: null, working: null })).toBeNull();
   });
 });
