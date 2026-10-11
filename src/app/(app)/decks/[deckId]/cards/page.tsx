@@ -1,17 +1,17 @@
-import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
-import { CARD_RESULT_LIMIT, CardsContent, cardQuery } from '@/components/deck-pages/cards-content';
-import { deckTitle } from '@/lib/presentation';
+import {
+  CARD_RESULT_LIMIT,
+  CardsContent,
+  cardQuery,
+  cardResults,
+} from '@/components/deck-pages/cards-content';
 
-import { deckServices, decodeSegment, loadOverview } from '../data';
+import { deckServices, decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/decks/[deckId]/cards'>): Promise<Metadata> {
-  const overview = await loadOverview(decodeSegment((await params).deckId));
-  return { title: overview === null ? 'Cards' : `Cards · ${deckTitle(overview)}` };
-}
+export const generateMetadata = ownerSectionMetadata('Cards');
 
 /** Search every card that was ever in the deck; each result links to its card history. */
 export default async function CardsPage({ params, searchParams }: PageProps<'/decks/[deckId]/cards'>) {
@@ -20,10 +20,9 @@ export default async function CardsPage({ params, searchParams }: PageProps<'/de
   const overview = await loadOverview(deckId);
   if (overview === null) notFound();
 
-  const results =
-    query === '' || overview.versionCount === 0
-      ? []
-      : await (await deckServices(deckId)).searchCards(deckId, query, CARD_RESULT_LIMIT);
+  const results = await cardResults(query, overview.versionCount, async (text) =>
+    (await deckServices(deckId)).searchCards(deckId, text, CARD_RESULT_LIMIT),
+  );
 
   return (
     <CardsContent

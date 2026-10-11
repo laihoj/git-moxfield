@@ -9,9 +9,18 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Link } from '@/components/ui/navigation';
 import { pluralize } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { searchParamText } from '@/lib/search-params';
 import type { TagCountDTO, VersionListItemDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
+
+/** The parsed `?tag=` of the History page: the tag to filter by, `undefined` for none. */
+export function historyTagParam(value: string | string[] | undefined): string | undefined {
+  return searchParamText(value, MAX_TAG_PARAM_LENGTH);
+}
+
+/** Sanity bound for the tag filter; the service normalizes the tag and rejects invalid ones. */
+const MAX_TAG_PARAM_LENGTH = 200;
 
 export interface HistoryContentProps {
   scope: DeckScope;

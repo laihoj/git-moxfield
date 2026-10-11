@@ -6,7 +6,7 @@ import { VersionTags } from '@/components/deck/version-tags';
 import { parseVersionTab, VersionContent } from '@/components/deck-pages/version-content';
 import { parseSequence } from '@/app/route-segments';
 import { versionLabel } from '@/lib/format';
-import { noteText, sharedDeckTitle } from '@/lib/presentation';
+import { deckPageTitle, freeTextNote, sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckRoutes } from '@/lib/routes';
 import { FREE_TEXT_NOTE_KIND } from '@/server/services';
 
@@ -32,7 +32,7 @@ export async function generateMetadata({
     const found = await loadVersion(token, sequence);
     if (found === null) return { title: 'Version not found' };
     const { detail } = found;
-    return { title: `${versionLabel(detail.version.sequence)} · ${sharedDeckTitle(detail.deck)}` };
+    return { title: deckPageTitle(versionLabel(detail.version.sequence), sharedDeckTitle(detail.deck)) };
   });
 }
 
@@ -49,7 +49,7 @@ export default async function SharedVersionPage({
   if (found === null) return <SharedPageMissing access={await loadSharedDeck(token)} />;
   const { access, detail } = found;
   const { version } = detail;
-  const note = detail.notes.find((entry) => entry.kind === FREE_TEXT_NOTE_KIND) ?? null;
+  const note = freeTextNote(detail.notes, FREE_TEXT_NOTE_KIND);
 
   return (
     <VersionContent
@@ -59,9 +59,7 @@ export default async function SharedVersionPage({
       hasWorking={false}
       tags={<VersionTags tags={version.tags} />}
       notes={
-        access.share.includeNotes ? (
-          <VersionNote text={note === null ? '' : noteText(note.data)} updatedAt={note?.updatedAt ?? null} />
-        ) : undefined
+        access.share.includeNotes ? <VersionNote text={note.text} updatedAt={note.updatedAt} /> : undefined
       }
     />
   );

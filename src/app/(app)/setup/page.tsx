@@ -142,7 +142,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
 
       <p className="text-center text-sm text-muted">
         All set?{' '}
-        <Link href="/" className="font-medium text-accent hover:underline">
+        <Link href={routes.home()} className="font-medium text-accent hover:underline">
           Back to your decks
         </Link>
       </p>

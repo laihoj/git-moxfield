@@ -1,13 +1,12 @@
-import { Bookmark, Hourglass, LogIn, X } from 'lucide-react';
+import { Bookmark, LogIn, X } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { AuthPanel } from '@/components/auth/auth-panel';
-import { Alert } from '@/components/ui/alert';
-import { Button, ButtonLink } from '@/components/ui/button';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AbsoluteTime, ExpiryTime } from '@/components/ui/relative-time';
 import { formatDuration } from '@/lib/format';
-import { routes } from '@/lib/routes';
 import { getAuthService, HANDOFF_LIFETIME_MS } from '@/server/auth';
 import { readHandoffToken, readSessionToken } from '@/server/auth/cookies';
 import { getCurrentUser } from '@/server/auth/current-user';
@@ -58,9 +57,9 @@ export default async function BookmarkletSignInPage({ searchParams }: PageProps<
           </dd>
         </dl>
         {replaces !== null && (
-          <Alert tone="warn" title={`You’re signed in as ${replaces.displayName}`}>
+          <SignedInAsAlert displayName={replaces.displayName}>
             Signing in as {displayName} signs {replaces.displayName} out of this browser.
-          </Alert>
+          </SignedInAsAlert>
         )}
         <form method="post" action={HANDOFF_PATH} className="flex flex-col gap-2.5">
           <input type="hidden" name="next" value={next} />
@@ -100,23 +99,11 @@ export default async function BookmarkletSignInPage({ searchParams }: PageProps<
 
 function HandoffExpired({ signedIn }: { signedIn: boolean }) {
   return (
-    <AuthPanel
-      icon={<Hourglass aria-hidden="true" />}
-      tone="muted"
+    <DeadLinkPanel
+      icon={LINK_PROBLEM_ICONS.expired}
       title="This sign-in has expired"
       description={`A bookmarklet sign-in waits ${formatDuration(HANDOFF_LIFETIME_MS)} to be confirmed. Run your bookmarklet again.`}
-    >
-      <div className="flex justify-center">
-        {signedIn ? (
-          <ButtonLink href={routes.home()} variant="secondary">
-            Back to your decks
-          </ButtonLink>
-        ) : (
-          <ButtonLink href={routes.signIn()} variant="secondary">
-            Other ways to sign in
-          </ButtonLink>
-        )}
-      </div>
-    </AuthPanel>
+      signedIn={signedIn}
+    />
   );
 }

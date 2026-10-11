@@ -1,17 +1,14 @@
-import { Ban, CircleCheck, Hourglass, Mail, Unlink } from 'lucide-react';
+import { Mail } from 'lucide-react';
 import type { Metadata } from 'next';
-import type { ReactNode } from 'react';
 
 import { AuthPanel } from '@/components/auth/auth-panel';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
 import { InviteForm } from '@/components/auth/invite-form';
-import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ExpiryTime } from '@/components/ui/relative-time';
 import { roleLabel } from '@/lib/accounts';
 import { formatDuration } from '@/lib/format';
-import { routes } from '@/lib/routes';
 import {
   getAuthService,
   INVITE_LIFETIME_MS,
@@ -59,9 +56,9 @@ export default async function InvitePage({ params }: PageProps<'/invite/[token]'
           </p>
         </div>
         {user !== null && (
-          <Alert tone="warn" title={`You’re signed in as ${user.displayName}`}>
+          <SignedInAsAlert displayName={user.displayName}>
             This invite creates a new account, and this browser switches to it.
-          </Alert>
+          </SignedInAsAlert>
         )}
         <InviteForm token={token} maxNameLength={MAX_DISPLAY_NAME_LENGTH} />
       </Card>
@@ -69,50 +66,36 @@ export default async function InvitePage({ params }: PageProps<'/invite/[token]'
   );
 }
 
-const PROBLEMS: Record<OneTimeLinkProblem, { icon: ReactNode; title: string; description: string }> = {
+const PROBLEMS: Record<OneTimeLinkProblem, { title: string; description: string }> = {
   invalid: {
-    icon: <Unlink aria-hidden="true" />,
     title: 'This invite link doesn’t work',
     description: 'Check that you copied all of it, or ask for a new one.',
   },
   expired: {
-    icon: <Hourglass aria-hidden="true" />,
     title: 'This invite has expired',
     description: `Invites work for ${formatDuration(INVITE_LIFETIME_MS)}. Ask whoever sent it for a new one.`,
   },
   used: {
-    icon: <CircleCheck aria-hidden="true" />,
     title: 'This invite has already been used',
     description: 'Each invite makes one account. If it was yours, sign in with your bookmarklet.',
   },
   revoked: {
-    icon: <Ban aria-hidden="true" />,
     title: 'This invite was withdrawn',
     description: 'Ask whoever sent it for a new one.',
   },
 };
 
 function InviteProblem({ status, signedIn }: { status: OneTimeLinkProblem; signedIn: boolean }) {
-  const { icon, title, description } = PROBLEMS[status];
+  const { title, description } = PROBLEMS[status];
   return (
-    <AuthPanel
-      icon={icon}
-      tone="muted"
+    <DeadLinkPanel
+      icon={LINK_PROBLEM_ICONS[status]}
       title={title}
       // Signed in already: no need to explain how to sign in.
       description={status === 'used' && signedIn ? 'Each invite makes one account.' : description}
-    >
-      <div className="flex justify-center">
-        {signedIn ? (
-          <ButtonLink href={routes.home()} variant="secondary">
-            Back to your decks
-          </ButtonLink>
-        ) : (
-          <ButtonLink href={routes.signIn()} variant={status === 'used' ? 'primary' : 'secondary'}>
-            Sign in
-          </ButtonLink>
-        )}
-      </div>
-    </AuthPanel>
+      signedIn={signedIn}
+      signInLabel="Sign in"
+      signInPrimary={status === 'used'}
+    />
   );
 }

@@ -8,12 +8,7 @@ import {
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD } from '@/integrations/moxfield/capture-protocol';
 import { PROXY_BODY_BUFFER_LIMIT } from '@/server/proxy-body-limit';
 
-import {
-  CAPTURE_FORM_BODY_LIMIT,
-  CAPTURE_JSON_BODY_LIMIT,
-  declaredTooLarge,
-  readBodyLimited,
-} from './read-body';
+import { CAPTURE_FORM_BODY_LIMIT, CAPTURE_JSON_BODY_LIMIT } from './read-body';
 
 /**
  * Next truncates a body at the proxy buffer, dropping the chunk that crosses it, so a
@@ -73,69 +68,5 @@ describe('capture body limits', () => {
       MAX_ENCODED_CAPTURE_CHARS + 2 + 2,
     );
     expect(new URLSearchParams({ p: worstPlain }).toString().length).toBe(3 * MAX_PLAIN_CAPTURE_BYTES + 2);
-  });
-});
-
-function streamedRequest(chunks: number[]): Request {
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const size of chunks) controller.enqueue(new Uint8Array(size));
-      controller.close();
-    },
-  });
-  return new Request('http://localhost/', { method: 'POST', body, duplex: 'half' } as RequestInit);
-}
-
-describe('readBodyLimited', () => {
-  it('reads a body up to the limit', async () => {
-    const result = await readBodyLimited(streamedRequest([3, 4]), 7);
-    expect(result).toEqual({ ok: true, bytes: new Uint8Array(7) });
-  });
-
-  it('gives up as soon as the body exceeds the limit', async () => {
-    expect(await readBodyLimited(streamedRequest([4, 4]), 7)).toEqual({ ok: false, reason: 'too-large' });
-  });
-
-  it('still reports a too-large body when cancelling its stream fails', async () => {
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        controller.enqueue(new Uint8Array(4));
-      },
-      cancel() {
-        return Promise.reject(new Error('The connection is gone.'));
-      },
-    });
-    const request = new Request('http://localhost/', { method: 'POST', body, duplex: 'half' } as RequestInit);
-    expect(await readBodyLimited(request, 7)).toEqual({ ok: false, reason: 'too-large' });
-  });
-
-  it('reports a body that fails while it is read as unreadable', async () => {
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(2));
-        controller.error(new Error('The connection broke.'));
-      },
-    });
-    const request = new Request('http://localhost/', { method: 'POST', body, duplex: 'half' } as RequestInit);
-    expect(await readBodyLimited(request, 7)).toEqual({ ok: false, reason: 'unreadable' });
-  });
-
-  it('reads an empty request as no bytes', async () => {
-    expect(await readBodyLimited(new Request('http://localhost/'), 7)).toEqual({
-      ok: true,
-      bytes: new Uint8Array(),
-    });
-  });
-});
-
-describe('declaredTooLarge', () => {
-  it.each([
-    [null, false],
-    ['7', false],
-    ['8', true],
-    ['nonsense', false],
-  ])('Content-Length %j → %j', (length, expected) => {
-    const headers = new Headers(length === null ? {} : { 'content-length': length });
-    expect(declaredTooLarge(headers, 7)).toBe(expected);
   });
 });

@@ -12,16 +12,13 @@
  */
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { z } from 'zod';
 
 import { getAuthService } from '@/server/auth';
 import { endBrowserSession } from '@/server/auth/cookies';
 import { requireUser } from '@/server/auth/current-user';
-import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
-import { isServiceError } from '@/server/services';
 import { absoluteAppUrl } from '@/core/http-url';
-import { routes } from '@/lib/routes';
+import { routePatterns, routes } from '@/lib/routes';
 
 import type {
   AccountActionResult,
@@ -30,33 +27,14 @@ import type {
   RenameState,
 } from './action-types';
 import { qrCode } from './qr-code';
+import { failureMessage, formString, idSchema, INVALID_REQUEST } from './action-support';
 import { actionAppUrl } from './request-origin';
 
 const log = createLogger('account-actions');
 
-const GENERIC_ERROR = 'Something went wrong. Please try again.';
-
-/** Sanity bound for ids from the browser; the services look them up within the user's scope. */
-const idSchema = z.string().trim().min(1).max(128);
-
-/** Longest form value read at all; the auth service validates the exact rules. */
-const MAX_FIELD_LENGTH = 512;
-
-function formString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value.slice(0, MAX_FIELD_LENGTH) : '';
-}
-
-/** User-facing message: service errors carry one; anything else is logged and hidden. */
-function failureMessage(error: unknown, what: string, user: SessionUser): string {
-  if (isServiceError(error)) return error.message;
-  log.error(`${what} failed`, { error, userId: user.id });
-  return GENERIC_ERROR;
-}
-
 function revalidateAccount(): void {
-  revalidatePath('/account');
-  revalidatePath('/setup');
+  revalidatePath(routes.account());
+  revalidatePath(routes.setup());
 }
 
 /** Changes the signed-in user's display name. */
@@ -68,10 +46,10 @@ export async function renameSelfAction(_previous: RenameState, formData: FormDat
     const outcome = await auth.renameSelf(user, value);
     if (!outcome.ok) return { status: 'error', message: outcome.message, value };
     // The header shows the name on every page.
-    revalidatePath('/', 'layout');
+    revalidatePath(routes.home(), 'layout');
     return { status: 'saved', displayName: outcome.user.displayName };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'renameSelf', user), value };
+    return { status: 'error', message: failureMessage(log, error, 'renameSelf', { userId: user.id }), value };
   }
 }
 
@@ -99,7 +77,11 @@ export async function createBookmarkletAction(
       sameTab: created.bookmarklets.sameTab,
     };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'createBookmarkletKey', user), label };
+    return {
+      status: 'error',
+      message: failureMessage(log, error, 'createBookmarkletKey', { userId: user.id }),
+      label,
+    };
   }
 }
 
@@ -118,17 +100,17 @@ export async function revokeKeyAction(
   const user = await requireUser({ next: routes.account() });
   const id = idSchema.safeParse(keyId);
   if (!id.success || typeof includeDerived !== 'boolean' || typeof includeShareLinks !== 'boolean') {
-    return { ok: false, message: 'Invalid request.' };
+    return { ok: false, message: INVALID_REQUEST };
   }
   try {
     const auth = await getAuthService();
     const revoked = await auth.revokeKey(user, id.data, { includeDerived, includeShareLinks });
     revalidateAccount();
     // Every deck's Share page lists its links.
-    if (includeShareLinks) revalidatePath('/decks/[deckId]/share', 'page');
+    if (includeShareLinks) revalidatePath(routePatterns.deckShare, 'page');
     return revoked ? { ok: true } : { ok: false, message: 'This bookmarklet was already revoked.' };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeKey', user) };
+    return { ok: false, message: failureMessage(log, error, 'revokeKey', { userId: user.id }) };
   }
 }
 
@@ -139,16 +121,16 @@ export async function revokeKeyAction(
 export async function revokeKeyShareLinksAction(keyId: string): Promise<AccountActionResult> {
   const user = await requireUser({ next: routes.account() });
   const id = idSchema.safeParse(keyId);
-  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  if (!id.success) return { ok: false, message: INVALID_REQUEST };
   try {
     const auth = await getAuthService();
     const revoked = await auth.revokeKeyShareLinks(user, id.data);
-    revalidatePath('/account');
+    revalidatePath(routes.account());
     // Every deck's Share page lists its links.
-    revalidatePath('/decks/[deckId]/share', 'page');
+    revalidatePath(routePatterns.deckShare, 'page');
     return revoked > 0 ? { ok: true } : { ok: false, message: 'These share links were already revoked.' };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeKeyShareLinks', user) };
+    return { ok: false, message: failureMessage(log, error, 'revokeKeyShareLinks', { userId: user.id }) };
   }
 }
 
@@ -156,17 +138,17 @@ export async function revokeKeyShareLinksAction(keyId: string): Promise<AccountA
 export async function revokeSessionAction(sessionId: string): Promise<AccountActionResult> {
   const user = await requireUser({ next: routes.account() });
   const id = idSchema.safeParse(sessionId);
-  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  if (!id.success) return { ok: false, message: INVALID_REQUEST };
   if (id.data === user.sessionId) {
     return { ok: false, message: 'Use “Sign out” to sign this device out.' };
   }
   try {
     const auth = await getAuthService();
     await auth.revokeSession(user, id.data);
-    revalidatePath('/account');
+    revalidatePath(routes.account());
     return { ok: true };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeSession', user) };
+    return { ok: false, message: failureMessage(log, error, 'revokeSession', { userId: user.id }) };
   }
 }
 
@@ -176,10 +158,10 @@ export async function signOutOtherDevicesAction(): Promise<AccountActionResult> 
   try {
     const auth = await getAuthService();
     await auth.endOtherSessions(user);
-    revalidatePath('/account');
+    revalidatePath(routes.account());
     return { ok: true };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'signOutOtherDevices', user) };
+    return { ok: false, message: failureMessage(log, error, 'signOutOtherDevices', { userId: user.id }) };
   }
 }
 
@@ -191,7 +173,7 @@ export async function signOutEverywhereAction(): Promise<AccountActionResult> {
     await auth.endAllSessions(user);
     await endBrowserSession();
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'signOutEverywhere', user) };
+    return { ok: false, message: failureMessage(log, error, 'signOutEverywhere', { userId: user.id }) };
   }
   redirect(routes.signIn());
 }
@@ -207,6 +189,6 @@ export async function createDeviceLinkAction(): Promise<IssuedLinkState> {
     const url = absoluteAppUrl(link.path, app.appUrl);
     return { status: 'created', url, expiresAt: link.expiresAt, qr: qrCode(url) };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'createDeviceLink', user) };
+    return { status: 'error', message: failureMessage(log, error, 'createDeviceLink', { userId: user.id }) };
   }
 }

@@ -44,6 +44,12 @@ export type WelcomeReason = 'invite' | 'claimed' | 'claimed-local' | 'recovery';
 
 export const WELCOME_REASONS: readonly WelcomeReason[] = ['invite', 'claimed', 'claimed-local', 'recovery'];
 
+/**
+ * Route patterns (with their `[param]` segments) for `revalidatePath`, which takes the
+ * pattern of a dynamic route to refresh every page that matches it.
+ */
+export const routePatterns = { deckShare: '/decks/[deckId]/share' } as const;
+
 export const routes = {
   home: (): Route => '/',
   setup: (query: { welcome?: WelcomeReason } = {}): Route => withQuery('/setup', { welcome: query.welcome }),

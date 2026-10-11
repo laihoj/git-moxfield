@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { RestoreContent } from '@/components/deck-pages/restore-content';
 import { versionLabel } from '@/lib/format';
+import { deckPageTitle, deckTitle } from '@/lib/presentation';
 
 import { deckServices, decodeSegment, parseSequence } from '../../../data';
 
@@ -21,7 +22,9 @@ export async function generateMetadata({
 }: PageProps<'/decks/[deckId]/versions/[sequence]/restore'>): Promise<Metadata> {
   const restore = await loadRestore(params);
   if (restore === null) return { title: 'Version not found' };
-  return { title: `Restore ${versionLabel(restore.version.sequence)} · ${restore.deck.name}` };
+  return {
+    title: deckPageTitle(`Restore ${versionLabel(restore.version.sequence)}`, deckTitle(restore.deck)),
+  };
 }
 
 /** Restore a version to Moxfield: copy blocks per Bulk Edit board, steps and limitations. */

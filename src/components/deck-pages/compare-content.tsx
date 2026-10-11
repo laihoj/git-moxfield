@@ -13,6 +13,7 @@ import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { searchParamText } from '@/lib/search-params';
 import type { CompareDTO, CompareSideDTO, VersionRefDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
@@ -39,8 +40,15 @@ export function latestVersionsRefs(newestVersions: readonly VersionRefDTO[]): Co
 
 /** A `?from=` / `?to=` value: trimmed, bounded, `undefined` when absent. */
 export function compareParam(value: string | string[] | undefined): string | undefined {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return text === '' ? undefined : text.slice(0, 80);
+  return searchParamText(value, 80);
+}
+
+/** The sides a Compare page shows: those the query asks for, the defaults for the rest. */
+export function requestedRefs(
+  query: { from?: string | string[]; to?: string | string[] },
+  defaults: CompareRefs,
+): CompareRefs {
+  return { from: compareParam(query.from) ?? defaults.from, to: compareParam(query.to) ?? defaults.to };
 }
 
 /** The ref of a resolved side, as used by the pickers (`v12`, `working`, `empty`). */

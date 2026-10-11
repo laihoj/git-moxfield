@@ -1,15 +1,13 @@
-import { Ban, CircleCheck, Hourglass, LifeBuoy, MonitorSmartphone, Unlink } from 'lucide-react';
+import { LifeBuoy, MonitorSmartphone } from 'lucide-react';
 import type { Metadata } from 'next';
-import type { ReactNode } from 'react';
 
 import { AuthPanel } from '@/components/auth/auth-panel';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
 import { LoginLinkForm } from '@/components/auth/login-link-form';
 import { Alert } from '@/components/ui/alert';
-import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ExpiryTime } from '@/components/ui/relative-time';
 import { formatDuration } from '@/lib/format';
-import { routes } from '@/lib/routes';
 import {
   DEVICE_LINK_LIFETIME_MS,
   getAuthService,
@@ -55,9 +53,9 @@ export default async function LoginLinkPage({ params }: PageProps<'/signin/[toke
           </Alert>
         )}
         {user !== null && (
-          <Alert tone="warn" title={`You’re signed in as ${user.displayName}`}>
+          <SignedInAsAlert displayName={user.displayName}>
             This browser switches to {link.displayName}’s account.
-          </Alert>
+          </SignedInAsAlert>
         )}
         <LoginLinkForm token={token} />
         <p className="text-center text-xs text-muted">
@@ -68,25 +66,21 @@ export default async function LoginLinkPage({ params }: PageProps<'/signin/[toke
   );
 }
 
-const PROBLEMS: Record<OneTimeLinkProblem, { icon: ReactNode; title: string; description: string }> = {
+const PROBLEMS: Record<OneTimeLinkProblem, { title: string; description: string }> = {
   invalid: {
-    icon: <Unlink aria-hidden="true" />,
     title: 'This sign-in link doesn’t work',
     description: 'Check that you copied all of it. If it is a recovery link, ask your admin for a new one.',
   },
   expired: {
-    icon: <Hourglass aria-hidden="true" />,
     title: 'This sign-in link has expired',
     description: `Device links work for ${formatDuration(DEVICE_LINK_LIFETIME_MS)}, recovery links for ${formatDuration(RECOVERY_LINK_LIFETIME_MS)}. Make a new one in Account on a signed-in device, or ask your admin.`,
   },
   used: {
-    icon: <CircleCheck aria-hidden="true" />,
     title: 'This sign-in link was already used',
     description:
       'Each link signs in once. Make a new one in Account on a signed-in device, or ask your admin.',
   },
   revoked: {
-    icon: <Ban aria-hidden="true" />,
     title: 'This sign-in link was withdrawn',
     description:
       'It no longer works. Make a new one in Account on a signed-in device, or ask your admin for a new recovery link.',
@@ -94,26 +88,14 @@ const PROBLEMS: Record<OneTimeLinkProblem, { icon: ReactNode; title: string; des
 };
 
 function LinkProblem({ status, signedIn }: { status: OneTimeLinkProblem; signedIn: boolean }) {
-  const { icon, title, description } = PROBLEMS[status];
+  const { title, description } = PROBLEMS[status];
   return (
-    <AuthPanel
-      icon={icon}
-      tone="muted"
+    <DeadLinkPanel
+      icon={LINK_PROBLEM_ICONS[status]}
       title={title}
       // Signed in already (often with this very link): no need to explain how to sign in.
       description={status === 'used' && signedIn ? 'Each link signs in once.' : description}
-    >
-      <div className="flex justify-center">
-        {signedIn ? (
-          <ButtonLink href={routes.home()} variant="secondary">
-            Back to your decks
-          </ButtonLink>
-        ) : (
-          <ButtonLink href={routes.signIn()} variant="secondary">
-            Other ways to sign in
-          </ButtonLink>
-        )}
-      </div>
-    </AuthPanel>
+      signedIn={signedIn}
+    />
   );
 }

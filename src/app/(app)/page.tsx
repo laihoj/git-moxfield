@@ -5,6 +5,7 @@ import { DeckCard } from '@/components/deck/deck-card';
 import { TrackDeckForm } from '@/components/deck/track-deck-form';
 import { Card } from '@/components/ui/card';
 import { Link } from '@/components/ui/navigation';
+import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 
@@ -81,7 +82,7 @@ export default async function DecksPage() {
           </ol>
           <p className="mx-auto mt-4 max-w-lg text-center text-sm text-balance text-muted">
             Moxfield blocks most servers, so the{' '}
-            <Link href="/setup" className="font-medium text-accent hover:underline">
+            <Link href={routes.setup()} className="font-medium text-accent hover:underline">
               Send to git-moxfield bookmarklet
             </Link>{' '}
             is usually how decks get here. Set it up once.

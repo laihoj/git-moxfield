@@ -65,17 +65,17 @@ describe('deck services: tags', () => {
 
     expect(await services.addTag(deckId, 1, '#!?')).toEqual({
       ok: false,
-      reason: expect.any(String) as unknown,
+      message: expect.any(String) as unknown,
     });
-    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, reason: 'Enter a tag.' });
+    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, message: 'Enter a tag.' });
     expect(await services.addTag(deckId, 1, 'x'.repeat(41))).toMatchObject({ ok: false });
     expect(await services.addTag(deckId, 9, 'stable')).toEqual({
       ok: false,
-      reason: 'Version v9 does not exist.',
+      message: 'Version v9 does not exist.',
     });
     expect(await services.removeTag(deckId, 9, 'stable')).toEqual({
       ok: false,
-      reason: 'Version v9 does not exist.',
+      message: 'Version v9 does not exist.',
     });
     expect(await services.listTags('missing')).toEqual([]);
   });

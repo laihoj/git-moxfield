@@ -5,7 +5,13 @@
 import { isRecord } from '@/core/guards';
 import { upperFirst } from '@/core/text';
 import type { DeckSourceErrorCode, IngestMethod } from '@/integrations/deck-source';
-import type { DeckStatus, DeckSummaryDTO, SharedDeckDTO, VersionRefDTO } from '@/server/services/types';
+import type {
+  CommitNoteDTO,
+  DeckStatus,
+  DeckSummaryDTO,
+  SharedDeckDTO,
+  VersionRefDTO,
+} from '@/server/services/types';
 
 import { versionLabel } from './format';
 
@@ -51,6 +57,11 @@ export function isUnnamedDeck(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' |
 /** The deck's name for titles and labels: `New Moxfield deck` until its name is known. */
 export function deckTitle(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' | 'status'>): string {
   return isUnnamedDeck(deck) ? UNNAMED_DECK_TITLE : deck.name;
+}
+
+/** A page title: `History · Blue Farm`, or just `History` while the deck is not known. */
+export function deckPageTitle(section: string, deckName: string | null): string {
+  return deckName === null ? section : `${section} · ${deckName}`;
 }
 
 /** Title shown for a shared deck whose latest version has no name. */
@@ -117,4 +128,16 @@ export function formatLabel(format: string): string {
 export function noteText(data: unknown): string {
   if (typeof data === 'string') return data;
   return isRecord(data) && typeof data.text === 'string' ? data.text : '';
+}
+
+/**
+ * The free-text note among a version's notes (those of `kind`): its text, `''` without
+ * one, and when it was last changed.
+ */
+export function freeTextNote(
+  notes: readonly CommitNoteDTO[],
+  kind: string,
+): { text: string; updatedAt: string | null } {
+  const note = notes.find((entry) => entry.kind === kind);
+  return { text: note === undefined ? '' : noteText(note.data), updatedAt: note?.updatedAt ?? null };
 }

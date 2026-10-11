@@ -16,10 +16,11 @@ import { MAX_COMMIT_MESSAGE_LENGTH, MAX_DECK_INPUT_LENGTH, MAX_NOTE_LENGTH } fro
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 import { createLogger } from '@/server/logger';
-import { isServiceError, type DeckServices } from '@/server/services';
+import type { DeckServices } from '@/server/services';
 import { noteText } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 
+import { failureMessage, formString, idSchema, INVALID_REQUEST, UNBOUNDED } from './action-support';
 import type {
   CommitState,
   NoteState,
@@ -32,27 +33,14 @@ import type {
 
 const log = createLogger('actions');
 
-const GENERIC_ERROR = 'Something went wrong. Please try again.';
-
-/**
- * User-facing message for an unexpected failure: service errors (unknown deck,
- * invalid input) carry a message meant for users; anything else is logged and hidden.
- */
-function failureMessage(error: unknown, what: string, context: Record<string, unknown>): string {
-  if (isServiceError(error)) return error.message;
-  log.error(`${what} failed`, { error, ...context });
-  return GENERIC_ERROR;
-}
-
-const deckIdSchema = z.string().trim().min(1).max(128);
 const sequenceSchema = z.coerce.number().int().min(1).max(MAX_SEQUENCE);
 /** Sanity bound only; the service normalizes tags and reports precise validation errors. */
 const tagSchema = z.string().trim().min(1, 'Enter a tag.').max(200, 'That tag is too long.');
 
 /** Revalidates every page of one deck (status, history, versions, compare, cards) and the deck list. */
 function revalidateDeck(deckId: string): void {
-  revalidatePath(`/decks/${encodeURIComponent(deckId)}`, 'layout');
-  revalidatePath('/');
+  revalidatePath(routes.deck(deckId), 'layout');
+  revalidatePath(routes.home());
 }
 
 /**
@@ -63,18 +51,13 @@ async function ownerServices(): Promise<DeckServices> {
   return servicesFor(await requireUser());
 }
 
-function formString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
-}
-
 /** Tracks a deck from a pasted Moxfield URL or id, then opens its page. */
 export async function trackDeckAction(
   _previous: TrackDeckState,
   formData: FormData,
 ): Promise<TrackDeckState> {
   const services = await ownerServices();
-  const input = formString(formData, 'deck').trim();
+  const input = formString(formData, 'deck', UNBOUNDED).trim();
   if (input === '') return { status: 'error', message: 'Paste a Moxfield deck URL.', input };
   if (input.length > MAX_DECK_INPUT_LENGTH)
     return { status: 'error', message: 'That is too long to be a Moxfield deck URL.', input };
@@ -85,9 +68,9 @@ export async function trackDeckAction(
     if (!outcome.ok) return { status: 'error', message: outcome.reason, input };
     deckId = outcome.deckId;
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'trackDeck', {}), input };
+    return { status: 'error', message: failureMessage(log, error, 'trackDeck'), input };
   }
-  revalidatePath('/');
+  revalidatePath(routes.home());
   redirect(routes.deck(deckId));
 }
 
@@ -99,10 +82,10 @@ export async function trackDeckAction(
  */
 export async function refreshAction(deckId: string, trigger: 'manual' | 'auto'): Promise<RefreshResult> {
   const services = await ownerServices();
-  const id = deckIdSchema.safeParse(deckId);
+  const id = idSchema.safeParse(deckId);
   const kind = z.enum(['manual', 'auto']).safeParse(trigger);
   if (!id.success || !kind.success) {
-    return { ok: false, code: 'internal', message: 'Invalid request.', retryAfterSeconds: null };
+    return { ok: false, code: 'internal', message: INVALID_REQUEST, retryAfterSeconds: null };
   }
   try {
     const outcome = await services.refresh(id.data, kind.data);
@@ -115,13 +98,13 @@ export async function refreshAction(deckId: string, trigger: 'manual' | 'auto'):
       retryAfterSeconds: outcome.error.retryAfterSeconds,
     };
   } catch (error) {
-    const message = failureMessage(error, 'refresh', { deckId: id.data });
+    const message = failureMessage(log, error, 'refresh', { deckId: id.data });
     return { ok: false, code: 'internal', message, retryAfterSeconds: null };
   }
 }
 
 const commitSchema = z.object({
-  deckId: deckIdSchema,
+  deckId: idSchema,
   message: z
     .string()
     .trim()
@@ -142,10 +125,10 @@ const commitSchema = z.object({
 export async function commitAction(_previous: CommitState, formData: FormData): Promise<CommitState> {
   const services = await ownerServices();
   const parsed = commitSchema.safeParse({
-    deckId: formString(formData, 'deckId'),
-    message: formString(formData, 'message'),
-    expectedObservationId: formString(formData, 'expectedObservationId'),
-    expectedHeadCommitId: formString(formData, 'expectedHeadCommitId'),
+    deckId: formString(formData, 'deckId', UNBOUNDED),
+    message: formString(formData, 'message', UNBOUNDED),
+    expectedObservationId: formString(formData, 'expectedObservationId', UNBOUNDED),
+    expectedHeadCommitId: formString(formData, 'expectedHeadCommitId', UNBOUNDED),
     tags: formData.getAll('tags').filter((tag): tag is string => typeof tag === 'string'),
   });
   if (!parsed.success) {
@@ -175,11 +158,11 @@ export async function commitAction(_previous: CommitState, formData: FormData): 
     }
     return { status: 'error', reason: outcome.reason, message: outcome.message };
   } catch (error) {
-    return { status: 'error', reason: 'internal', message: failureMessage(error, 'commit', { deckId }) };
+    return { status: 'error', reason: 'internal', message: failureMessage(log, error, 'commit', { deckId }) };
   }
 }
 
-const tagInputSchema = z.object({ deckId: deckIdSchema, sequence: sequenceSchema, tag: tagSchema });
+const tagInputSchema = z.object({ deckId: idSchema, sequence: sequenceSchema, tag: tagSchema });
 
 async function changeTagAction(
   op: 'add' | 'remove',
@@ -194,11 +177,10 @@ async function changeTagAction(
     const { deckId: id, sequence: version, tag: name } = parsed.data;
     const outcome =
       op === 'add' ? await services.addTag(id, version, name) : await services.removeTag(id, version, name);
-    if (!outcome.ok) return { ok: false, message: outcome.reason };
-    revalidateDeck(parsed.data.deckId);
-    return { ok: true, tags: outcome.tags };
+    if (outcome.ok) revalidateDeck(parsed.data.deckId);
+    return outcome;
   } catch (error) {
-    return { ok: false, message: failureMessage(error, `${op}Tag`, { deckId, sequence }) };
+    return { ok: false, message: failureMessage(log, error, `${op}Tag`, { deckId, sequence }) };
   }
 }
 
@@ -213,7 +195,7 @@ export async function removeTagAction(deckId: string, sequence: number, tag: str
 }
 
 const noteSchema = z.object({
-  deckId: deckIdSchema,
+  deckId: idSchema,
   sequence: sequenceSchema,
   // A sanity bound only (UTF-16 units, line breaks as typed): the service counts code points
   // of the normalized note and reports the exact limit.
@@ -224,9 +206,9 @@ const noteSchema = z.object({
 export async function setNoteAction(_previous: NoteState, formData: FormData): Promise<NoteState> {
   const services = await ownerServices();
   const parsed = noteSchema.safeParse({
-    deckId: formString(formData, 'deckId'),
-    sequence: formString(formData, 'sequence'),
-    text: formString(formData, 'text'),
+    deckId: formString(formData, 'deckId', UNBOUNDED),
+    sequence: formString(formData, 'sequence', UNBOUNDED),
+    text: formString(formData, 'text', UNBOUNDED),
   });
   if (!parsed.success)
     return { status: 'error', message: parsed.error.issues[0]?.message ?? 'Invalid note.' };
@@ -240,7 +222,7 @@ export async function setNoteAction(_previous: NoteState, formData: FormData): P
       savedAt: note?.updatedAt ?? new Date().toISOString(),
     };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'setNote', { deckId, sequence }) };
+    return { status: 'error', message: failureMessage(log, error, 'setNote', { deckId, sequence }) };
   }
 }
 
@@ -254,9 +236,9 @@ export async function relinkDeckAction(
   formData: FormData,
 ): Promise<RelinkDeckState> {
   const services = await ownerServices();
-  const input = formString(formData, 'deck').trim();
-  const id = deckIdSchema.safeParse(formString(formData, 'deckId'));
-  if (!id.success) return { status: 'error', message: 'Invalid request.', input };
+  const input = formString(formData, 'deck', UNBOUNDED).trim();
+  const id = idSchema.safeParse(formString(formData, 'deckId', UNBOUNDED));
+  if (!id.success) return { status: 'error', message: INVALID_REQUEST, input };
   const deckId = id.data;
   if (input === '') return { status: 'error', message: 'Paste the new Moxfield deck URL.', input };
   if (input.length > MAX_DECK_INPUT_LENGTH)
@@ -276,7 +258,7 @@ export async function relinkDeckAction(
           };
     }
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'relinkDeck', { deckId }), input };
+    return { status: 'error', message: failureMessage(log, error, 'relinkDeck', { deckId }), input };
   }
   revalidateDeck(deckId);
   redirect(routes.deck(deckId, { relinked: true }));
@@ -285,13 +267,13 @@ export async function relinkDeckAction(
 /** Deletes a deck and its whole history from git-moxfield (never touches Moxfield). */
 export async function untrackDeckAction(deckId: string): Promise<UntrackResult> {
   const services = await ownerServices();
-  const id = deckIdSchema.safeParse(deckId);
-  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  const id = idSchema.safeParse(deckId);
+  if (!id.success) return { ok: false, message: INVALID_REQUEST };
   try {
     await services.untrackDeck(id.data);
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'untrackDeck', { deckId: id.data }) };
+    return { ok: false, message: failureMessage(log, error, 'untrackDeck', { deckId: id.data }) };
   }
-  revalidatePath('/');
+  revalidatePath(routes.home());
   redirect(routes.home());
 }

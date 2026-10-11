@@ -3,8 +3,9 @@
  * Mirrors `app/icon.svg` and `BrandMark`: the branch glyph on the accent violet.
  */
 
-/** Accent violet of the light theme (`--accent`). */
-export const ICON_BACKGROUND = '#6d3fd8';
+import { THEME } from '@/lib/brand';
+
+import { BrandGlyph } from './brand-glyph';
 
 export interface AppIconProps {
   size: number;
@@ -25,25 +26,11 @@ export function AppIcon({ size, shape }: AppIconProps) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: ICON_BACKGROUND,
+        background: THEME.light.accent,
         borderRadius: shape === 'rounded' ? Math.round(size * 0.22) : 0,
       }}
     >
-      <svg
-        width={glyph}
-        height={glyph}
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="#ffffff"
-        strokeWidth="2.25"
-        strokeLinecap="round"
-      >
-        <circle cx="7" cy="6" r="2.25" />
-        <circle cx="7" cy="18" r="2.25" />
-        <circle cx="17" cy="8" r="2.25" />
-        <path d="M7 8.25v7.5" />
-        <path d="M17 10.25c0 3.5-3 4.75-8.5 5.75" />
-      </svg>
+      <BrandGlyph size={glyph} stroke={THEME.light.accentFg} />
     </div>
   );
 }

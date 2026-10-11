@@ -18,19 +18,10 @@ import { endBrowserSession, establishSession } from '@/server/auth/cookies';
 import { createLogger } from '@/server/logger';
 import { routes, type WelcomeReason } from '@/lib/routes';
 
+import { formString, GENERIC_ERROR } from './action-support';
 import type { SignInFormState } from './action-types';
 
 const log = createLogger('auth-actions');
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.';
-
-/** Longest form value read at all; the auth service validates the exact formats. */
-const MAX_FIELD_LENGTH = 512;
-
-function formString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value.slice(0, MAX_FIELD_LENGTH) : '';
-}
 
 async function userAgent(): Promise<string | null> {
   return (await headers()).get('user-agent');

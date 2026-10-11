@@ -19,6 +19,20 @@ export function restoreFileName({ deck, version }: RestoreDownload): string {
   return `${fileSlug(deck.name)}-v${version.sequence}-restore.txt`;
 }
 
+/**
+ * The response of a download: the text as an attachment named by {@link restoreFileName}.
+ * `headers` are added (the owner's route says `no-store`, the shared one its private headers).
+ */
+export function restoreDownloadResponse(download: RestoreDownload, headers?: HeadersInit): Response {
+  return new Response(restoreText(download), {
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'content-disposition': `attachment; filename="${restoreFileName(download)}"`,
+      ...Object.fromEntries(new Headers(headers)),
+    },
+  });
+}
+
 /** The download's text. */
 export function restoreText({ deck, version, export: restore }: RestoreDownload): string {
   const lines: string[] = [

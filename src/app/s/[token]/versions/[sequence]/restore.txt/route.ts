@@ -12,10 +12,11 @@
  */
 import type { NextRequest } from 'next/server';
 
-import { restoreFileName, restoreText, type RestoreDownload } from '@/app/restore-download';
+import { restoreDownloadResponse, type RestoreDownload } from '@/app/restore-download';
 import { parseSequence } from '@/app/route-segments';
 import { sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckServices } from '@/server/access';
+import { plainText } from '@/server/http/responses';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,19 +35,8 @@ export async function GET(
   const sequence = parseSequence(rawSequence);
   const access = sequence === null ? null : await sharedDeckServices(token);
   const restore = access === null || sequence === null ? null : await access.services.restoreExport(sequence);
-  if (restore === null) {
-    return new Response('Not found.\n', {
-      status: 404,
-      headers: { ...PRIVATE_HEADERS, 'content-type': 'text/plain; charset=utf-8' },
-    });
-  }
+  if (restore === null) return plainText(404, 'Not found.', PRIVATE_HEADERS);
   // Named as the pages name the deck (its latest version's name).
   const download: RestoreDownload = { ...restore, deck: { name: sharedDeckTitle(restore.deck) } };
-  return new Response(restoreText(download), {
-    headers: {
-      ...PRIVATE_HEADERS,
-      'content-type': 'text/plain; charset=utf-8',
-      'content-disposition': `attachment; filename="${restoreFileName(download)}"`,
-    },
-  });
+  return restoreDownloadResponse(download, PRIVATE_HEADERS);
 }

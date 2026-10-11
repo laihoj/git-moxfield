@@ -1,26 +1,21 @@
-import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import {
   CompareContent,
-  compareParam,
   CompareSidesNotFound,
   latestVersionsRefs,
   NothingToCompare,
+  requestedRefs,
   type CompareRefs,
 } from '@/components/deck-pages/compare-content';
 import { versionLabel } from '@/lib/format';
-import { deckTitle } from '@/lib/presentation';
 import type { DeckOverviewDTO } from '@/server/services/types';
 
-import { deckServices, decodeSegment, loadOverview } from '../data';
+import { deckServices, decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/decks/[deckId]/compare'>): Promise<Metadata> {
-  const overview = await loadOverview(decodeSegment((await params).deckId));
-  return { title: overview === null ? 'Compare' : `Compare · ${deckTitle(overview)}` };
-}
+export const generateMetadata = ownerSectionMetadata('Compare');
 
 /**
  * Default comparison: the latest version against the current Moxfield deck when they
@@ -44,10 +39,7 @@ export default async function ComparePage({ params, searchParams }: PageProps<'/
   const defaults = defaultRefs(overview);
   if (defaults === null) return <NothingToCompare scope={scope} />;
 
-  const requested = {
-    from: compareParam(query.from) ?? defaults.from,
-    to: compareParam(query.to) ?? defaults.to,
-  };
+  const requested = requestedRefs(query, defaults);
   const services = await deckServices(deckId);
   const comparison = await services.compare(deckId, requested.from, requested.to);
 

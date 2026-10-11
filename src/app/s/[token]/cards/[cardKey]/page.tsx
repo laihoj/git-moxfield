@@ -3,7 +3,7 @@ import { cache } from 'react';
 
 import { CardHistoryContent, cardKeySegment } from '@/components/deck-pages/card-history-content';
 import { decodeSegment } from '@/app/route-segments';
-import { sharedDeckTitle } from '@/lib/presentation';
+import { deckPageTitle, sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckRoutes } from '@/lib/routes';
 
 import { loadSharedDeck, sharedPageMetadata } from '../../data';
@@ -25,7 +25,7 @@ export async function generateMetadata({
   return sharedPageMetadata(token, async () => {
     const card = await loadCard(token, cardKey);
     return {
-      title: card === null ? 'Card not found' : `${card.history.name} · ${sharedDeckTitle(card.deck)}`,
+      title: card === null ? 'Card not found' : deckPageTitle(card.history.name, sharedDeckTitle(card.deck)),
     };
   });
 }

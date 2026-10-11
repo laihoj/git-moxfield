@@ -80,7 +80,7 @@ export function UserMenu({ displayName, isAdmin }: UserMenuProps) {
           <MenuLink
             href={routes.account()}
             icon={UserRound}
-            current={pathname === '/account'}
+            current={pathname === routes.account()}
             onSelect={close}
           >
             Account
@@ -89,7 +89,7 @@ export function UserMenu({ displayName, isAdmin }: UserMenuProps) {
             <MenuLink
               href={routes.admin()}
               icon={ShieldCheck}
-              current={pathname === '/admin'}
+              current={pathname === routes.admin()}
               onSelect={close}
             >
               Admin

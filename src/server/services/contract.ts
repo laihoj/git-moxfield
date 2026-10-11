@@ -50,7 +50,7 @@ export type TrackDeckOutcome =
     }
   | { ok: false; reason: string };
 
-export type TagOutcome = { ok: true; tags: string[] } | { ok: false; reason: string };
+export type TagOutcome = { ok: true; tags: string[] } | { ok: false; message: string };
 
 export type RelinkDeckOutcome =
   | {

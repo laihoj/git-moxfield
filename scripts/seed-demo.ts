@@ -28,6 +28,7 @@ import { parseArgs } from 'node:util';
 
 import { absoluteAppUrl } from '@/core/http-url';
 import type { CapturedIngestMethod } from '@/integrations/deck-source';
+import { routes } from '@/lib/routes';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
 import { openConfiguredDatabase } from '@/server/db/client';
@@ -588,7 +589,7 @@ async function main(): Promise<number> {
     if (existing) {
       if (!force) {
         console.error(
-          `The demo deck already exists at /decks/${existing.id} in the ${where}. Run with --force to replace it.`,
+          `The demo deck already exists at ${routes.deck(existing.id)} in the ${where}. Run with --force to replace it.`,
         );
         return 1;
       }
@@ -601,7 +602,7 @@ async function main(): Promise<number> {
     console.log(
       `Seeded "${overview?.name ?? 'Blue Farm (demo)'}" with ${overview?.versionCount ?? 0} versions (status: ${overview?.status ?? 'unknown'}) into the ${where}.`,
     );
-    console.log(`/decks/${deckId}`);
+    console.log(routes.deck(deckId));
 
     // Signs a browser in as the demo user (the real clock: the link must be valid now).
     const auth = createAuthService({ db, config: appConfig, logger });

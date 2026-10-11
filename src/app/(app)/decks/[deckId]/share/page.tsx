@@ -1,24 +1,19 @@
-import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { CreateShareLink } from '@/components/share/create-share-link';
 import { ShareLinkExplainer } from '@/components/share/share-link-explainer';
 import { ShareLinkList } from '@/components/share/share-link-list';
 import { Card, CardHeader } from '@/components/ui/card';
-import { deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 import { shareLinkServicesFor } from '@/server/access';
 import { MAX_SHARE_LINK_LABEL_LENGTH } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 
-import { decodeSegment, loadOverview } from '../data';
+import { decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/decks/[deckId]/share'>): Promise<Metadata> {
-  const overview = await loadOverview(decodeSegment((await params).deckId));
-  return { title: overview === null ? 'Share' : `Share · ${deckTitle(overview)}` };
-}
+export const generateMetadata = ownerSectionMetadata('Share');
 
 /**
  * Share a deck (ADR 0007): create read-only links for people (no account needed), see

@@ -32,6 +32,7 @@ import { getAuthService, SYSTEM_ACTOR } from '@/server/auth';
 import { cookieNames } from '@/server/auth/cookie-spec';
 import { establishSessionOnResponse, requestCookieSecurity } from '@/server/auth/cookies';
 import { parseToken } from '@/server/auth/tokens';
+import { jsonResponse } from '@/server/http/responses';
 import type { BookmarkletsDTO } from '@/server/auth/types';
 
 import { isCrossOriginBrowserRequest, publicAppUrl } from '../../../request-origin';
@@ -52,7 +53,7 @@ function mediaType(contentType: string | null): string {
 }
 
 function badRequest(error: string): Response {
-  return Response.json({ error }, { status: 400, headers: { 'cache-control': 'no-store' } });
+  return jsonResponse({ error }, { status: 400 });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -61,10 +62,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   // Defence in depth: only the suite's own JSON requests (Node's fetch, which sends no
   // Origin), never a form or a "simple" request a web page could make.
   if (mediaType(request.headers.get('content-type')) !== 'application/json') {
-    return Response.json({ error: 'Send application/json.' }, { status: 415 });
+    return jsonResponse({ error: 'Send application/json.' }, { status: 415 });
   }
   if (isCrossOriginBrowserRequest(request)) {
-    return Response.json({ error: 'Cross-origin requests are refused.' }, { status: 403 });
+    return jsonResponse({ error: 'Cross-origin requests are refused.' }, { status: 403 });
   }
 
   const text = await request.text();

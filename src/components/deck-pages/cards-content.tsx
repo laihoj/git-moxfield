@@ -9,6 +9,7 @@ import { Link } from '@/components/ui/navigation';
 import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { searchParamText } from '@/lib/search-params';
 import type { CardSearchResultDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
@@ -18,7 +19,16 @@ export const CARD_RESULT_LIMIT = 50;
 
 /** The parsed `?q=` of the Cards page: trimmed and bounded; `''` for no search. */
 export function cardQuery(value: string | string[] | undefined): string {
-  return typeof value === 'string' ? value.trim().slice(0, MAX_CARD_QUERY_LENGTH) : '';
+  return searchParamText(value, MAX_CARD_QUERY_LENGTH) ?? '';
+}
+
+/** The results of a card search: none without a query or without versions to search. */
+export async function cardResults(
+  query: string,
+  versionCount: number,
+  search: (query: string) => Promise<CardSearchResultDTO[]>,
+): Promise<CardSearchResultDTO[]> {
+  return query === '' || versionCount === 0 ? [] : search(query);
 }
 
 export interface CardsContentProps {

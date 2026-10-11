@@ -13,6 +13,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { cache } from 'react';
 
+import { deckPageTitle, sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckServices } from '@/server/access';
 import type { SharedDeckAccess } from '@/server/services';
 import type { SharedOverviewDTO } from '@/server/services/types';
@@ -67,4 +68,15 @@ export async function loadSharedOverview(token: string): Promise<SharedOverviewD
   const overview = await findSharedOverview(token);
   if (overview === null) notFound();
   return overview;
+}
+
+/** The `generateMetadata` of a section page below a share link: `Cards · Blue Farm`. */
+export function sharedSectionMetadata(section: string) {
+  return async ({ params }: { params: Promise<{ token: string }> }): Promise<Metadata> => {
+    const { token } = await params;
+    return sharedPageMetadata(token, async () => {
+      const overview = await findSharedOverview(token);
+      return { title: deckPageTitle(section, overview === null ? null : sharedDeckTitle(overview)) };
+    });
+  };
 }

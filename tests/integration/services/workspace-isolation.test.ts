@@ -94,11 +94,11 @@ describe('deck services: workspace isolation', () => {
     );
     expect(await bob.addTag(deckId, 1, 'stolen')).toEqual({
       ok: false,
-      reason: 'Version v1 does not exist.',
+      message: 'Version v1 does not exist.',
     });
     expect(await bob.removeTag(deckId, 1, 'tournament')).toEqual({
       ok: false,
-      reason: 'Version v1 does not exist.',
+      message: 'Version v1 does not exist.',
     });
     await expectNotFound(bob.setNote(deckId, 1, 'Overwritten'));
     await bob.untrackDeck(deckId);

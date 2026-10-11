@@ -99,7 +99,7 @@ export function DeckNav({ scope }: { scope: DeckScope }) {
                 href={href}
                 aria-current={active === id ? 'page' : undefined}
                 className={clsx(
-                  'relative flex h-16 flex-col items-center justify-center gap-1 text-[0.6875rem] font-medium transition-colors',
+                  'relative flex h-bottom-nav flex-col items-center justify-center gap-1 text-[0.6875rem] font-medium transition-colors',
                   active === id ? 'text-accent' : 'text-muted active:text-fg',
                 )}
               >

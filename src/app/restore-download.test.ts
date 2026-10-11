@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { RestoreExport } from '@/integrations/deck-source';
 
-import { restoreFileName, restoreText, type RestoreDownload } from './restore-download';
+import {
+  restoreDownloadResponse,
+  restoreFileName,
+  restoreText,
+  type RestoreDownload,
+} from './restore-download';
 
 const EXPORT: RestoreExport = {
   source: 'moxfield',
@@ -87,5 +92,27 @@ describe('restoreFileName', () => {
     ['名前', 'deck-v3-restore.txt'],
   ])('names %j as %j', (name, file) => {
     expect(restoreFileName(download(name))).toBe(file);
+  });
+});
+
+describe('restoreDownloadResponse', () => {
+  const download: RestoreDownload = {
+    deck: { name: 'Blue Farm' },
+    version: { sequence: 3, message: 'Cut Dress Down' },
+    export: EXPORT,
+  };
+
+  it('is the text as a plain-text attachment named after the deck and version', async () => {
+    const response = restoreDownloadResponse(download);
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(response.headers.get('content-disposition')).toBe(
+      'attachment; filename="blue-farm-v3-restore.txt"',
+    );
+    expect(await response.text()).toBe(restoreText(download));
+  });
+
+  it('adds the headers it is given', () => {
+    const response = restoreDownloadResponse(download, { 'cache-control': 'private, no-store' });
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
   });
 });

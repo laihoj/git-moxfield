@@ -42,14 +42,17 @@ import { servicesFor } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { establishSessionOnResponse, readRequestSessionToken } from '@/server/auth/cookies';
 import type { SessionUser, SignIn } from '@/server/auth/types';
+import { jsonResponse } from '@/server/http/responses';
 import { createLogger } from '@/server/logger';
 import { isServiceError } from '@/server/services';
 
+import { idSchema } from '../../action-support';
 import { isSameOriginRequest } from '../../request-origin';
+import { readJsonBody } from '../request-body';
 
 import { classifyRejectedCapture } from './errors';
 import { describeRejectedKey } from './form-guard';
-import { CAPTURE_JSON_BODY_LIMIT, declaredTooLarge, readBodyLimited } from './read-body';
+import { CAPTURE_JSON_BODY_LIMIT } from './read-body';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,41 +63,34 @@ const bodySchema = z.object({
   payload: z.union([z.string().min(1), z.record(z.string(), z.unknown())]),
   method: z.enum(CAPTURE_REQUEST_METHODS),
   track: z.boolean(),
-  relinkDeckId: z.string().trim().min(1).max(128).optional(),
+  relinkDeckId: idSchema.optional(),
   /** Bounded so that junk is rejected by shape; the auth service checks the exact format. */
   key: z.string().max(256).optional(),
 }) satisfies z.ZodType<CaptureRequestBody>;
 
 function errorResponse(status: number, error: string, code?: CaptureErrorBody['code']): Response {
   const body: CaptureErrorBody = code === undefined ? { error } : { error, code };
-  return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+  return jsonResponse(body, { status });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isSameOriginRequest(request))
     return errorResponse(403, 'Captures must be sent from git-moxfield itself.');
 
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!/^application\/json(\s*;|$)/i.test(contentType)) {
-    return errorResponse(415, 'Send the capture as application/json.');
-  }
-  if (declaredTooLarge(request.headers, CAPTURE_JSON_BODY_LIMIT)) {
-    return errorResponse(413, 'The deck data is too large.');
-  }
-  const body = await readBodyLimited(request, CAPTURE_JSON_BODY_LIMIT);
+  const body = await readJsonBody(request, CAPTURE_JSON_BODY_LIMIT);
   if (!body.ok) {
-    return body.reason === 'too-large'
-      ? errorResponse(413, 'The deck data is too large.')
-      : errorResponse(400, 'The request could not be read.');
+    switch (body.reason) {
+      case 'unsupported-type':
+        return errorResponse(415, 'Send the capture as application/json.');
+      case 'too-large':
+        return errorResponse(413, 'The deck data is too large.');
+      case 'unreadable':
+        return errorResponse(400, 'The request could not be read.');
+      case 'malformed':
+        return errorResponse(400, 'The request is not valid JSON.');
+    }
   }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(new TextDecoder().decode(body.bytes));
-  } catch {
-    return errorResponse(400, 'The request is not valid JSON.');
-  }
-  const input = bodySchema.safeParse(json);
+  const input = bodySchema.safeParse(body.json);
   if (!input.success) return errorResponse(400, 'The request is missing the deck data.');
 
   const auth = await getAuthService();

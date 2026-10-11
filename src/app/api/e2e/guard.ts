@@ -14,16 +14,14 @@
 import 'server-only';
 
 import { getConfig } from '@/server/config';
+import { plainText } from '@/server/http/responses';
 import { createLogger } from '@/server/logger';
 import { firstTimeInProcess } from '@/server/process-singleton';
 
 const E2E_ANNOUNCED = Symbol.for('git-moxfield.e2eAnnounced');
 
 function notFound(): Response {
-  return new Response('Not found.\n', {
-    status: 404,
-    headers: { 'content-type': 'text/plain; charset=utf-8' },
-  });
+  return plainText(404, 'Not found.');
 }
 
 /** `null` when the e2e endpoints are enabled, else the 404 to answer with. */

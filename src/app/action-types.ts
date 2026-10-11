@@ -4,6 +4,7 @@
  */
 import type { UserRole } from '@/core/roles';
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
+import type { TagOutcome } from '@/server/services/contract';
 import type { CommitFailureReason, ShareLinkDTO } from '@/server/services/types';
 
 /** State of the "Track a Moxfield deck" form (`useActionState`). */
@@ -21,7 +22,7 @@ export type CommitState =
   | { status: 'error'; reason: CommitFailureReason | 'invalid-input' | 'internal'; message: string };
 
 /** Result of adding or removing a version tag. */
-export type TagResult = { ok: true; tags: string[] } | { ok: false; message: string };
+export type TagResult = TagOutcome;
 
 /** State of the notes editor (`useActionState`). */
 export type NoteState =
@@ -43,11 +44,14 @@ export type RelinkDeckState =
       trackedBy?: { deckId: string; name: string };
     };
 
-/** Result of untracking a deck (on success the action redirects instead of returning). */
-export interface UntrackResult {
+/** The answer to an action that failed: the message to show. */
+export interface ActionFailure {
   ok: false;
   message: string;
 }
+
+/** Result of untracking a deck (on success the action redirects instead of returning). */
+export type UntrackResult = ActionFailure;
 
 // ---------------------------------------------------------------------------
 // Accounts (ADR 0006): `./auth-actions.ts`, `./account-actions.ts`, `./admin-actions.ts`
@@ -68,7 +72,7 @@ export type SignInFormState =
     };
 
 /** Result of a one-off account or admin action (revoke, sign out a device, disable). */
-export type AccountActionResult = { ok: true } | { ok: false; message: string };
+export type AccountActionResult = { ok: true } | ActionFailure;
 
 /** State of the display name form. */
 export type RenameState =

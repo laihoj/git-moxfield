@@ -827,9 +827,9 @@ class DefaultDeckServices implements DeckServices {
     tag: string,
   ): Promise<TagOutcome> {
     const commit = await this.repos.commits.getBySequence(deckId, sequence);
-    if (!commit) return { ok: false, reason: versionNotFound(sequence) };
+    if (!commit) return { ok: false, message: versionNotFound(sequence) };
     const validation = normalizeVersionTag(tag);
-    if (!validation.ok) return { ok: false, reason: validation.reason };
+    if (!validation.ok) return { ok: false, message: validation.reason };
     if (op === 'add') await this.repos.tags.add(commit.id, validation.name);
     else await this.repos.tags.remove(commit.id, validation.name);
     return { ok: true, tags: await this.repos.tags.listForCommit(commit.id) };

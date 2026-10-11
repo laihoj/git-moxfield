@@ -5,7 +5,8 @@
  */
 import type { NextRequest } from 'next/server';
 
-import { restoreFileName, restoreText } from '@/app/restore-download';
+import { restoreDownloadResponse } from '@/app/restore-download';
+import { plainText } from '@/server/http/responses';
 
 import { deckServices, decodeSegment, parseSequence } from '../../../data';
 
@@ -19,17 +20,6 @@ export async function GET(
   const sequence = parseSequence(rawSequence);
   const id = decodeSegment(deckId);
   const restore = sequence === null ? null : await (await deckServices(id)).restoreExport(id, sequence);
-  if (restore === null) {
-    return new Response('Version not found.\n', {
-      status: 404,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-    });
-  }
-  return new Response(restoreText(restore), {
-    headers: {
-      'content-type': 'text/plain; charset=utf-8',
-      'content-disposition': `attachment; filename="${restoreFileName(restore)}"`,
-      'cache-control': 'no-store',
-    },
-  });
+  if (restore === null) return plainText(404, 'Version not found.');
+  return restoreDownloadResponse(restore, { 'cache-control': 'no-store' });
 }
