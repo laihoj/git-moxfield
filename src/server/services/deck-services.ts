@@ -37,6 +37,7 @@ import { diffSnapshots, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
 import { commitId } from '@/core/hash';
 import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
+import { MAX_COMMIT_MESSAGE_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
 import {
   DeckSourceError,
   isDeckSourceError,
@@ -105,12 +106,6 @@ import type {
   VersionDetailDTO,
   VersionListItemDTO,
 } from './types';
-
-/** Maximum commit message length in characters (Unicode code points). */
-export const MAX_COMMIT_MESSAGE_LENGTH = 2000;
-
-/** Maximum free-text note length in characters (Unicode code points). */
-export const MAX_NOTE_LENGTH = 20_000;
 
 /** Note kind of the free-text note managed by {@link DeckServices.setNote}; data is `{ text }`. */
 export const FREE_TEXT_NOTE_KIND = 'note';

@@ -11,6 +11,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
+import { MAX_COMMIT_MESSAGE_LENGTH } from '@/core/text-limits';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 import { createLogger } from '@/server/logger';
@@ -124,7 +125,12 @@ const commitSchema = z.object({
     .string()
     .trim()
     .min(1, 'Write a commit message.')
-    .max(500, 'Keep the message under 500 characters.'),
+    // A sanity bound only: the service counts code points of the normalized message (two
+    // UTF-16 units at most, which is what `max` counts) and reports the exact limit.
+    .max(
+      MAX_COMMIT_MESSAGE_LENGTH * 2,
+      `Commit messages can be at most ${MAX_COMMIT_MESSAGE_LENGTH} characters long.`,
+    ),
   expectedObservationId: z.string().trim().min(1).max(128),
   /** Empty when committing the first version. */
   expectedHeadCommitId: z.string().trim().max(128),

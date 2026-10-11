@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
 import { useToast } from '@/components/ui/toaster';
+import { MAX_COMMIT_MESSAGE_LENGTH } from '@/core/text-limits';
 import { versionLabel } from '@/lib/format';
 import { ownerDeckRoutes } from '@/lib/routes';
 
@@ -133,7 +134,7 @@ export function CommitForm({
             id={messageId}
             name="message"
             value={message}
-            maxLength={2000}
+            maxLength={MAX_COMMIT_MESSAGE_LENGTH}
             placeholder={suggestedMessage === '' ? 'What changed and why?' : suggestedMessage}
             autoComplete="off"
             enterKeyHint="send"
