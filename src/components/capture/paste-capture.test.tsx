@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { envelopeJson, gzipPayload } from '@tests/support/capture-codec';
+import { sentJsonBody, stubJsonFetch } from '@tests/support/fetch-stub';
 
 import '@/components/test-utils';
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
@@ -25,13 +26,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   navigation.replace.mockClear();
-  fetchMock = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ status: 'untracked', name: 'Fixture Blue Farm', externalId: 'abc' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }),
-  );
-  vi.stubGlobal('fetch', fetchMock);
+  fetchMock = stubJsonFetch(200, { status: 'untracked', name: 'Fixture Blue Farm', externalId: 'abc' });
   // jsdom's Blob has no stream(), which compressing needs; browsers' (and Node's) has.
   vi.stubGlobal('Blob', NodeBlob);
 });
@@ -49,9 +44,7 @@ interface PostedBody {
 /** The one capture request sent, with its payload decoded as the server decodes it. */
 async function postedCapture(): Promise<{ method: string; text: string; compressed: boolean }> {
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-  if (typeof init?.body !== 'string') throw new Error('No JSON body was sent');
-  const body = JSON.parse(init.body) as PostedBody;
+  const body = sentJsonBody(fetchMock) as PostedBody;
   if (typeof body.payload !== 'string') throw new Error('No payload string was sent');
   return {
     method: body.method,

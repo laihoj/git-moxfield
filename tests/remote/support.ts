@@ -4,7 +4,14 @@
 import { createClient as createHttpClient, type Client } from '@libsql/client/http';
 import { drizzle } from 'drizzle-orm/libsql/http';
 
-import { createLibsqlDatabase, type LibsqlDatabase, type LibsqlDb } from '@/server/db/libsql';
+import { ensureLocalWorkspace } from '@/server/db/client';
+import {
+  createLibsqlDatabase,
+  DEFAULT_LOCK_TIMEOUT_MS,
+  type LibsqlDatabase,
+  type LibsqlDb,
+} from '@/server/db/libsql';
+import { applyMigrations } from '@/server/db/migration-state';
 import * as schema from '@/server/db/schema';
 import { guardClient } from '@/server/db/transaction';
 import { WriteLock } from '@/server/db/write-lock';
@@ -58,13 +65,22 @@ export function rawRemoteClient(): Client {
  */
 export function openInstance(): LibsqlDb {
   const { url, authToken } = remoteTarget();
-  const client = guardClient(createHttpClient({ url, authToken }), {
-    lock: new WriteLock('another instance'),
-    lockTimeoutMs: 15_000,
+  return guardedRemoteDb(createHttpClient({ url, authToken }), 'another instance');
+}
+
+/**
+ * A Drizzle database over `client` guarded like the app guards a remote one
+ * (`createLibsqlDatabase`), but with a write lock of its own named `lockName`, and without
+ * the connection probes: the client is the test's, with a `fetch` of its own, perhaps.
+ */
+function guardedRemoteDb(client: Client, lockName: string): LibsqlDb {
+  const guarded = guardClient(client, {
+    lock: new WriteLock(lockName),
+    lockTimeoutMs: DEFAULT_LOCK_TIMEOUT_MS,
     serializeRootOperations: false,
     recycleAfterBusy: false,
   });
-  return drizzle({ client, schema });
+  return drizzle({ client: guarded, schema });
 }
 
 /** Opens the server under test with `createLibsqlDatabase`. */
@@ -92,6 +108,22 @@ export async function wipeRemoteDatabase(): Promise<void> {
     if (drops.length > 0) await client.migrate(drops);
   } finally {
     client.close();
+  }
+}
+
+/**
+ * Wipes the server under test and, with `migrate`, brings it to the schema of this build
+ * with the `local` workspace, as the app opens a database.
+ */
+export async function resetRemoteDatabase(options: { migrate?: boolean } = {}): Promise<void> {
+  await wipeRemoteDatabase();
+  if (options.migrate !== true) return;
+  const handle = await openRemote();
+  try {
+    await applyMigrations(handle.db);
+    await ensureLocalWorkspace(handle.db);
+  } finally {
+    handle.close();
   }
 }
 
@@ -132,13 +164,10 @@ export function openMetered(usage: Usage): LibsqlDb {
     }
     return response;
   };
-  const client = guardClient(createHttpClient({ url, authToken, fetch: meteredFetch }), {
-    lock: new WriteLock('metered remote database'),
-    lockTimeoutMs: 15_000,
-    serializeRootOperations: false,
-    recycleAfterBusy: false,
-  });
-  return drizzle({ client, schema });
+  return guardedRemoteDb(
+    createHttpClient({ url, authToken, fetch: meteredFetch }),
+    'metered remote database',
+  );
 }
 
 /** The rows `operation` read and wrote, as `usage` (fed by {@link openMetered}) counts them. */

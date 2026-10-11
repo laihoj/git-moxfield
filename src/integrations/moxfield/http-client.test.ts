@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { expectRejection } from '@tests/support/errors';
+
 import { DeckSourceError } from '../deck-source';
 
 import { MoxfieldHttpClient, parseRetryAfter, type MoxfieldHttpClientOptions } from './http-client';
@@ -40,15 +42,8 @@ function setup(handler: Parameters<typeof fakeFetch>[0], overrides: Partial<Moxf
   };
 }
 
-async function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
-  const error: unknown = await promise.then(
-    () => {
-      throw new Error('expected a rejection');
-    },
-    (reason: unknown) => reason,
-  );
-  expect(error).toBeInstanceOf(DeckSourceError);
-  return error as DeckSourceError;
+function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
+  return expectRejection(promise, DeckSourceError);
 }
 
 function headerOf(init: RequestInit | undefined, name: string): string | undefined {

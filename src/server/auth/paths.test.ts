@@ -8,6 +8,7 @@ import {
   safeRedirectPath,
   sharedDeckPath,
   signInPath,
+  tokenOfLinkPath,
 } from './paths';
 
 describe('safeRedirectPath', () => {
@@ -84,5 +85,12 @@ describe('account paths', () => {
     expect(loginLinkPath('gml_x')).toBe('/signin/gml_x');
     expect(invitePath('gmi_x')).toBe('/invite/gmi_x');
     expect(sharedDeckPath('gmv_x')).toBe('/s/gmv_x');
+  });
+
+  it('reads the token back out of a link path', () => {
+    expect(tokenOfLinkPath(loginLinkPath('gml_x'))).toBe('gml_x');
+    expect(tokenOfLinkPath(invitePath('gmi_x'))).toBe('gmi_x');
+    expect(tokenOfLinkPath(sharedDeckPath('gmv_x'))).toBe('gmv_x');
+    expect(tokenOfLinkPath('gmv_x')).toBe('gmv_x');
   });
 });

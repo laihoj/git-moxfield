@@ -1,24 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { sentJsonBody, stubJsonFetch } from '@tests/support/fetch-stub';
+
 import { postCapture } from './capture-api';
 
 const KEY = `gmk_${'a'.repeat(43)}`;
-
-function respond(status: number, body: unknown): ReturnType<typeof vi.fn> {
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
-    );
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
-}
-
-function sentBody(fetchMock: ReturnType<typeof vi.fn>): unknown {
-  const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-  if (typeof init?.body !== 'string') throw new Error('No JSON body was sent');
-  return JSON.parse(init.body) as unknown;
-}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,7 +12,7 @@ afterEach(() => {
 
 describe('postCapture', () => {
   it('posts the bookmarklet key with the deck (protocol v2)', async () => {
-    const fetchMock = respond(200, {
+    const fetchMock = stubJsonFetch(200, {
       status: 'untracked',
       source: 'moxfield',
       name: 'Blue Farm',
@@ -42,7 +28,7 @@ describe('postCapture', () => {
       outcome: { status: 'untracked', source: 'moxfield', name: 'Blue Farm', externalId: 'abc', decks: [] },
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/capture', expect.objectContaining({ method: 'POST' }));
-    expect(sentBody(fetchMock)).toEqual({
+    expect(sentJsonBody(fetchMock)).toEqual({
       payload: '{"kind":"git-moxfield/capture"}',
       method: 'browser-capture',
       track: false,
@@ -51,13 +37,13 @@ describe('postCapture', () => {
   });
 
   it('sends no key for a pasted deck', async () => {
-    const fetchMock = respond(200, {
+    const fetchMock = stubJsonFetch(200, {
       status: 'ingested',
       deckId: 'deck-1',
       changedSinceLastObservation: true,
     });
     await postCapture({ deck: '{}', primer: '{}' }, 'manual-paste', { track: true });
-    expect(sentBody(fetchMock)).toEqual({
+    expect(sentJsonBody(fetchMock)).toEqual({
       payload: { deck: '{}', primer: '{}' },
       method: 'manual-paste',
       track: true,
@@ -65,7 +51,7 @@ describe('postCapture', () => {
   });
 
   it('asks to continue one of the user’s decks with the captured deck', async () => {
-    const fetchMock = respond(200, {
+    const fetchMock = stubJsonFetch(200, {
       status: 'ingested',
       deckId: 'deck-1',
       changedSinceLastObservation: false,
@@ -79,7 +65,7 @@ describe('postCapture', () => {
       ok: true,
       outcome: { status: 'ingested', deckId: 'deck-1', changedSinceLastObservation: false },
     });
-    expect(sentBody(fetchMock)).toEqual({
+    expect(sentJsonBody(fetchMock)).toEqual({
       payload: 'gm-gzip-base64url:abc',
       method: 'browser-capture',
       track: false,
@@ -97,7 +83,7 @@ describe('postCapture', () => {
       versionCount: 3,
       updatedAt: '2026-10-01T00:00:00.000Z',
     };
-    respond(200, {
+    stubJsonFetch(200, {
       status: 'untracked',
       source: 'moxfield',
       name: 'Lost deck',
@@ -117,7 +103,7 @@ describe('postCapture', () => {
   });
 
   it('refuses an answer that is not a capture outcome', async () => {
-    respond(200, { status: 'ingested', deckId: 42 });
+    stubJsonFetch(200, { status: 'ingested', deckId: 42 });
     expect(await postCapture('{}', 'browser-capture', { track: false })).toEqual({
       ok: false,
       message: 'git-moxfield could not import the deck (HTTP 200).',
@@ -127,7 +113,7 @@ describe('postCapture', () => {
   it.each(['unauthenticated', 'invalid-key'] as const)(
     'passes on the 401 code %s with the message',
     async (code) => {
-      respond(401, { error: 'Nope.', code });
+      stubJsonFetch(401, { error: 'Nope.', code });
       expect(await postCapture('{}', 'browser-capture', { track: false, key: KEY })).toEqual({
         ok: false,
         message: 'Nope.',
@@ -137,12 +123,12 @@ describe('postCapture', () => {
   );
 
   it('ignores codes on other statuses and unknown codes', async () => {
-    respond(400, { error: 'Bad deck.', code: 'invalid-key' });
+    stubJsonFetch(400, { error: 'Bad deck.', code: 'invalid-key' });
     expect(await postCapture('{}', 'manual-paste', { track: false })).toEqual({
       ok: false,
       message: 'Bad deck.',
     });
-    respond(401, { error: 'Nope.', code: 'something-else' });
+    stubJsonFetch(401, { error: 'Nope.', code: 'something-else' });
     expect(await postCapture('{}', 'manual-paste', { track: false })).toEqual({
       ok: false,
       message: 'Nope.',

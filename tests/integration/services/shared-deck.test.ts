@@ -27,6 +27,7 @@ import {
   committed,
   createServiceHarness,
   defined,
+  trackDeck,
   type ServiceHarness,
 } from '@tests/support/services';
 import {
@@ -62,11 +63,10 @@ async function otherDeck(
   publicId: string,
   cards: string[],
 ): Promise<{ deckId: string; commitId: string }> {
-  harness.api.setDeck(blueFarmSpec({ publicId, name: 'Other deck', mainboard: cards, considering: [] }));
-  const tracked = await services.trackDeck(`https://moxfield.com/decks/${publicId}`);
-  if (!tracked.ok) throw new Error(tracked.reason);
-  const version = committed(await commitReviewed({ ...harness, services }, tracked.deckId, 'Other v1'));
-  return { deckId: tracked.deckId, commitId: version.commitId };
+  const spec = blueFarmSpec({ publicId, name: 'Other deck', mainboard: cards, considering: [] });
+  const deckId = await trackDeck(harness, spec, services);
+  const version = committed(await commitReviewed(harness, deckId, 'Other v1', undefined, services));
+  return { deckId, commitId: version.commitId };
 }
 
 function expectNoUncommittedState(value: unknown): void {

@@ -12,6 +12,8 @@
  */
 import type { Locator, Page, Response } from '@playwright/test';
 
+import { tokenOfLinkPath } from '@/server/auth/paths';
+
 import { APP_URL } from './constants';
 import { expect } from './fixtures';
 
@@ -46,11 +48,6 @@ export interface CreateShareLinkOptions {
    * to copy it with the Copy link button.
    */
   whileShown?: (panel: Locator, link: ShareLink) => Promise<void>;
-}
-
-/** The deck's Status · History · Compare · Cards (owner) or Overview · … (viewer) navigation. */
-export function deckNav(page: Page): Locator {
-  return page.getByRole('navigation', { name: 'Deck' });
 }
 
 /** The card of the Share page that creates links. */
@@ -90,7 +87,7 @@ export async function createShareLink(
   const url = (await shown.textContent())?.trim() ?? '';
   expect(new URL(url).origin).toBe(new URL(APP_URL).origin);
   const path = new URL(url).pathname;
-  const link: ShareLink = { url, path, token: path.slice('/s/'.length) };
+  const link: ShareLink = { url, path, token: tokenOfLinkPath(path) };
 
   if (whileShown !== undefined) await whileShown(card, link);
   await card.getByRole('button', { name: 'Done' }).click();

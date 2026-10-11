@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { isServiceError, type DeckServices } from '@/server/services';
+import type { DeckServices } from '@/server/services';
+import { expectServiceError } from '@tests/support/auth';
 import { buildCaptureEnvelope } from '@tests/support/moxfield-deck-builder';
 import {
   BLUE_FARM_URL,
@@ -14,48 +15,21 @@ import {
   committed,
   createServiceHarness,
   defined,
-  moveCard,
   publishAndRefresh,
+  trackDeck,
+  withDressDownCut,
   type HarnessUser,
   type ServiceHarness,
 } from '@tests/support/services';
 
-async function expectNotFound(promise: Promise<unknown>): Promise<void> {
-  const error: unknown = await promise.then(
-    () => null,
-    (caught: unknown) => caught,
-  );
-  expect(isServiceError(error, 'not-found')).toBe(true);
-}
-
 /** Alice tracks Blue Farm with one version (tagged, with a note) and uncommitted changes. */
 async function aliceWithHistory(harness: ServiceHarness): Promise<{ alice: HarnessUser; deckId: string }> {
   const alice = await harness.createUser('Alice');
-  harness.api.setDeck(blueFarmSpec());
-  const tracked = await alice.services.trackDeck(BLUE_FARM_URL);
-  if (!tracked.ok) throw new Error(tracked.reason);
-  const { deckId } = tracked;
-  committed(await commitReviewedFor(harness, alice.services, deckId, 'First list', ['tournament']));
+  const deckId = await trackDeck(harness, blueFarmSpec(), alice.services);
+  committed(await commitReviewed(harness, deckId, 'First list', ['tournament'], alice.services));
   await alice.services.setNote(deckId, 1, 'Top 4 at the local');
-  await publishAndRefreshFor(harness, alice.services, deckId);
+  await publishAndRefresh(harness, deckId, withDressDownCut(), alice.services);
   return { alice, deckId };
-}
-
-async function commitReviewedFor(
-  harness: ServiceHarness,
-  services: DeckServices,
-  deckId: string,
-  message: string,
-  tags?: string[],
-) {
-  return commitReviewed({ ...harness, services }, deckId, message, tags);
-}
-
-/** Blue Farm as Moxfield has it after Alice's edit. */
-const editedBlueFarm = () => moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering');
-
-async function publishAndRefreshFor(harness: ServiceHarness, services: DeckServices, deckId: string) {
-  return publishAndRefresh({ ...harness, services }, deckId, editedBlueFarm());
 }
 
 describe('deck services: workspace isolation', () => {
@@ -84,13 +58,14 @@ describe('deck services: workspace isolation', () => {
     const before = defined(await alice.services.getOverview(deckId));
     const working = defined(before.working);
 
-    await expectNotFound(bob.refresh(deckId, 'manual'));
-    await expectNotFound(
+    await expectServiceError(bob.refresh(deckId, 'manual'), 'not-found');
+    await expectServiceError(
       bob.commit(deckId, {
         message: 'Hijack',
         expectedObservationId: working.id,
         expectedHeadCommitId: before.head?.commitId ?? null,
       }),
+      'not-found',
     );
     expect(await bob.addTag(deckId, 1, 'stolen')).toEqual({
       ok: false,
@@ -100,7 +75,7 @@ describe('deck services: workspace isolation', () => {
       ok: false,
       message: 'Version v1 does not exist.',
     });
-    await expectNotFound(bob.setNote(deckId, 1, 'Overwritten'));
+    await expectServiceError(bob.setNote(deckId, 1, 'Overwritten'), 'not-found');
     await bob.untrackDeck(deckId);
 
     const after = defined(await alice.services.getOverview(deckId));
@@ -136,7 +111,7 @@ describe('deck services: workspace isolation', () => {
     const harness = await createServiceHarness();
     const { alice, deckId } = await aliceWithHistory(harness);
     const bob = (await harness.createUser('Bob')).services;
-    const envelope = buildCaptureEnvelope(editedBlueFarm());
+    const envelope = buildCaptureEnvelope(withDressDownCut());
 
     // Alice tracks it; for Bob it is untracked.
     expect(
@@ -155,9 +130,12 @@ describe('deck services: workspace isolation', () => {
 
     // Bob's history starts at v1, Alice's continues at v2.
     harness.clock.advance(5);
-    expect(committed(await commitReviewedFor(harness, bob, captured.deckId, 'My take')).sequence).toBe(1);
     expect(
-      committed(await commitReviewedFor(harness, alice.services, deckId, 'Moved Dress Down')).sequence,
+      committed(await commitReviewed(harness, captured.deckId, 'My take', undefined, bob)).sequence,
+    ).toBe(1);
+    expect(
+      committed(await commitReviewed(harness, deckId, 'Moved Dress Down', undefined, alice.services))
+        .sequence,
     ).toBe(2);
     expect(await alice.services.listVersions(deckId)).toHaveLength(2);
     expect(await bob.listVersions(captured.deckId)).toHaveLength(1);

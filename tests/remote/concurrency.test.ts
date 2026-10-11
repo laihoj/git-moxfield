@@ -21,26 +21,18 @@ import { fileURLToPath } from 'node:url';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ensureLocalWorkspace, LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
-import { applyMigrations } from '@/server/db/migration-state';
+import { LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
 import { createRepositories } from '@/server/repositories';
 
 import type { InstanceReport } from './instance-worker';
-import { openRemote, remoteTarget, wipeRemoteDatabase } from './support';
+import { remoteTarget, resetRemoteDatabase } from './support';
 
 const INSTANCES = 4;
 const ROUNDS = 30;
 const WORKER = fileURLToPath(new URL('./instance-worker.ts', import.meta.url));
 
 beforeAll(async () => {
-  await wipeRemoteDatabase();
-  const handle = await openRemote();
-  try {
-    await applyMigrations(handle.db);
-    await ensureLocalWorkspace(handle.db);
-  } finally {
-    handle.close();
-  }
+  await resetRemoteDatabase({ migrate: true });
 });
 
 /** Runs one instance in a process of its own. */

@@ -1,15 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapConcurrently } from './concurrency';
+import { deferred } from '@tests/support/async';
 
-/** A promise with its resolve function exposed. */
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { mapConcurrently } from './concurrency';
 
 describe('mapConcurrently', () => {
   it('returns the results in the order of the items, whatever order they finish in', async () => {

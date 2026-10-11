@@ -5,10 +5,8 @@
  * expects. Moxfield (site and API) and git-moxfield are played by request interception;
  * nothing leaves the machine. The end-to-end suite covers the same flows against the app.
  */
-import { existsSync } from 'node:fs';
-
-import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { BrowserContext, Page } from '@playwright/test';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildBookmarklet, parseMoxfieldCapture } from '@/integrations/moxfield/capture';
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
@@ -23,6 +21,8 @@ import {
   READY,
 } from '@/integrations/moxfield/capture-protocol';
 import { v1Primer, v3Deck } from '@/integrations/moxfield/test-fixtures';
+import { bookmarkletSource } from '@tests/support/bookmarklet';
+import { setUpChromium } from '@tests/support/browser';
 
 const BROWSER_TIMEOUT_MS = 60_000;
 
@@ -47,22 +47,11 @@ window.addEventListener('message', (event) => {
 window.opener.postMessage({ t: ${JSON.stringify(READY)}, n }, ${JSON.stringify(SITE)});
 </script>`;
 
-let browser: Browser;
+const browser = setUpChromium(BROWSER_TIMEOUT_MS);
 let context: BrowserContext;
 
-beforeAll(async () => {
-  if (!existsSync(chromium.executablePath())) {
-    throw new Error("Playwright's Chromium is not installed: run `pnpm test:e2e:install`.");
-  }
-  browser = await chromium.launch();
-}, BROWSER_TIMEOUT_MS);
-
-afterAll(async () => {
-  await browser.close();
-});
-
 beforeEach(async () => {
-  context = await browser.newContext();
+  context = await browser().newContext();
   // Nothing reaches the network; the routes below answer for Moxfield and git-moxfield.
   // (Playwright tries the most recently registered matching route first.)
   await context.route('**/*', (route) => route.abort());
@@ -91,9 +80,10 @@ afterEach(async () => {
   await context.close();
 });
 
-function bookmarkletSource(mode: 'popup' | 'same-tab'): string {
-  const bookmarklet = buildBookmarklet({ mode, appUrl: APP, apiBaseUrl: API, siteOrigin: SITE, key: KEY });
-  return decodeURIComponent(bookmarklet.slice('javascript:'.length));
+function sourceOf(mode: 'popup' | 'same-tab'): string {
+  return bookmarkletSource(
+    buildBookmarklet({ mode, appUrl: APP, apiBaseUrl: API, siteOrigin: SITE, key: KEY }),
+  );
 }
 
 async function openDeckPage(options: { withoutCompressionStream?: boolean } = {}): Promise<Page> {
@@ -109,7 +99,7 @@ async function openDeckPage(options: { withoutCompressionStream?: boolean } = {}
 async function runSameTab(page: Page): Promise<URLSearchParams> {
   const [request] = await Promise.all([
     page.waitForRequest(`${APP}${CAPTURE_FORM_PATH}`),
-    page.evaluate(bookmarkletSource('same-tab')),
+    page.evaluate(sourceOf('same-tab')),
   ]);
   return new URLSearchParams(request.postData() ?? '');
 }
@@ -148,10 +138,7 @@ describe('the bookmarklet in Chromium', () => {
     'popup mode hands the compressed envelope and the key to the capture page',
     async () => {
       const page = await openDeckPage();
-      const [popup] = await Promise.all([
-        page.waitForEvent('popup'),
-        page.evaluate(bookmarkletSource('popup')),
-      ]);
+      const [popup] = await Promise.all([page.waitForEvent('popup'), page.evaluate(sourceOf('popup'))]);
       await popup.waitForFunction(() => 'received' in window);
       const received = (await popup.evaluate(
         () => (window as unknown as { received: unknown }).received,
@@ -177,7 +164,7 @@ describe('the bookmarklet in Chromium', () => {
         window.open = () => null;
       });
       const alert = page.waitForEvent('dialog');
-      await page.evaluate(bookmarkletSource('popup'));
+      await page.evaluate(sourceOf('popup'));
       const dialog = await alert;
       expect(dialog.message()).toBe(
         `git-moxfield: the popup was blocked, so the deck data was copied to your clipboard instead. Paste it at ${APP}${CAPTURE_PAGE_PATH}?mode=paste`,

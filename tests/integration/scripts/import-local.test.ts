@@ -19,6 +19,7 @@ import { exportDeckToGit } from '@/server/git-export';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
+import { runCommand, type CommandRun } from '@tests/support/cli';
 import { commitTestSnapshot, countRows, createTestDeck, openTestDatabase } from '@tests/support/db';
 import { scratchDir } from '@tests/support/libsql';
 import {
@@ -30,6 +31,7 @@ import {
   moveCard,
   publishAndRefresh,
   trackDeck,
+  twoVersionHistory,
   type ServiceHarness,
 } from '@tests/support/services';
 
@@ -59,14 +61,7 @@ async function localInstallation(): Promise<Installation> {
   const harness = await createServiceHarness({ databaseUrl: pathToFileURL(path).href });
   const { services, api, clock } = harness;
 
-  const main = await trackDeck(harness, MAIN);
-  committed(await commitReviewed(harness, main, 'Initial version', ['stable']));
-  await publishAndRefresh(
-    harness,
-    main,
-    moveCard({ ...MAIN, version: 2 }, 'Dress Down', 'mainboard', 'considering'),
-  );
-  committed(await commitReviewed(harness, main, 'Cut Dress Down'));
+  const { deckId: main } = await twoVersionHistory(harness, { spec: MAIN, v1Tags: ['stable'] });
   await services.setNote(main, 1, 'Top 4 at locals');
   await publishAndRefresh(
     harness,
@@ -118,30 +113,26 @@ async function targetDatabase(harness: ServiceHarness, name = 'Jaakko', db?: Db)
   };
 }
 
-interface Run {
-  code: number;
-  out: string[];
-  err: string[];
-}
-
 /**
  * Runs the command against `target` (named "in-memory database"), or else the database
  * `config` names. Without either, the configured database is a file in a scratch
  * directory: never a developer's database.
  */
-async function runImport(argv: string[], options: { target?: Db; config?: AppConfig } = {}): Promise<Run> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const code = await runImportCommand(argv, {
-    config:
-      options.config ??
-      parseConfig({ DATABASE_PATH: join(scratchDir('git-moxfield-import-config-'), 'never-opened.db') }),
-    io: { out: (line) => out.push(line), err: (line) => err.push(line) },
-    ...(options.target === undefined
-      ? {}
-      : { target: { db: options.target, description: 'in-memory database' } }),
-  });
-  return { code, out, err };
+async function runImport(
+  argv: string[],
+  options: { target?: Db; config?: AppConfig } = {},
+): Promise<CommandRun> {
+  return runCommand((io) =>
+    runImportCommand(argv, {
+      config:
+        options.config ??
+        parseConfig({ DATABASE_PATH: join(scratchDir('git-moxfield-import-config-'), 'never-opened.db') }),
+      io,
+      ...(options.target === undefined
+        ? {}
+        : { target: { db: options.target, description: 'in-memory database' } }),
+    }),
+  );
 }
 
 /** What a deck shows, minus what depends on the installation (fetch status, clocks). */

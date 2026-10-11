@@ -15,27 +15,16 @@ import { z } from 'zod';
 import { cardKey } from '@/core/card-key';
 import { MOXFIELD_INTERNAL_ID_PATTERN, MOXFIELD_PUBLIC_ID_PATTERN } from '@/integrations/moxfield/constants';
 
+import { MOCK_MODES, type MockClientKind, type MockMode } from '../support/moxfield-api';
 import {
   BUILDER_BOARD_NAMES,
+  BUILDER_DEFAULTS,
   moxfieldInternalId,
   type MoxCardSpec,
   type MoxDeckSpec,
 } from '../support/moxfield-deck-builder';
 
-/**
- * Failure modes of the mock API (the deck page and the control API always work):
- *
- * - `ok`: every request is answered normally.
- * - `blocked`: like Cloudflare's bot protection, requests that do not come from a browser
- *   get `403 text/html` with a `cf-ray` header. Browser requests (a `Mozilla/…` User-Agent
- *   plus the `Sec-Fetch-Site` header) still succeed, as on the real site, so the
- *   bookmarklet keeps working while server fetches are blocked.
- * - `rate-limited`: `429` with `Retry-After: 30` for everyone.
- * - `down`: `502` for everyone.
- * - `primer-down`: only the primer endpoint fails, with `503`.
- */
-export const MOCK_MODES = ['ok', 'blocked', 'rate-limited', 'down', 'primer-down'] as const;
-export type MockMode = (typeof MOCK_MODES)[number];
+export { MOCK_MODES, type MockClientKind, type MockMode };
 
 /** Deck zones the edit operations address (`considering` is Moxfield's `maybeboard`). */
 export const MOCK_ZONES = ['commanders', 'companions', 'mainboard', 'sideboard', 'considering'] as const;
@@ -71,9 +60,6 @@ export type EditOp =
       collectorNumber: string;
       finish?: MoxFinish;
     };
-
-/** Which kind of client sent a Moxfield-facing request. */
-export type MockClientKind = 'browser' | 'server';
 
 export interface MockRequestLogEntry {
   /** ISO timestamp. */
@@ -123,9 +109,6 @@ const MAX_QUANTITY = 999;
 const MAX_PRIMER_LENGTH = 1_000_000;
 const MAX_CARDS_PER_ZONE = 1_000;
 const MAX_EDIT_OPS = 500;
-
-/** Default `lastUpdatedAtUtc` of the deck builder, used when a stored spec has none. */
-const BUILDER_DEFAULT_UPDATED_AT = '2026-10-01T12:00:00.000Z';
 
 /** Boards the deck builder always emits; `extraBoards` must not override them. */
 const BUILDER_BOARDS: ReadonlySet<string> = new Set(BUILDER_BOARD_NAMES);
@@ -578,9 +561,9 @@ export class MockMoxfieldState {
       decks: [...this.decks.values()].map((spec) => ({
         publicId: spec.publicId,
         internalId: moxfieldInternalId(spec),
-        name: spec.name ?? 'Fixture Deck',
+        name: spec.name ?? BUILDER_DEFAULTS.name,
         version: spec.version ?? 1,
-        lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? BUILDER_DEFAULT_UPDATED_AT,
+        lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? BUILDER_DEFAULTS.lastUpdatedAtUtc,
         counts: zoneCounts(spec),
       })),
       requests: this.requestLog.map((entry) => ({ ...entry })),

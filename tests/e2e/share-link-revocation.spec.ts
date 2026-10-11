@@ -20,18 +20,11 @@ import {
   type E2EUser,
 } from './support/accounts';
 import { createBookmarkletOnSetupPage, runBookmarklet } from './support/bookmarklet';
-import {
-  commitVersion,
-  createBlueFarmCopy,
-  deckIdFromUrl,
-  expectNoHorizontalOverflow,
-  trackDeck,
-} from './support/decks';
+import { deckIdFromUrl, deckNav, expectNoHorizontalOverflow, trackAndCommitV1 } from './support/decks';
 import { expect, test, type NewContext } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 import {
   createShareLink,
-  deckNav,
   expectDeadLinkPage,
   expectLinkNotWorking,
   expectReadOnlyPage,
@@ -85,12 +78,13 @@ test('revoking a link, or untracking its deck, ends its access at once', async (
   consoleErrors,
 }, testInfo) => {
   // The browser reports each 404 page in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+  consoleErrors.allowHttpStatus(404);
   const { user: owner } = await signIn(context, { displayName: uniqueName('Aino') });
-  const deck = await createBlueFarmCopy(testInfo, DECK_NAME);
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Tournament list' });
-  await expect(page.getByText('Committed v1')).toBeVisible();
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: DECK_NAME,
+    message: 'Tournament list',
+    confirm: 'toast',
+  });
   const viewing: SharedDeckFacts = { ownerName: owner.displayName, publicId: deck.publicId };
   const viewer = await openViewer(newContext);
 
@@ -182,15 +176,16 @@ test('revoking a bookmarklet can revoke the share links made in the browsers it 
   consoleErrors,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Bookmarklets and accounts are covered on desktop.');
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+  consoleErrors.allowHttpStatus(404);
   const { user: owner, bookmarklets: phoneBookmarklets } = await signIn(context, {
     displayName: uniqueName('Aino'),
     bookmarkletLabel: 'Old phone',
   });
-  const deck = await createBlueFarmCopy(testInfo, DECK_NAME);
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Tournament list' });
-  await expect(page.getByText('Committed v1')).toBeVisible();
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: DECK_NAME,
+    message: 'Tournament list',
+    confirm: 'toast',
+  });
   const tabletBookmarklets = await createBookmarkletOnSetupPage(page, 'Tablet');
 
   // A link made on this computer (signed in without a bookmarklet), and one in each

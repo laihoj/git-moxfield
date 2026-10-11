@@ -14,6 +14,8 @@ import type { Page } from '@playwright/test';
 
 import { CAPTURE_FORM_PATH } from '@/integrations/moxfield/capture-protocol';
 
+import { bookmarkletKey, bookmarkletSource } from '../../support/bookmarklet';
+
 import { APP_URL } from './constants';
 import { expect } from './fixtures';
 
@@ -22,21 +24,7 @@ export type BookmarkletMode = 'popup' | 'same-tab';
 /** The two bookmarklets of one key, by mode. */
 export type Bookmarklets = Record<BookmarkletMode, string>;
 
-/** The JavaScript source of a `javascript:` bookmarklet URL. */
-export function bookmarkletSource(bookmarklet: string): string {
-  const prefix = 'javascript:';
-  if (!bookmarklet.startsWith(prefix)) {
-    throw new Error(`Not a bookmarklet: ${bookmarklet.slice(0, 40)}…`);
-  }
-  return decodeURIComponent(bookmarklet.slice(prefix.length));
-}
-
-/** The personal key (`gmk_…`) a bookmarklet carries. */
-export function bookmarkletKey(bookmarklet: string): string {
-  const match = /"key":"(gmk_[A-Za-z0-9_-]{43})"/.exec(bookmarkletSource(bookmarklet));
-  if (match?.[1] === undefined) throw new Error('No key in the bookmarklet');
-  return match[1];
-}
+export { bookmarkletKey, bookmarkletSource };
 
 /** Which bookmarklet a `javascript:` URL is: only the same-tab one posts to the form endpoint. */
 export function bookmarkletMode(bookmarklet: string): BookmarkletMode {

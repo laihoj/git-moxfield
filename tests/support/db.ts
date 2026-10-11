@@ -14,6 +14,7 @@ import { expect } from 'vitest';
 import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
+import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
 import { openDatabase, type OpenDatabaseOptions } from '@/server/db/client';
 import type { LibsqlDatabase, LibsqlDb } from '@/server/db/libsql';
 import { classifySqlError, type SqlErrorClassification, type SqlErrorKind } from '@/server/db/sql-errors';
@@ -29,6 +30,7 @@ import {
   type RepositoryOptions,
 } from '@/server/repositories';
 
+import { expectRejection, rejectionOf } from './errors';
 import { cleanUpAfterTest } from './libsql';
 
 export { countRows } from './libsql';
@@ -41,15 +43,7 @@ export async function expectRepositoryError(
   operation: Promise<unknown> | (() => unknown),
   code: RepositoryErrorCode,
 ): Promise<RepositoryError> {
-  let caught: unknown;
-  try {
-    await (typeof operation === 'function' ? operation() : operation);
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(RepositoryError);
-  expect(caught).toMatchObject({ code });
-  return caught as RepositoryError;
+  return expectRejection(operation, RepositoryError, { code });
 }
 
 /**
@@ -62,12 +56,7 @@ export async function expectDatabaseError(
   kind: SqlErrorKind,
   message?: RegExp,
 ): Promise<SqlErrorClassification> {
-  let caught: unknown;
-  try {
-    await operation;
-  } catch (error) {
-    caught = error;
-  }
+  const caught = await rejectionOf(operation);
   expect(caught).toBeInstanceOf(Error);
   const failure = classifySqlError(caught);
   expect(failure.kind).toBe(kind);
@@ -131,7 +120,7 @@ export function createTestDeck(repos: Repositories, overrides: Partial<NewDeck> 
   return repos.decks.create({
     source: 'moxfield',
     externalId,
-    url: `https://moxfield.com/decks/${externalId}`,
+    url: moxfieldDeckUrl(externalId),
     name: 'Test Deck',
     format: 'commander',
     ...overrides,

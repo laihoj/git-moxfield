@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { parseConfig, type AppConfig } from '@/server/config';
+import { tokenOfPath } from '@tests/support/auth';
+import { runCommand } from '@tests/support/cli';
 import { openTestDatabase } from '@tests/support/db';
 import { recordingLogger } from '@tests/support/services';
 
@@ -15,16 +17,7 @@ async function cli(env: Record<string, string> = {}) {
   const db = await openTestDatabase();
   const config: AppConfig = parseConfig(env);
   const auth = createAuthService({ db, config, logger: recordingLogger() });
-  const run = async (...argv: string[]) => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const code = await runUsersCommand(argv, {
-      db,
-      config,
-      io: { out: (line) => out.push(line), err: (line) => err.push(line) },
-    });
-    return { code, out, err };
-  };
+  const run = (...argv: string[]) => runCommand((io) => runUsersCommand(argv, { db, config, io }));
   return { db, auth, run };
 }
 
@@ -48,7 +41,7 @@ describe('pnpm users', () => {
     const admin = await run('--', 'invite', '--admin', '--base-url', 'https://decks.example.com/');
     const adminUrl = printedUrl(admin.out);
     expect(adminUrl.origin).toBe('https://decks.example.com');
-    const accepted = await auth.acceptInvite(adminUrl.pathname.split('/').at(-1), 'Operator', null);
+    const accepted = await auth.acceptInvite(tokenOfPath(adminUrl.pathname), 'Operator', null);
     expect(accepted).toMatchObject({ ok: true, signIn: { user: { role: 'admin' } } });
   });
 
@@ -61,7 +54,7 @@ describe('pnpm users', () => {
     const { auth, run } = await cli();
     expect((await run('list')).out[0]).toContain('No users yet');
     const invite = await auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
-    await auth.acceptInvite(invite.path.split('/').at(-1), 'Mikko', null);
+    await auth.acceptInvite(tokenOfPath(invite.path), 'Mikko', null);
     const listed = await run('list');
     expect(listed.code).toBe(0);
     expect(listed.out).toEqual([
@@ -73,7 +66,7 @@ describe('pnpm users', () => {
     const { auth, run } = await cli();
     const create = async (name: string) => {
       const invite = await auth.createInvite(SYSTEM_ACTOR, { role: 'member' });
-      const outcome = await auth.acceptInvite(invite.path.split('/').at(-1), name, null);
+      const outcome = await auth.acceptInvite(tokenOfPath(invite.path), name, null);
       if (!outcome.ok) throw new Error(outcome.message);
       return outcome.signIn.user;
     };
@@ -85,7 +78,7 @@ describe('pnpm users', () => {
     expect(byName.code).toBe(0);
     const link = printedUrl(byName.out);
     expect(link.pathname).toMatch(/^\/signin\/gml_[A-Za-z0-9_-]{43}$/);
-    const signIn = await auth.consumeLoginLink(link.pathname.split('/').at(-1), 'New laptop');
+    const signIn = await auth.consumeLoginLink(tokenOfPath(link.pathname), 'New laptop');
     expect(signIn?.user.id).toBe(mikko.id);
 
     const ambiguous = await run('recover', 'Anna');

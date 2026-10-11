@@ -30,6 +30,7 @@ import {
 } from '@/server/git-export';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import { commitTestSnapshot, createTestDeck, createTestRepositories } from '@tests/support/db';
+import { expectRejection } from '@tests/support/errors';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
@@ -40,19 +41,8 @@ function git(dir: string, ...args: string[]): string {
   return result.stdout;
 }
 
-async function expectExportError(
-  operation: Promise<unknown>,
-  code: GitExportErrorCode,
-): Promise<GitExportError> {
-  let caught: unknown;
-  try {
-    await operation;
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(GitExportError);
-  expect(caught).toMatchObject({ code });
-  return caught as GitExportError;
+function expectExportError(operation: Promise<unknown>, code: GitExportErrorCode): Promise<GitExportError> {
+  return expectRejection(operation, GitExportError, { code });
 }
 
 const V1 = buildSnapshot(baseDeckSpec());

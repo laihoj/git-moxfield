@@ -3,16 +3,16 @@
  * input gets the invalid (red) border, the same red as the error text under it.
  */
 import { signIn } from './support/accounts';
-import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
+import { trackAndCommitV1 } from './support/decks';
 import { expect, test } from './support/fixtures';
-import { mockMoxfield } from './support/mock';
 
 test('an invalid tag turns the tag input red', async ({ page, context }, testInfo) => {
   await signIn(context);
-  const deck = await createBlueFarmCopy(testInfo, 'Tag Editor Farm');
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Baseline' });
-  await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v1' })).toBeVisible();
+  const { deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Tag Editor Farm',
+    message: 'Baseline',
+    confirm: 'status',
+  });
 
   await page.goto(`/decks/${deckId}/versions/1`);
   await page.getByRole('button', { name: 'Add tag' }).click();

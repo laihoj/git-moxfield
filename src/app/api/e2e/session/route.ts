@@ -31,6 +31,7 @@ import { USER_ROLES } from '@/core/roles';
 import { getAuthService, SYSTEM_ACTOR } from '@/server/auth';
 import { cookieNames } from '@/server/auth/cookie-spec';
 import { establishSessionOnResponse, requestCookieSecurity } from '@/server/auth/cookies';
+import { tokenOfLinkPath } from '@/server/auth/paths';
 import { parseToken } from '@/server/auth/tokens';
 import { jsonResponse } from '@/server/http/responses';
 import type { BookmarkletsDTO } from '@/server/auth/types';
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const auth = await getAuthService();
   const invite = await auth.createInvite(SYSTEM_ACTOR, { role: input.data.role ?? 'member', note: 'e2e' });
-  const token = parseToken('invite', invite.path.split('/').at(-1));
+  const token = parseToken('invite', tokenOfLinkPath(invite.path));
   const displayName = input.data.displayName ?? `Tester ${randomBytes(3).toString('hex')}`;
   const accepted = await auth.acceptInvite(token, displayName, request.headers.get('user-agent'));
   if (!accepted.ok) return badRequest(accepted.message);

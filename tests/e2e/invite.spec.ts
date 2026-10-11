@@ -16,8 +16,7 @@ import {
   openAccountMenu,
 } from './support/accounts';
 import { createBookmarkletOnSetupPage, runBookmarklet } from './support/bookmarklet';
-import { APP_URL } from './support/constants';
-import { createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
+import { CAPTURED_DECK_URL, createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -88,7 +87,7 @@ test('an admin invites a friend, who makes an account and a bookmarklet', async 
     const deck = await createBlueFarmCopy(testInfo, 'First Farm');
     await friend.goto(mockMoxfield.deckPageUrl(deck.publicId));
     await runBookmarklet(friend, bookmarklets['same-tab']);
-    await expect(friend).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(friend).toHaveURL(CAPTURED_DECK_URL);
     await expect(friend.getByRole('heading', { level: 1, name: 'First Farm' })).toBeVisible();
     await expectSignedInAs(friend, friendName);
   });
@@ -116,7 +115,7 @@ test('an admin invites a friend, who makes an account and a bookmarklet', async 
     await expect(header.getByRole('link', { name: 'Account', exact: true })).toBeVisible();
     await expect(header.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0);
     // As if it did not exist (the browser reports the 404 in the console).
-    consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+    consoleErrors.allowHttpStatus(404);
     const response = await friend.goto('/admin');
     expect(response?.status()).toBe(404);
     await expect(friend.getByRole('heading', { level: 1, name: 'We couldn’t find that' })).toBeVisible();

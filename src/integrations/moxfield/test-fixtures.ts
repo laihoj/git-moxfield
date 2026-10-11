@@ -2,9 +2,15 @@
  * Test-only helpers for the Moxfield adapter: cloned fixtures and builders for
  * synthetic payloads. Not imported by production code.
  */
+import { expect } from 'vitest';
+
 import v1PrimerJson from '@tests/fixtures/moxfield/v1-primer.json';
 import v2DeckJson from '@tests/fixtures/moxfield/v2-deck.json';
 import v3DeckJson from '@tests/fixtures/moxfield/v3-deck.json';
+import { requestUrl } from '@tests/support/moxfield-api';
+
+import { DeckSourceError } from '../deck-source';
+import { CAPTURE_ENVELOPE_KIND, CAPTURE_PROTOCOL_VERSION } from './capture-protocol';
 
 export type JsonObject = Record<string, unknown>;
 
@@ -95,7 +101,7 @@ export function fakeFetch(
 ): typeof fetch & { calls: { url: string; init: RequestInit | undefined }[] } {
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = requestUrl(input);
     calls.push({ url, init });
     return handler(url, init);
   };
@@ -119,4 +125,40 @@ export function cloudflareBlockResponse(status = 403): Response {
       headers: { 'content-type': 'text/html; charset=UTF-8', 'cf-ray': '0123456789abcdef-AMS' },
     },
   );
+}
+
+/**
+ * The capture envelope the bookmarklet sends for the fixture deck and primer; `overrides`
+ * replace fields (also with invalid values, for the tests of what is refused).
+ */
+export function fixtureCaptureEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: CAPTURE_ENVELOPE_KIND,
+    version: CAPTURE_PROTOCOL_VERSION,
+    source: 'moxfield',
+    pageUrl: 'https://moxfield.com/decks/FixtureDeckId_00000001',
+    capturedAt: '2026-10-09T12:00:00.000Z',
+    deck: v3Deck(),
+    primer: v1Primer(),
+    primerError: null,
+    ...overrides,
+  };
+}
+
+/**
+ * Asserts that `fn` throws a `schema` {@link DeckSourceError} whose message contains every
+ * `fragment`; returns the error.
+ */
+export function expectDeckSourceSchemaError(fn: () => unknown, ...fragments: string[]): DeckSourceError {
+  let caught: unknown;
+  try {
+    fn();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(DeckSourceError);
+  const error = caught as DeckSourceError;
+  expect(error.code).toBe('schema');
+  for (const fragment of fragments) expect(error.message).toContain(fragment);
+  return error;
 }

@@ -15,6 +15,7 @@ import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { bundledMigrations, checkMigrationState } from '@/server/db/migration-state';
 import { workspaces } from '@/server/db/schema';
 import type { PlatformEnv } from '@/server/platform';
+import { runCommand } from '@tests/support/cli';
 import { openRawDatabase, refusingUrl, scratchDir, startHranaStub } from '@tests/support/libsql';
 
 import { runMigrateCommand } from '../../../scripts/migrate';
@@ -34,15 +35,14 @@ async function migrate(
   env: Record<string, string>,
   options: { platform?: PlatformEnv; folder?: string } = {},
 ) {
-  const out: string[] = [];
-  const err: string[] = [];
-  const code = await runMigrateCommand({
-    config: parseConfig(env),
-    env: options.platform ?? {},
-    io: { out: (line) => out.push(line), err: (line) => err.push(line) },
-    ...(options.folder === undefined ? {} : { migrationsFolder: options.folder }),
-  });
-  return { code, out, err };
+  return runCommand((io) =>
+    runMigrateCommand({
+      config: parseConfig(env),
+      env: options.platform ?? {},
+      io,
+      ...(options.folder === undefined ? {} : { migrationsFolder: options.folder }),
+    }),
+  );
 }
 
 const ALL = bundledMigrations().map((entry) => entry.tag);

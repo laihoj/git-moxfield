@@ -2,27 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { FREE_TEXT_NOTE_KIND, MAX_NOTE_LENGTH } from '@/server/services';
 import {
-  blueFarmSpec,
-  commitReviewed,
-  committed,
   createServiceHarness,
   defined,
-  moveCard,
-  publishAndRefresh,
-  trackDeck,
+  twoVersionHistory,
   type ServiceHarness,
 } from '@tests/support/services';
 
 async function twoVersions(harness: ServiceHarness): Promise<string> {
-  const deckId = await trackDeck(harness);
-  committed(await commitReviewed(harness, deckId, 'Initial version', ['Tournament', ' tournament ']));
-  await publishAndRefresh(
-    harness,
-    deckId,
-    moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering'),
-  );
-  committed(await commitReviewed(harness, deckId, 'Cut Dress Down'));
-  return deckId;
+  return (await twoVersionHistory(harness, { v1Tags: ['Tournament', ' tournament '] })).deckId;
 }
 
 describe('deck services: tags', () => {

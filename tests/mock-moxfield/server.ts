@@ -43,7 +43,13 @@ import { pathToFileURL } from 'node:url';
 
 import { zoneLabel } from '@/core/zones';
 
-import { buildMoxfieldDeck, buildMoxfieldPrimer, type MoxDeckSpec } from '../support/moxfield-deck-builder';
+import { answerMoxfieldApi } from '../support/moxfield-api';
+import {
+  BUILDER_DEFAULTS,
+  buildMoxfieldDeck,
+  buildMoxfieldPrimer,
+  type MoxDeckSpec,
+} from '../support/moxfield-deck-builder';
 
 import { seedScenarios } from './scenarios';
 import {
@@ -98,15 +104,11 @@ function html(status: number, body: string, headers?: Record<string, string>): M
   return { status, body, contentType: 'text/html; charset=utf-8', headers };
 }
 
-function text(status: number, body: string): MockResponse {
-  return { status, body, contentType: 'text/plain; charset=utf-8' };
-}
+const NOT_FOUND = json(404, { type: 'about:blank', title: 'Not Found', status: 404 });
 
 function controlError(status: number, message: string): MockResponse {
   return json(status, { error: message });
 }
-
-const NOT_FOUND = json(404, { type: 'about:blank', title: 'Not Found', status: 404 });
 
 function methodNotAllowed(allowed: readonly string[]): MockResponse {
   return json(405, { error: 'Method not allowed' }, { allow: allowed.join(', ') });
@@ -165,31 +167,6 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** The failure the current mode produces for an API request, or `null` to serve it normally. */
-function modeFailure(ctx: RequestContext, endpoint: 'deck' | 'primer'): MockResponse | null {
-  switch (ctx.state.mode) {
-    case 'ok':
-      return null;
-    case 'blocked':
-      if (ctx.client === 'browser') return null;
-      return {
-        status: 403,
-        contentType: 'text/html; charset=UTF-8',
-        headers: { 'cf-ray': `${randomBytes(8).toString('hex')}-MOCK`, server: 'cloudflare' },
-        body:
-          '<!DOCTYPE html><html lang="en"><head><title>Attention Required! | Cloudflare</title></head>' +
-          '<body><h1>Sorry, you have been blocked</h1><p>You are unable to access moxfield.com (mock).</p></body></html>',
-      };
-    case 'rate-limited':
-      return json(429, { title: 'Too Many Requests', status: 429 }, { 'retry-after': '30' });
-    case 'down':
-      return text(502, 'Bad Gateway');
-    case 'primer-down':
-      // Plain text without cf-ray, so the adapter sees an outage rather than a block.
-      return endpoint === 'primer' ? text(503, 'Service Unavailable') : null;
-  }
-}
-
 /**
  * Extra headers of the deck page.
  *
@@ -229,7 +206,7 @@ function htmlPage(title: string, body: string): string {
 }
 
 function deckPage(deck: MoxDeckSpec): string {
-  const name = deck.name ?? 'Fixture Deck';
+  const name = deck.name ?? BUILDER_DEFAULTS.name;
   const commanders = (deck.commanders ?? []).map((card) => toCardObject(card).name);
   const counts = zoneCounts(deck);
   const sections = MOCK_ZONES.filter((zone) => counts[zone] > 0).map((zone) => {
@@ -277,24 +254,23 @@ function indexPage(state: MockMoxfieldState): string {
  */
 function moxfieldRoute(ctx: RequestContext): MockResponse | null {
   const { segments, state } = ctx;
-  const [first, second, third, fourth, ...rest] = segments;
+  const [first, second] = segments;
 
-  // GET /v3/decks/all/:publicId
-  if (first === 'v3' && second === 'decks' && third === 'all' && fourth !== undefined && rest.length === 0) {
-    const deck = state.getDeck(fourth);
-    return modeFailure(ctx, 'deck') ?? (deck ? json(200, buildMoxfieldDeck(deck)) : NOT_FOUND);
-  }
-  // GET /v1/decks/:internalId/primer
-  if (
-    first === 'v1' &&
-    second === 'decks' &&
-    third !== undefined &&
-    fourth === 'primer' &&
-    rest.length === 0
-  ) {
-    const deck = state.findDeckByInternalId(third);
-    return modeFailure(ctx, 'primer') ?? (deck ? json(200, buildMoxfieldPrimer(deck)) : NOT_FOUND);
-  }
+  // GET /v3/decks/all/:publicId and GET /v1/decks/:internalId/primer
+  const answer = answerMoxfieldApi(`/${segments.map(encodeURIComponent).join('/')}`, {
+    mode: state.mode,
+    client: ctx.client,
+    rayId: `${randomBytes(8).toString('hex')}-MOCK`,
+    deck: (publicId) => {
+      const deck = state.getDeck(publicId);
+      return deck && buildMoxfieldDeck(deck);
+    },
+    primer: (internalId) => {
+      const deck = state.findDeckByInternalId(internalId);
+      return deck && buildMoxfieldPrimer(deck);
+    },
+  });
+  if (answer !== null) return answer;
   // GET /decks/:publicId[/...]
   if (first === 'decks' && second !== undefined) {
     const deck = state.getDeck(second);

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   countRows,
+  IMMUTABILITY_TRIGGERS,
   openRawDatabase,
   scratchDir,
   scratchFileUrl,
@@ -27,15 +28,6 @@ import {
 } from './migration-state';
 import * as schema from './schema';
 import { classifySqlError } from './sql-errors';
-
-/** Hand-written triggers that enforce immutable history (drizzle/0001). */
-const IMMUTABILITY_TRIGGERS = [
-  'commits_immutable_delete',
-  'commits_immutable_update',
-  'raw_blobs_immutable_update',
-  'snapshot_cards_immutable_update',
-  'snapshots_immutable_update',
-];
 
 function open(url = ':memory:'): Promise<LibsqlDatabase> {
   return openRawDatabase({ url });
@@ -135,7 +127,9 @@ describe.each([
     const triggers = await db.all<{ name: string; sql: string }>(
       sql`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
     );
-    expect(triggers.map((trigger) => trigger.name)).toEqual(expect.arrayContaining(IMMUTABILITY_TRIGGERS));
+    expect(triggers.map((trigger) => trigger.name)).toEqual(
+      expect.arrayContaining([...IMMUTABILITY_TRIGGERS]),
+    );
     expect(triggers.find((trigger) => trigger.name === 'commits_immutable_delete')?.sql).toContain(
       "SELECT RAISE(ABORT, 'commits are immutable; delete the deck to remove its history');",
     );

@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { zoneCount } from '@/core/canonical';
 import { DeckSourceError } from '@/integrations/deck-source';
 import { MoxfieldDeckSource } from '@/integrations/moxfield';
+import { expectRejection } from '@tests/support/errors';
 import { moxfieldInternalId, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
 import {
@@ -92,15 +93,8 @@ async function fetchThroughAdapter(publicId = BLUE_FARM_PUBLIC_ID) {
   return source.normalizeDeck(await source.getDeck({ source: 'moxfield', externalId: publicId }));
 }
 
-async function adapterError(publicId = BLUE_FARM_PUBLIC_ID): Promise<DeckSourceError> {
-  const error = await adapter()
-    .getDeck({ source: 'moxfield', externalId: publicId })
-    .then(
-      () => null,
-      (reason: unknown) => reason,
-    );
-  expect(error).toBeInstanceOf(DeckSourceError);
-  return error as DeckSourceError;
+function adapterError(publicId = BLUE_FARM_PUBLIC_ID): Promise<DeckSourceError> {
+  return expectRejection(adapter().getDeck({ source: 'moxfield', externalId: publicId }), DeckSourceError);
 }
 
 describe('mock Moxfield API', () => {

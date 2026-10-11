@@ -21,18 +21,9 @@ import {
   openTestDatabase,
   openTestDatabaseHandle,
 } from '@tests/support/db';
-import { scratchDir } from '@tests/support/libsql';
+import { IMMUTABILITY_TRIGGERS, scratchDir } from '@tests/support/libsql';
 
 const MIGRATIONS = join(process.cwd(), 'drizzle');
-
-/** Hand-written triggers that enforce immutable history (drizzle/0001). */
-const IMMUTABILITY_TRIGGERS = [
-  'commits_immutable_delete',
-  'commits_immutable_update',
-  'raw_blobs_immutable_update',
-  'snapshot_cards_immutable_update',
-  'snapshots_immutable_update',
-];
 
 const HISTORY_TABLES = [
   'decks',

@@ -15,6 +15,7 @@ import {
   moveCard,
   publishAndRefresh,
   trackDeck,
+  withDressDownCut,
   type ServiceHarness,
 } from '@tests/support/services';
 
@@ -31,7 +32,7 @@ async function buildHistory(harness: ServiceHarness): Promise<{ deckId: string; 
   const versions = [committed(await commitReviewed(harness, deckId, 'Initial version', ['tournament']))];
 
   const v2 = {
-    ...moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering'),
+    ...withDressDownCut(),
     primer: BLUE_FARM_PRIMER.replace('Keep fast mana and a tutor.', 'Keep any hand with a tutor.'),
   };
   await publishAndRefresh(harness, deckId, v2);

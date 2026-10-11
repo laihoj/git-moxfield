@@ -4,7 +4,15 @@ import { gzipSync } from 'node:zlib';
 import { Linter } from 'eslint';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { envelopeJson, gzipPayload, incompressibleJson, UNICODE_SAMPLE } from '@tests/support/capture-codec';
+import {
+  envelopeJson,
+  gzipPayload,
+  incompressibleJson,
+  largestEncodedPayload,
+  NETLIFY_MAX_PAYLOAD_BYTES,
+  UNICODE_SAMPLE,
+} from '@tests/support/capture-codec';
+import { rejectionOf } from '@tests/support/errors';
 
 import { formatBytes } from '@/core/text';
 
@@ -42,13 +50,9 @@ function sourceEncoder(source = ENCODE_CAPTURE_PAYLOAD_SOURCE): Encoder {
 }
 
 async function rejection(promise: Promise<unknown>): Promise<CapturePayloadError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (isCapturePayloadError(error)) return error;
-    throw error;
-  }
-  throw new Error('Expected the payload to be rejected');
+  const error = await rejectionOf(promise);
+  if (isCapturePayloadError(error)) return error;
+  throw error;
 }
 
 async function expectRejected(
@@ -319,9 +323,8 @@ describe('browser-side encoders', () => {
 });
 
 describe('limits', () => {
-  /** Netlify's request body cap, and what fits in it if the body is base64-encoded. */
-  const NETLIFY_BODY_CAP = 6_000_000;
-  const BASE64_SAFE_BODY = (NETLIFY_BODY_CAP * 3) / 4;
+  /** What fits in Netlify's request body cap if the body is base64-encoded. */
+  const BASE64_SAFE_BODY = (NETLIFY_MAX_PAYLOAD_BYTES * 3) / 4;
   const ROUTE_OVERHEAD = 64 * 1024;
   const key = `gmk_${'A'.repeat(43)}`;
 
@@ -336,7 +339,7 @@ describe('limits', () => {
   });
 
   it('keep the largest compressed capture far below Netlify’s body cap on both routes', () => {
-    const payload = `${CAPTURE_GZIP_TAG}${'A'.repeat(MAX_ENCODED_CAPTURE_CHARS - CAPTURE_GZIP_TAG.length)}`;
+    const payload = largestEncodedPayload();
     const form = new URLSearchParams({ [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload });
     const json = JSON.stringify({ payload, method: 'browser-capture', track: true, key });
     for (const body of [form.toString(), json]) {

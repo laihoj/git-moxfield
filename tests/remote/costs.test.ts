@@ -7,14 +7,12 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { ensureLocalWorkspace } from '@/server/db/client';
-import { applyMigrations } from '@/server/db/migration-state';
 import type { DeckServices } from '@/server/services';
 import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
 import type { MoxCardSpec, MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 import { defined, recordingLogger } from '@tests/support/services';
 
-import { measure, openMetered, openRemote, wipeRemoteDatabase, type Usage } from './support';
+import { measure, openMetered, resetRemoteDatabase, type Usage } from './support';
 
 const TYPES = ['Instant', 'Sorcery', 'Creature — Elf Druid', 'Artifact', 'Enchantment', 'Land'];
 
@@ -78,14 +76,7 @@ const VERSIONS = 5;
 let deckId: string;
 
 beforeAll(async () => {
-  await wipeRemoteDatabase();
-  const handle = await openRemote();
-  try {
-    await applyMigrations(handle.db);
-    await ensureLocalWorkspace(handle.db);
-  } finally {
-    handle.close();
-  }
+  await resetRemoteDatabase({ migrate: true });
   services = captureOnlyServices(openMetered(usage), { logger: recordingLogger() });
   for (let shift = 0; shift < VERSIONS; shift++) deckId = await commitState(deckSpec(MEASURED, shift));
   await addOtherDecks(3, 0);

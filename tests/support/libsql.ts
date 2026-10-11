@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, onTestFinished } from 'vitest';
 
+import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
 import {
   createLibsqlDatabase,
   type LibsqlDatabase,
@@ -20,6 +21,35 @@ import {
   type LibsqlExecutor,
 } from '@/server/db/libsql';
 import * as schema from '@/server/db/schema';
+
+/** Hand-written triggers that enforce immutable history (drizzle/0001). */
+export const IMMUTABILITY_TRIGGERS: readonly string[] = [
+  'commits_immutable_delete',
+  'commits_immutable_update',
+  'raw_blobs_immutable_update',
+  'snapshot_cards_immutable_update',
+  'snapshots_immutable_update',
+];
+
+/**
+ * Creates the two tables of the transaction tests: `items` (unique names, for the writes
+ * a transaction keeps or rolls back) and `counter` (for read-modify-write races).
+ */
+export async function createItemsTables(db: LibsqlExecutor): Promise<void> {
+  await db.run(sql`CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)`);
+  await db.run(sql`CREATE TABLE counter (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`);
+}
+
+/** The names in `items`, in insertion order. */
+export async function itemNames(db: LibsqlExecutor): Promise<string[]> {
+  const rows = await db.all<{ name: string }>(sql`SELECT name FROM items ORDER BY id`);
+  return rows.map((row) => row.name);
+}
+
+/** Inserts a row into `items`; fails when `name` is taken. */
+export function insertItem(db: LibsqlExecutor, name: string): Promise<unknown> {
+  return db.run(sql`INSERT INTO items (name) VALUES (${name})`);
+}
 
 /**
  * Runs `cleanup` when the current test finishes, after the cleanups registered later
@@ -85,7 +115,7 @@ export async function seedDeckHistory(db: LibsqlExecutor, deckId = 'deck-1'): Pr
     workspaceId,
     source: 'moxfield',
     externalId: deckId,
-    url: `https://moxfield.com/decks/${deckId}`,
+    url: moxfieldDeckUrl(deckId),
     name: 'Test Deck',
     format: 'commander',
     createdAt: at,

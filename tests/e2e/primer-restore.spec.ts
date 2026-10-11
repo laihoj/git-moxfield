@@ -10,7 +10,7 @@
 import type { Page } from '@playwright/test';
 
 import { signIn } from './support/accounts';
-import { APP_URL } from './support/constants';
+import { grantClipboard, readClipboard } from './support/clipboard';
 import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
@@ -46,14 +46,10 @@ function primerCard(page: Page) {
   return page.locator('section[aria-labelledby="primer"]');
 }
 
-async function clipboard(page: Page): Promise<string> {
-  return page.evaluate(() => navigator.clipboard.readText());
-}
-
 test('an older primer can be copied back to Moxfield exactly', async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'selection and keyboard copy are exercised on desktop');
   await signIn(context);
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
+  await grantClipboard(context);
 
   const deck = await createBlueFarmCopy(testInfo);
   await mockMoxfield.edit(deck.publicId, [{ op: 'primer', text: PRIMER_V1 }]);
@@ -91,9 +87,9 @@ test('an older primer can be copied back to Moxfield exactly', async ({ page, co
         selection?.addRange(range);
       });
     await page.keyboard.press('ControlOrMeta+C');
-    await expect.poll(() => clipboard(page)).not.toBe('clipboard-sentinel');
+    await expect.poll(() => readClipboard(page)).not.toBe('clipboard-sentinel');
 
-    const copied = await clipboard(page);
+    const copied = await readClipboard(page);
     expect(copied).toContain('**Incidental wincons**');
     expect(copied).toContain('Keep any seven with fast mana and a tutor.');
     expect(copied).not.toMatch(/\b(Added|Removed|Unchanged):/);
@@ -103,14 +99,14 @@ test('an older primer can be copied back to Moxfield exactly', async ({ page, co
     const primer = primerCard(page);
     await primer.getByRole('button', { name: 'Copy v1 primer' }).click();
     await expect(primer.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await clipboard(page)).toBe(PRIMER_V1);
+    expect(await readClipboard(page)).toBe(PRIMER_V1);
   });
 
   await test.step("the version's Primer tab copies its primer", async () => {
     await page.goto(`/decks/${deckId}/versions/1?tab=primer`);
     await page.getByRole('button', { name: 'Copy primer' }).click();
     await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await clipboard(page)).toBe(PRIMER_V1);
+    expect(await readClipboard(page)).toBe(PRIMER_V1);
   });
 
   await test.step('Restore to Moxfield has a Primer block with the exact markup', async () => {
@@ -125,6 +121,6 @@ test('an older primer can be copied back to Moxfield exactly', async ({ page, co
     await expect(block.getByLabel('Primer source')).toHaveValue(PRIMER_V1);
     await block.getByRole('button', { name: 'Copy primer' }).click();
     await expect(block.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await clipboard(page)).toBe(PRIMER_V1);
+    expect(await readClipboard(page)).toBe(PRIMER_V1);
   });
 });

@@ -12,8 +12,7 @@ import {
   signedInDevices,
 } from './support/accounts';
 import { runBookmarklet } from './support/bookmarklet';
-import { APP_URL } from './support/constants';
-import { createBlueFarmCopy, deckIdFromUrl } from './support/decks';
+import { CAPTURED_DECK_URL, createBlueFarmCopy, deckIdFromUrl } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -24,7 +23,7 @@ test('a revoked bookmarklet signs its browsers out and no longer signs in or sen
   consoleErrors,
 }, testInfo) => {
   // The browser reports the refused captures' statuses in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 40[13]/);
+  consoleErrors.allowHttpStatus(401, 403);
   const { user, bookmarklets } = await signIn(context, { bookmarkletLabel: 'Old phone' });
   await mockMoxfield.setMode('blocked');
   const kept = await createBlueFarmCopy(testInfo, 'Kept Farm');
@@ -36,7 +35,7 @@ test('a revoked bookmarklet signs its browsers out and no longer signs in or sen
     await phone.goto(mockMoxfield.deckPageUrl(kept.publicId));
     await runBookmarklet(phone, bookmarklets['same-tab']);
     await confirmBookmarkletSignIn(phone, user.displayName, 'Old phone');
-    await expect(phone).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(phone).toHaveURL(CAPTURED_DECK_URL);
     deckPath = `/decks/${deckIdFromUrl(phone.url())}`;
     await expectSignedInAs(phone, user.displayName);
   });

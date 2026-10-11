@@ -5,13 +5,21 @@
  * commit v2 with a tag, then follow the deck through History, the version page, Compare,
  * a card's history and Restore, copying a restore block to the clipboard.
  */
-import type { Locator, Page } from '@playwright/test';
+import type { Locator } from '@playwright/test';
 
 import { blueFarmDeck } from '../mock-moxfield/scenarios';
+import { cardWithFacts } from '../support/card-facts';
 
 import { signIn } from './support/accounts';
-import { APP_URL } from './support/constants';
-import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
+import { grantClipboard, readClipboard } from './support/clipboard';
+import {
+  commitVersion,
+  createBlueFarmCopy,
+  deckNav,
+  expectNoHorizontalOverflow,
+  statusHeading,
+  trackDeck,
+} from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield, type EditOp } from './support/mock';
 
@@ -37,25 +45,16 @@ function moxfieldEdit(): EditOp[] {
     {
       op: 'add',
       zone: 'mainboard',
-      card: { name: 'Beseech the Mirror', typeLine: 'Sorcery', manaCost: '{1}{B}{B}{B}' },
+      card: cardWithFacts('Beseech the Mirror'),
     },
     {
       op: 'add',
       zone: 'mainboard',
-      card: { name: 'Final Fortune', typeLine: 'Instant', manaCost: '{R}{R}' },
+      card: cardWithFacts('Final Fortune'),
     },
     { op: 'setQuantity', zone: 'mainboard', card: 'Orcish Bowmasters', quantity: 2 },
     { op: 'primer', text: editedPrimer() },
   ];
-}
-
-/** The deck's Status · History · Compare · Cards navigation (top tabs or bottom bar). */
-function deckNav(page: Page): Locator {
-  return page.getByRole('navigation', { name: 'Deck' });
-}
-
-function statusHeading(page: Page, label: string): Locator {
-  return page.getByRole('heading', { level: 2, name: label });
 }
 
 /** The row of a card in a diff section. */
@@ -87,7 +86,7 @@ test('tracks a deck, commits two versions and follows the changes through every 
   context,
 }, testInfo) => {
   await signIn(context);
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
+  await grantClipboard(context);
   const deck = await createBlueFarmCopy(testInfo);
   let deckId = '';
 
@@ -269,7 +268,7 @@ test('tracks a deck, commits two versions and follows the changes through every 
 
     await block.getByRole('button', { name: 'Copy Mainboard' }).click();
     await expect(block.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(text);
+    expect(await readClipboard(page)).toBe(text);
     await expectNoHorizontalOverflow(page);
   });
 });

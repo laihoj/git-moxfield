@@ -53,6 +53,14 @@ export function sharedDeckPath(token: string): string {
   return `${SHARED_DECK_PATH}/${token}`;
 }
 
+/**
+ * The token at the end of a link path (the inverse of {@link loginLinkPath},
+ * {@link invitePath} and {@link sharedDeckPath}); a path without a `/` is returned as is.
+ */
+export function tokenOfLinkPath(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
 /** `base` with `?next=` set to the local path `next` (checked with {@link safeRedirectPath}), unless that is the home page. */
 function withNext(base: string, next?: string): string {
   const target = safeRedirectPath(next, '/');

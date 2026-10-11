@@ -4,9 +4,17 @@ import { sql, TransactionRollbackError } from 'drizzle-orm';
 import { drizzle as drizzleLocal } from 'drizzle-orm/libsql/sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
-import { holdWriteLockInChildProcess, openRawDatabase, scratchFileUrl } from '@tests/support/libsql';
+import { deferred } from '@tests/support/async';
+import {
+  createItemsTables,
+  holdWriteLockInChildProcess,
+  insertItem,
+  itemNames,
+  openRawDatabase,
+  scratchFileUrl,
+} from '@tests/support/libsql';
 
-import type { LibsqlDatabase, LibsqlExecutor } from './libsql';
+import type { LibsqlDatabase } from './libsql';
 import * as schema from './schema';
 import { classifySqlError } from './sql-errors';
 import {
@@ -20,27 +28,9 @@ import { WriteLockError } from './write-lock';
 
 async function openItems(url: string, options: { busyTimeoutMs?: number } = {}): Promise<LibsqlDatabase> {
   const handle = await openRawDatabase({ url, ...options });
-  await handle.db.run(sql`CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)`);
-  await handle.db.run(sql`CREATE TABLE counter (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`);
+  await createItemsTables(handle.db);
   await handle.db.run(sql`INSERT INTO counter VALUES (1, 0)`);
   return handle;
-}
-
-async function names(db: LibsqlExecutor): Promise<string[]> {
-  const rows = await db.all<{ name: string }>(sql`SELECT name FROM items ORDER BY id`);
-  return rows.map((row) => row.name);
-}
-
-function insert(db: LibsqlExecutor, name: string): Promise<unknown> {
-  return db.run(sql`INSERT INTO items (name) VALUES (${name})`);
-}
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 /** Silences the JSON log lines (debug/info go to stdout, warn/error to stderr) and returns them. */
@@ -80,12 +70,12 @@ describe.each([
     const { db } = await openItems(url());
     const result = await runInTransaction(db, async (tx) => {
       expect(isTransaction(tx)).toBe(true);
-      await insert(tx, 'a');
-      await insert(tx, 'b');
-      return names(tx);
+      await insertItem(tx, 'a');
+      await insertItem(tx, 'b');
+      return itemNames(tx);
     });
     expect(result).toEqual(['a', 'b']);
-    expect(await names(db)).toEqual(['a', 'b']);
+    expect(await itemNames(db)).toEqual(['a', 'b']);
     expect(isTransaction(db)).toBe(false);
   });
 
@@ -94,11 +84,11 @@ describe.each([
     const original = new Error('validation failed');
     await expect(
       runInTransaction(db, async (tx) => {
-        await insert(tx, 'a');
+        await insertItem(tx, 'a');
         throw original;
       }),
     ).rejects.toBe(original);
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('keeps the original error when the rollback itself fails', async () => {
@@ -107,12 +97,12 @@ describe.each([
     const original = new Error('the real problem');
     await expect(
       runInTransaction(db, async (tx) => {
-        await insert(tx, 'a');
+        await insertItem(tx, 'a');
         await tx.run(sql`ROLLBACK`); // the following rollback fails: no transaction is active
         throw original;
       }),
     ).rejects.toBe(original);
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
     expect(logs().some((line) => line.includes('Rolling back a transaction failed'))).toBe(true);
   });
 
@@ -122,68 +112,68 @@ describe.each([
     await expect(
       runInTransaction(db, async (tx) => {
         attempts++;
-        await insert(tx, 'a');
+        await insertItem(tx, 'a');
         tx.rollback();
       }),
     ).rejects.toBeInstanceOf(TransactionRollbackError);
     expect(attempts).toBe(1);
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('runs a nested call with the transaction in a savepoint', async () => {
     const { db } = await openItems(url());
     await runInTransaction(db, async (tx) => {
-      await insert(tx, 'outer');
+      await insertItem(tx, 'outer');
       await expect(
         runInTransaction(tx, async (inner) => {
-          await insert(inner, 'inner');
+          await insertItem(inner, 'inner');
           throw new Error('inner failure');
         }),
       ).rejects.toThrow('inner failure');
-      await runInTransaction(tx, (inner) => insert(inner, 'second inner'));
+      await runInTransaction(tx, (inner) => insertItem(inner, 'second inner'));
     });
-    expect(await names(db)).toEqual(['outer', 'second inner']);
+    expect(await itemNames(db)).toEqual(['outer', 'second inner']);
   });
 
   it('rejects root-database use inside the callback', async () => {
     const { db } = await openItems(url());
     const attempts = [
-      () => names(db),
-      () => insert(db, 'outside'),
+      () => itemNames(db),
+      () => insertItem(db, 'outside'),
       () => db.batch([db.run(sql`SELECT 1`)]),
       () => db.$client.execute('SELECT 1'),
     ];
     for (const attempt of attempts) {
       const error = await runInTransaction(db, async (tx) => {
-        await insert(tx, 'inside');
+        await insertItem(tx, 'inside');
         await attempt();
       }).catch((caught: unknown) => caught);
       // Drizzle wraps whatever the client throws in a DrizzleQueryError.
       expect(causeOfType(error, DatabaseMisuseError)).toMatchObject({ code: 'root-in-transaction' });
     }
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('fails fast instead of deadlocking when a write on the root database is nested', async () => {
     const { db } = await openItems(url());
-    const nestedTransaction = runInTransaction(db, () => runInTransaction(db, (tx) => insert(tx, 'x')));
+    const nestedTransaction = runInTransaction(db, () => runInTransaction(db, (tx) => insertItem(tx, 'x')));
     await expect(nestedTransaction).rejects.toBeInstanceOf(WriteLockError);
     await expect(nestedTransaction).rejects.toMatchObject({ code: 'reentrant' });
-    const nestedWrite = runInTransaction(db, () => runWrite(db, (root) => insert(root, 'x')));
+    const nestedWrite = runInTransaction(db, () => runWrite(db, (root) => insertItem(root, 'x')));
     await expect(nestedWrite).rejects.toMatchObject({ code: 'reentrant' });
-    const nestedDrizzle = runInTransaction(db, () => db.transaction((tx) => insert(tx, 'x')));
+    const nestedDrizzle = runInTransaction(db, () => db.transaction((tx) => insertItem(tx, 'x')));
     await expect(nestedDrizzle).rejects.toMatchObject({ code: 'root-in-transaction' });
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('only opens transactions itself', async () => {
     const { db } = await openItems(url());
-    await expect(db.transaction((tx) => insert(tx, 'a'))).rejects.toMatchObject({
+    await expect(db.transaction((tx) => insertItem(tx, 'a'))).rejects.toMatchObject({
       name: 'DatabaseMisuseError',
       code: 'unmanaged-transaction',
     });
     await expect(db.$client.transaction('write')).rejects.toMatchObject({ code: 'unmanaged-transaction' });
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('serializes concurrent transactions (read-modify-write never loses an update)', async () => {
@@ -205,40 +195,40 @@ describe.each([
     const gate = deferred();
     const opened = deferred();
     const transaction = runInTransaction(db, async (tx) => {
-      await insert(tx, 'a');
+      await insertItem(tx, 'a');
       opened.resolve();
       await gate.promise;
     });
     await opened.promise;
     let read: string[] | undefined;
-    const reading = names(db).then((result) => (read = result));
-    const writing = insert(db, 'b');
+    const reading = itemNames(db).then((result) => (read = result));
+    const writing = insertItem(db, 'b');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(read).toBeUndefined();
     gate.resolve();
     await Promise.all([transaction, reading, writing]);
     expect(read).toEqual(['a']);
-    expect(await names(db)).toEqual(['a', 'b']);
+    expect(await itemNames(db)).toEqual(['a', 'b']);
   });
 
   it('runs statements issued concurrently inside the callback one at a time, in order', async () => {
     const { db } = await openItems(url());
     const inserted = Array.from({ length: 25 }, (_, i) => `item ${String(i).padStart(2, '0')}`);
     await runInTransaction(db, async (tx) => {
-      await Promise.all(inserted.map((name) => insert(tx, name)));
+      await Promise.all(inserted.map((name) => insertItem(tx, name)));
     });
-    expect(await names(db)).toEqual(inserted);
+    expect(await itemNames(db)).toEqual(inserted);
   });
 
   it('keeps the transaction usable after a constraint violation the callback handles', async () => {
     const { db } = await openItems(url());
     await runInTransaction(db, async (tx) => {
-      await insert(tx, 'a');
-      const duplicate = await insert(tx, 'a').catch((error: unknown) => error);
+      await insertItem(tx, 'a');
+      const duplicate = await insertItem(tx, 'a').catch((error: unknown) => error);
       expect(classifySqlError(duplicate).kind).toBe('unique');
-      await insert(tx, 'b');
+      await insertItem(tx, 'b');
     });
-    expect(await names(db)).toEqual(['a', 'b']);
+    expect(await itemNames(db)).toEqual(['a', 'b']);
   });
 
   it('aborts the transaction after any other failure, even when the callback swallows it', async () => {
@@ -246,11 +236,11 @@ describe.each([
     const failure = await runInTransaction(
       db,
       async (tx) => {
-        await insert(tx, 'a');
+        await insertItem(tx, 'a');
         const broken = await tx.run(sql`SELEC 1`).catch((error: unknown) => error);
         expect(classifySqlError(broken).kind).toBe('other');
         // Never sent: remotely it could run outside the (possibly rolled back) transaction.
-        const after = await insert(tx, 'b').catch((error: unknown) => error);
+        const after = await insertItem(tx, 'b').catch((error: unknown) => error);
         const aborted = causeOfType(after, TransactionAbortedError);
         expect(aborted).toBeDefined();
         expect(aborted?.cause).toBe(causeOfType(broken, LibsqlError));
@@ -258,7 +248,7 @@ describe.each([
       { retries: 0 },
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(TransactionAbortedError);
-    expect(await names(db)).toEqual([]);
+    expect(await itemNames(db)).toEqual([]);
   });
 
   it('retries the whole transaction after a retryable failure', async () => {
@@ -269,14 +259,14 @@ describe.each([
       db,
       async (tx) => {
         attempts++;
-        await insert(tx, `attempt ${attempts}`);
+        await insertItem(tx, `attempt ${attempts}`);
         if (attempts === 1) throw new Error('wrapped', { cause: transactionTimeout() });
         return attempts;
       },
       { retryDelayMs: 1 },
     );
     expect(result).toBe(2);
-    expect(await names(db)).toEqual(['attempt 2']);
+    expect(await itemNames(db)).toEqual(['attempt 2']);
     const retryLog = logs().find((line) => line.includes('Retrying a database transaction'));
     expect(retryLog).toBeDefined();
     expect(JSON.parse(retryLog ?? '{}')).toMatchObject({
@@ -323,10 +313,10 @@ describe.each([
   it('does not retry other failures', async () => {
     const { db } = await openItems(url());
     let attempts = 0;
-    await runInTransaction(db, (tx) => insert(tx, 'a'));
+    await runInTransaction(db, (tx) => insertItem(tx, 'a'));
     const failure = await runInTransaction(db, async (tx) => {
       attempts++;
-      await insert(tx, 'a');
+      await insertItem(tx, 'a');
     }).catch((error: unknown) => error);
     expect(classifySqlError(failure).kind).toBe('unique');
     expect(attempts).toBe(1);
@@ -360,7 +350,7 @@ describe('runInTransaction on a file shared with another process', () => {
     const other = createLocalClient({ url });
     try {
       await runInTransaction(db, async (tx) => {
-        await names(tx); // reads only
+        await itemNames(tx); // reads only
         const blocked = await other
           .execute(`INSERT INTO items (name) VALUES ('other')`)
           .catch((error: unknown) => error);
@@ -381,8 +371,8 @@ describe('runInTransaction on a file shared with another process', () => {
       const blocking = await other.transaction('write');
       await blocking.execute(`INSERT INTO items (name) VALUES ('other process')`);
       setTimeout(() => void blocking.commit(), 50);
-      await runInTransaction(db, (tx) => insert(tx, 'ours'), { retries: 8, retryDelayMs: 10 });
-      expect(await names(db)).toEqual(['other process', 'ours']);
+      await runInTransaction(db, (tx) => insertItem(tx, 'ours'), { retries: 8, retryDelayMs: 10 });
+      expect(await itemNames(db)).toEqual(['other process', 'ours']);
       expect(logs().some((line) => line.includes('"kind":"busy"'))).toBe(true);
     } finally {
       other.close();
@@ -396,12 +386,12 @@ describe('runInTransaction on a file shared with another process', () => {
     const other = createLocalClient({ url });
     try {
       const blocking = await other.transaction('write');
-      const busyWrite = await runWrite(db, (root) => insert(root, 'blocked'), { retries: 0 }).catch(
+      const busyWrite = await runWrite(db, (root) => insertItem(root, 'blocked'), { retries: 0 }).catch(
         (error: unknown) => error,
       );
-      const busyTransaction = await runInTransaction(db, (tx) => insert(tx, 'blocked'), { retries: 0 }).catch(
-        (error: unknown) => error,
-      );
+      const busyTransaction = await runInTransaction(db, (tx) => insertItem(tx, 'blocked'), {
+        retries: 0,
+      }).catch((error: unknown) => error);
       expect(classifySqlError(busyWrite).kind).toBe('busy');
       expect(classifySqlError(busyTransaction).kind).toBe('busy');
       await blocking.rollback();
@@ -409,8 +399,8 @@ describe('runInTransaction on a file shared with another process', () => {
       // libSQL leaves a statement that failed with SQLITE_BUSY active on its connection;
       // without reopening it, this commit would fail ("SQL statements in progress") and the
       // autocommit insert would stay in a transaction that never ends.
-      await runInTransaction(db, (tx) => insert(tx, 'committed'));
-      await insert(db, 'autocommitted');
+      await runInTransaction(db, (tx) => insertItem(tx, 'committed'));
+      await insertItem(db, 'autocommitted');
       const seenByOthers = await other.execute('SELECT name FROM items ORDER BY id');
       expect(seenByOthers.rows.map((row) => row.name)).toEqual(['committed', 'autocommitted']);
       expect(logs().some((line) => line.includes('Reopened the local database connections'))).toBe(true);
@@ -425,8 +415,8 @@ describe('runInTransaction on a file shared with another process', () => {
     const { db } = await openItems(url);
     const holder = await holdWriteLockInChildProcess(url, 300);
     try {
-      await runInTransaction(db, (tx) => insert(tx, 'after the other process'), { retries: 0 });
-      expect(await names(db)).toEqual(['from the other process', 'after the other process']);
+      await runInTransaction(db, (tx) => insertItem(tx, 'after the other process'), { retries: 0 });
+      expect(await itemNames(db)).toEqual(['from the other process', 'after the other process']);
       expect(logs().some((line) => line.includes('Retrying'))).toBe(false);
     } finally {
       await holder.exited;
@@ -443,7 +433,7 @@ describe('runWrite', () => {
         root.run(sql`INSERT INTO items (name) VALUES ('b')`),
       ]),
     );
-    expect(await names(db)).toEqual(['a', 'b']);
+    expect(await itemNames(db)).toEqual(['a', 'b']);
     const failure = await runWrite(db, (root) =>
       root.batch([
         root.run(sql`INSERT INTO items (name) VALUES ('c')`),
@@ -451,7 +441,7 @@ describe('runWrite', () => {
       ]),
     ).catch((error: unknown) => error);
     expect(classifySqlError(failure).kind).toBe('unique');
-    expect(await names(db)).toEqual(['a', 'b']);
+    expect(await itemNames(db)).toEqual(['a', 'b']);
   });
 
   it('waits for open transactions and retries transient failures', async () => {
@@ -459,7 +449,7 @@ describe('runWrite', () => {
     const { db } = await openItems(':memory:');
     const gate = deferred();
     const transaction = runInTransaction(db, async (tx) => {
-      await insert(tx, 'from the transaction');
+      await insertItem(tx, 'from the transaction');
       await gate.promise;
     });
     let attempts = 0;
@@ -468,14 +458,14 @@ describe('runWrite', () => {
       async (root) => {
         attempts++;
         if (attempts === 1) throw transactionTimeout();
-        await insert(root, 'from the write');
+        await insertItem(root, 'from the write');
       },
       { retryDelayMs: 1 },
     );
     gate.resolve();
     await Promise.all([transaction, write]);
     expect(attempts).toBe(2);
-    expect(await names(db)).toEqual(['from the transaction', 'from the write']);
+    expect(await itemNames(db)).toEqual(['from the transaction', 'from the write']);
   });
 });
 

@@ -32,6 +32,7 @@ import { routes } from '@/lib/routes';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
 import type { DeckServices } from '@/server/services';
+import { cardWithFacts } from '@tests/support/card-facts';
 import { ManualClock } from '@tests/support/clock';
 import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
 import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
@@ -50,141 +51,6 @@ const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 
 type Board = 'mainboard' | 'considering' | 'sideboard';
-
-/** Type line and mana cost of every card the demo uses (display data for the UI). */
-const CARDS: Record<string, readonly [typeLine: string, manaCost: string]> = {
-  // Commanders
-  'Tymna the Weaver': ['Legendary Creature — Human Cleric', '{1}{W}{B}'],
-  "Kraum, Ludevic's Opus": ['Legendary Creature — Zombie Horror', '{3}{U}{R}'],
-  // Lands
-  'Underground Sea': ['Land — Island Swamp', ''],
-  'Volcanic Island': ['Land — Island Mountain', ''],
-  Tundra: ['Land — Plains Island', ''],
-  Scrubland: ['Land — Plains Swamp', ''],
-  Badlands: ['Land — Swamp Mountain', ''],
-  Plateau: ['Land — Mountain Plains', ''],
-  'Watery Grave': ['Land — Island Swamp', ''],
-  'Steam Vents': ['Land — Island Mountain', ''],
-  'Hallowed Fountain': ['Land — Plains Island', ''],
-  'Godless Shrine': ['Land — Plains Swamp', ''],
-  'Blood Crypt': ['Land — Swamp Mountain', ''],
-  'Sacred Foundry': ['Land — Mountain Plains', ''],
-  'Polluted Delta': ['Land', ''],
-  'Flooded Strand': ['Land', ''],
-  'Scalding Tarn': ['Land', ''],
-  'Bloodstained Mire': ['Land', ''],
-  'Marsh Flats': ['Land', ''],
-  'Arid Mesa': ['Land', ''],
-  'Misty Rainforest': ['Land', ''],
-  'Verdant Catacombs': ['Land', ''],
-  'Command Tower': ['Land', ''],
-  'City of Brass': ['Land', ''],
-  'Mana Confluence': ['Land', ''],
-  'Ancient Tomb': ['Land', ''],
-  'Gemstone Caverns': ['Legendary Land', ''],
-  'Otawara, Soaring City': ['Legendary Land', ''],
-  Island: ['Basic Land — Island', ''],
-  Swamp: ['Basic Land — Swamp', ''],
-  // Fast mana
-  'Sol Ring': ['Artifact', '{1}'],
-  'Mana Vault': ['Artifact', '{1}'],
-  'Chrome Mox': ['Artifact', '{0}'],
-  'Mox Diamond': ['Artifact', '{0}'],
-  'Lotus Petal': ['Artifact', '{0}'],
-  "Lion's Eye Diamond": ['Artifact', '{0}'],
-  'Arcane Signet': ['Artifact', '{2}'],
-  'Fellwar Stone': ['Artifact', '{2}'],
-  'Talisman of Dominance': ['Artifact', '{2}'],
-  'Grim Monolith': ['Artifact', '{2}'],
-  'Dark Ritual': ['Instant', '{B}'],
-  'Cabal Ritual': ['Instant', '{1}{B}'],
-  'Rite of Flame': ['Sorcery', '{R}'],
-  // Tutors
-  'Demonic Tutor': ['Sorcery', '{1}{B}'],
-  'Vampiric Tutor': ['Instant', '{B}'],
-  'Imperial Seal': ['Sorcery', '{B}'],
-  'Mystical Tutor': ['Instant', '{U}'],
-  'Enlightened Tutor': ['Instant', '{W}'],
-  Gamble: ['Sorcery', '{R}'],
-  'Personal Tutor': ['Sorcery', '{U}'],
-  'Merchant Scroll': ['Sorcery', '{1}{U}'],
-  'Grim Tutor': ['Sorcery', '{1}{B}{B}'],
-  'Diabolic Intent': ['Sorcery', '{1}{B}'],
-  'Tainted Pact': ['Instant', '{1}{B}'],
-  'Demonic Consultation': ['Instant', '{B}'],
-  // Win conditions and engines
-  "Thassa's Oracle": ['Creature — Merfolk Wizard', '{U}{U}'],
-  'Underworld Breach': ['Enchantment', '{1}{R}'],
-  'Brain Freeze': ['Instant', '{1}{U}'],
-  Doomsday: ['Instant', '{B}{B}{B}'],
-  'Ad Nauseam': ['Instant', '{3}{B}{B}'],
-  // Card draw
-  'Rhystic Study': ['Enchantment', '{2}{U}'],
-  'Mystic Remora': ['Enchantment', '{U}'],
-  Necropotence: ['Enchantment', '{B}{B}{B}'],
-  'Gitaxian Probe': ['Sorcery', '{U/P}'],
-  Gush: ['Instant', '{4}{U}'],
-  Brainstorm: ['Instant', '{U}'],
-  Ponder: ['Sorcery', '{U}'],
-  Preordain: ['Sorcery', '{U}'],
-  "Night's Whisper": ['Sorcery', '{1}{B}'],
-  'Wheel of Fortune': ['Sorcery', '{2}{R}'],
-  "Jeska's Will": ['Sorcery', '{2}{R}'],
-  // Interaction
-  'Force of Will': ['Instant', '{3}{U}{U}'],
-  'Force of Negation': ['Instant', '{1}{U}{U}'],
-  'Fierce Guardianship': ['Instant', '{2}{U}'],
-  'Deflecting Swat': ['Instant', '{2}{R}'],
-  'Pact of Negation': ['Instant', '{0}'],
-  'Mental Misstep': ['Instant', '{U/P}'],
-  Flusterstorm: ['Instant', '{U}'],
-  'Swan Song': ['Instant', '{U}'],
-  'Mindbreak Trap': ['Instant — Trap', '{2}{U}{U}'],
-  'Spell Pierce': ['Instant', '{U}'],
-  Counterspell: ['Instant', '{U}{U}'],
-  'Mana Drain': ['Instant', '{U}{U}'],
-  "An Offer You Can't Refuse": ['Instant', '{U}'],
-  Pyroblast: ['Instant', '{R}'],
-  'Red Elemental Blast': ['Instant', '{R}'],
-  Silence: ['Instant', '{W}'],
-  'Swords to Plowshares': ['Instant', '{W}'],
-  'Dress Down': ['Enchantment', '{1}{U}'],
-  Snap: ['Instant', '{1}{U}'],
-  Stifle: ['Instant', '{U}'],
-  // Creatures
-  'Ragavan, Nimble Pilferer': ['Legendary Creature — Monkey Pirate', '{R}'],
-  'Dauthi Voidwalker': ['Creature — Dauthi Minion', '{B}{B}'],
-  'Orcish Bowmasters': ['Creature — Orc Archer', '{1}{B}'],
-  'Grand Abolisher': ['Creature — Human Cleric', '{W}{W}'],
-  'Drannith Magistrate': ['Creature — Human Wizard', '{1}{W}'],
-  'Opposition Agent': ['Creature — Human Rogue', '{2}{B}'],
-  'Esper Sentinel': ['Artifact Creature — Human Soldier', '{W}'],
-  Spellseeker: ['Creature — Human Wizard', '{2}{U}'],
-  'Snapcaster Mage': ['Creature — Human Wizard', '{1}{U}'],
-  'Notion Thief': ['Creature — Human Rogue', '{2}{U}{B}'],
-  // The "Broodlord package" (creature-based value engine, tested in v5)
-  'Dark Confidant': ['Creature — Human Wizard', '{1}{B}'],
-  'Professional Face-Breaker': ['Creature — Human Warrior', '{2}{R}'],
-  'Scrawling Crawler': ['Artifact Creature — Phyrexian Construct', '{3}'],
-  // Considering and sideboard
-  'Mnemonic Betrayal': ['Sorcery', '{1}{U}{B}'],
-  'Peer into the Abyss': ['Sorcery', '{4}{B}{B}{B}'],
-  'Beseech the Mirror': ['Sorcery', '{1}{B}{B}{B}'],
-  'Final Fortune': ['Instant', '{R}{R}'],
-  'Borne Upon a Wind': ['Instant', '{1}{U}'],
-  "Praetor's Grasp": ['Sorcery', '{1}{B}{B}'],
-  'Culling the Weak': ['Instant', '{B}'],
-  'Mox Amber': ['Legendary Artifact', '{0}'],
-  "Sevinne's Reclamation": ['Sorcery', '{W}'],
-  'Laboratory Maniac': ['Creature — Human Wizard', '{2}{U}'],
-  Grief: ['Creature — Elemental Incarnation', '{2}{B}{B}'],
-  'Snuff Out': ['Instant', '{3}{B}'],
-  'Cyclonic Rift': ['Instant', '{1}{U}'],
-  Windfall: ['Sorcery', '{2}{U}'],
-  'Sink into Stupor // Soporific Springs': ['Instant // Land', '{1}{U}{U}'],
-  'Toxic Deluge': ['Sorcery', '{2}{B}'],
-  Pyroclasm: ['Sorcery', '{1}{R}'],
-};
 
 const INITIAL_MAINBOARD = [
   // Lands (28)
@@ -256,12 +122,9 @@ Keep any seven with fast mana and a tutor. Ship hands that need three lands to f
 /** A card entry with explicit display data (the builder's object form). */
 type MoxCardEntry = Exclude<MoxCardSpec, string>;
 
-/** One Moxfield card entry: the demo's type line and mana cost for the card. */
+/** One Moxfield card entry: the card with its type line and mana cost (display data for the UI). */
 function card(name: string): MoxCardEntry {
-  const facts = CARDS[name];
-  if (facts === undefined) throw new Error(`Unknown demo card: ${name}`);
-  const [typeLine, manaCost] = facts;
-  return { name, typeLine, manaCost };
+  return cardWithFacts(name);
 }
 
 /** The demo deck as it is "on Moxfield", edited step by step like a real deck. */

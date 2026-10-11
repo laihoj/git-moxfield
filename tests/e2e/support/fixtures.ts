@@ -10,7 +10,8 @@
  * - fails on browser console errors and warnings (React's hydration mismatches among
  *   them) and on uncaught page errors, from every page of its browser contexts, popups
  *   included. A test that provokes an error on purpose declares it with
- *   `consoleErrors.allow(pattern)`.
+ *   `consoleErrors.allow(pattern)`, or with `consoleErrors.allowHttpStatus(…)` for the
+ *   report of an error status (a deliberate 403 or 404).
  *
  * `newContext()` opens another browser context: a second device or browser, sharing no
  * cookies with `context` (signed out until something signs it in). It gets the project's
@@ -32,8 +33,14 @@ import { mockMoxfield } from './mock';
 export { expect };
 
 export interface ConsoleErrors {
-  /** Expects console errors or warnings matching `pattern` in this test (e.g. a deliberate 403). */
+  /** Expects console errors or warnings matching `pattern` in this test. */
   allow(pattern: RegExp): void;
+  /**
+   * Expects the browser's console report of a failed request for each of the HTTP `statuses`
+   * (`Failed to load resource: the server responded with a status of 404 (Not Found)`):
+   * every page or request the test provokes to be refused on purpose.
+   */
+  allowHttpStatus(...statuses: number[]): void;
 }
 
 /**
@@ -92,6 +99,14 @@ class BrowserProblems implements ConsoleErrors {
 
   allow(pattern: RegExp): void {
     this.allowed.push(pattern);
+  }
+
+  allowHttpStatus(...statuses: number[]): void {
+    this.allow(
+      new RegExp(
+        `Failed to load resource: the server responded with a status of (?:${statuses.join('|')})\\b`,
+      ),
+    );
   }
 
   /** Records the problems of every page of `context`, popups included. */

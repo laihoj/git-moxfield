@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSnapshot, baseDeckSpec, type CardSpec, type SnapshotSpec } from '@tests/support/builders';
+import {
+  addCard as add,
+  baseDeckSpec,
+  baseWith,
+  buildSnapshot,
+  moveCardSpec as move,
+  removeCard as remove,
+  type CardSpec,
+  type SnapshotSpec,
+} from '@tests/support/builders';
 
 import { emptySnapshot, findCard, stableStringify } from '../canonical';
 import type { CanonicalPrinting, CanonicalSnapshot } from '../model';
@@ -8,40 +17,10 @@ import type { ZoneId } from '../zones';
 import { changeTouchesZone, changeZones, compareCardChanges, diffSnapshots } from './deck-diff';
 import type { CardChange, DeckDiff, DiffStats, ZoneDiffStats } from './types';
 
-type Zones = Partial<Record<ZoneId, CardSpec[]>>;
-
 const BASE_COMMANDERS = ["Kraum, Ludevic's Opus", 'Tymna the Weaver'];
 
 function base(): CanonicalSnapshot {
   return buildSnapshot(baseDeckSpec());
-}
-
-/** The base deck with an edit applied to (a copy of) its spec. */
-function baseWith(mutate: (zones: Zones, spec: SnapshotSpec) => void): CanonicalSnapshot {
-  const spec = baseDeckSpec();
-  const zones: Zones = { ...spec.zones };
-  mutate(zones, spec);
-  return buildSnapshot({ ...spec, zones });
-}
-
-function specName(card: CardSpec): string {
-  return typeof card === 'string' ? card.replace(/^\d+\s+/, '') : card.name;
-}
-
-function remove(zones: Zones, zone: ZoneId, name: string): void {
-  const before = zones[zone] ?? [];
-  const after = before.filter((card) => specName(card) !== name);
-  if (after.length === before.length) throw new Error(`${name} is not in ${zone}`);
-  zones[zone] = after;
-}
-
-function add(zones: Zones, zone: ZoneId, card: CardSpec): void {
-  zones[zone] = [...(zones[zone] ?? []), card];
-}
-
-function move(zones: Zones, name: string, from: ZoneId, to: ZoneId): void {
-  remove(zones, from, name);
-  add(zones, to, name);
 }
 
 function zoneStats(zone: ZoneId, counts: Partial<Omit<ZoneDiffStats, 'zone'>>): ZoneDiffStats {

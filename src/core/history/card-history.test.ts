@@ -556,25 +556,26 @@ describe('deriveCardHistory', () => {
   });
 });
 
-describe('cardPointsFromSnapshots', () => {
-  function version(sequence: number | null, spec: Parameters<typeof buildSnapshot>[0]): VersionedSnapshot {
-    return {
-      commitId: sequence === null ? null : `commit-${sequence}`,
-      sequence,
-      at: '2026-01-01T00:00:00.000Z',
-      message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
-      snapshot: buildSnapshot(spec),
-    };
-  }
+/** A version of the deck as `cardPointsFromSnapshots` takes it: committed as `sequence`, or the working state when `null`. */
+function versioned(sequence: number | null, spec: Parameters<typeof buildSnapshot>[0]): VersionedSnapshot {
+  return {
+    commitId: sequence === null ? null : `commit-${sequence}`,
+    sequence,
+    at: '2026-01-01T00:00:00.000Z',
+    message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
+    snapshot: buildSnapshot(spec),
+  };
+}
 
+describe('cardPointsFromSnapshots', () => {
   it('extracts the zones holding the card, in canonical zone order', () => {
     const versions = [
-      version(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
-      version(2, {
+      versioned(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
+      versioned(2, {
         zones: { considering: ['Dress Down'], sideboard: ['2 Dress Down'], mainboard: ['Island'] },
       }),
-      version(3, { zones: { mainboard: ['Island'] } }),
-      version(null, { zones: { mainboard: ['3 Dress Down'] } }),
+      versioned(3, { zones: { mainboard: ['Island'] } }),
+      versioned(null, { zones: { mainboard: ['3 Dress Down'] } }),
     ];
 
     expect(cardPointsFromSnapshots(KEY, versions)).toEqual([
@@ -618,10 +619,10 @@ describe('cardPointsFromSnapshots', () => {
 
   it('feeds deriveCardHistory end to end', () => {
     const versions = [
-      version(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
-      version(2, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
-      version(3, { zones: { mainboard: ['Island', 'Dress Down'] } }),
-      version(null, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
+      versioned(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
+      versioned(2, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
+      versioned(3, { zones: { mainboard: ['Island', 'Dress Down'] } }),
+      versioned(null, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
     ];
 
     const h = deriveCardHistory({ key: KEY, name: NAME, points: cardPointsFromSnapshots(KEY, versions) });
@@ -704,15 +705,8 @@ describe('traceCardKeys', () => {
 
 describe('cardPointsFromSnapshots across renames', () => {
   const vial = (name: string) => ({ name, ids: { moxfield: 'vial-id' } });
-  function version(sequence: number | null, zones: SnapshotSpec['zones']): VersionedSnapshot {
-    return {
-      commitId: sequence === null ? null : `commit-${sequence}`,
-      sequence,
-      at: '2026-01-01T00:00:00.000Z',
-      message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
-      snapshot: buildSnapshot({ zones }),
-    };
-  }
+  const version = (sequence: number | null, zones: SnapshotSpec['zones']): VersionedSnapshot =>
+    versioned(sequence, { zones });
 
   const versions = [
     version(1, { mainboard: ['Island', vial('Æther Vial')] }),

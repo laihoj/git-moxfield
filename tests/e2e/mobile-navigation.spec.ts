@@ -4,35 +4,32 @@
  * touch targets, the commit form works with touch and the on-screen keyboard, nothing
  * hides behind the bottom bar, and no page scrolls sideways.
  */
-import type { Locator, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+
+import { cardWithFacts } from '../support/card-facts';
 
 import { signIn } from './support/accounts';
-import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
+import {
+  commitVersion,
+  createBlueFarmCopy,
+  deckNav,
+  expectNoHorizontalOverflow,
+  trackDeck,
+} from './support/decks';
 import { expect, test } from './support/fixtures';
+import { box, expectBottomNavPinned, expectNothingBehindBottomNav } from './support/layout';
 import { mockMoxfield } from './support/mock';
 
 /** Minimum touch target size (docs/ux.md). */
 const MIN_TOUCH_TARGET_PX = 44;
 
-function bottomNav(page: Page): Locator {
-  return page.getByRole('navigation', { name: 'Deck' });
-}
-
-async function box(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
-  const rect = await locator.boundingBox();
-  if (rect === null) throw new Error('The element is not visible');
-  return rect;
-}
-
 /** Asserts the bottom bar: pinned to the bottom of the viewport, four large tabs, `active` current. */
 async function expectBottomNav(page: Page, active: string): Promise<void> {
-  const nav = bottomNav(page);
-  await expect(nav).toBeVisible();
+  await expectBottomNavPinned(page, active);
+  const nav = deckNav(page);
   const viewport = page.viewportSize();
   if (viewport === null) throw new Error('No viewport');
-  const rect = await box(nav);
-  expect(rect.y + rect.height).toBeCloseTo(viewport.height, 0);
-  expect(rect.width).toBeCloseTo(viewport.width, 0);
+  expect((await box(nav)).width).toBeCloseTo(viewport.width, 0);
 
   const tabs = nav.getByRole('link');
   await expect(tabs).toHaveText(['Status', 'History', 'Compare', 'Cards']);
@@ -41,26 +38,14 @@ async function expectBottomNav(page: Page, active: string): Promise<void> {
     expect(tabRect.height).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
     expect(tabRect.width).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
   }
-  await expect(nav.getByRole('link', { name: active })).toHaveAttribute('aria-current', 'page');
   await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
 }
 
 /** Taps a bottom-bar tab and waits for its page. */
 async function openTab(page: Page, tab: string, path: string): Promise<void> {
-  await bottomNav(page).getByRole('link', { name: tab }).tap();
+  await deckNav(page).getByRole('link', { name: tab }).tap();
   await expect(page).toHaveURL(path);
   await expectBottomNav(page, tab);
-}
-
-/** Scrolled to the end, the page's last content (the footer) ends above the bottom bar. */
-async function expectNothingBehindBottomNav(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight);
-  });
-  const footer = await box(page.getByRole('contentinfo'));
-  const nav = await box(bottomNav(page));
-  // Half a pixel of leeway for sub-pixel layout at the device pixel ratio.
-  expect(footer.y + footer.height).toBeLessThanOrEqual(nav.y + 0.5);
 }
 
 /** The checks every deck page gets on a phone. */
@@ -83,7 +68,7 @@ test('the bottom navigation, the commit form and every page work on a phone', as
     await page.goto('/');
     await expectNoHorizontalOverflow(page);
     // Outside a deck there is no deck navigation.
-    await expect(bottomNav(page)).toHaveCount(0);
+    await expect(deckNav(page)).toHaveCount(0);
     await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Setup' }).tap();
     await expect(page).toHaveURL('/setup');
     await expect(page.getByRole('heading', { level: 1, name: 'Connect Moxfield' })).toBeVisible();
@@ -117,7 +102,7 @@ test('the bottom navigation, the commit form and every page work on a phone', as
     // The confirmation toast sits above the bottom bar.
     const toast = page.getByText('Committed v1');
     await expect(toast).toBeVisible();
-    expect((await box(toast)).y).toBeLessThan((await box(bottomNav(page))).y);
+    expect((await box(toast)).y).toBeLessThan((await box(deckNav(page))).y);
     await expectPhoneLayout(page, 'Status');
   });
 
@@ -127,7 +112,7 @@ test('the bottom navigation, the commit form and every page work on a phone', as
       {
         op: 'add',
         zone: 'mainboard',
-        card: { name: 'Final Fortune', typeLine: 'Instant', manaCost: '{R}{R}' },
+        card: cardWithFacts('Final Fortune'),
       },
     ]);
     await page.getByRole('button', { name: 'Refresh' }).tap();

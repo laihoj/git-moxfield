@@ -1,14 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { SerialQueue } from './serial-queue';
+import { deferred } from '@tests/support/async';
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { SerialQueue } from './serial-queue';
 
 describe('SerialQueue', () => {
   it('starts a task only after the previous one settled, in order', async () => {

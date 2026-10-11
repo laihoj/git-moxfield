@@ -18,6 +18,8 @@ import {
   TransactionAbortedError,
 } from '@/server/db/transaction';
 
+import { createItemsTables, insertItem, itemNames } from '@tests/support/libsql';
+
 import { openRemote, rawRemoteClient, wipeRemoteDatabase } from './support';
 
 /** Longer than the server's 5 s write-lock timeout. */
@@ -30,8 +32,7 @@ let handle: LibsqlDatabase;
 beforeAll(async () => {
   await wipeRemoteDatabase();
   handle = await openRemote();
-  await handle.db.run(sql`CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)`);
-  await handle.db.run(sql`CREATE TABLE counter (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`);
+  await createItemsTables(handle.db);
 });
 
 beforeEach(async () => {
@@ -46,13 +47,8 @@ afterAll(() => {
   handle.close();
 });
 
-async function names(db: LibsqlExecutor = handle.db): Promise<string[]> {
-  const rows = await db.all<{ name: string }>(sql`SELECT name FROM items ORDER BY id`);
-  return rows.map((row) => row.name);
-}
-
-function insert(db: LibsqlExecutor, name: string): Promise<unknown> {
-  return db.run(sql`INSERT INTO items (name) VALUES (${name})`);
+function names(db: LibsqlExecutor = handle.db): Promise<string[]> {
+  return itemNames(db);
 }
 
 describe('remote transactions', () => {
@@ -77,8 +73,8 @@ describe('remote transactions', () => {
   it('reject root-database use inside the callback instead of stalling on our own lock', async () => {
     const started = Date.now();
     const error = await runInTransaction(handle.db, async (tx) => {
-      await insert(tx, 'inside');
-      await insert(handle.db, 'outside'); // remotely: waits for our own write lock, then a 5 s steal
+      await insertItem(tx, 'inside');
+      await insertItem(handle.db, 'outside'); // remotely: waits for our own write lock, then a 5 s steal
     }).catch((caught: unknown) => caught);
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(String(error)).toMatch(/Failed query/);
@@ -106,13 +102,13 @@ describe('remote transactions', () => {
         handle.db,
         async (tx) => {
           attempts++;
-          await insert(tx, `attempt ${attempts}`);
+          await insertItem(tx, `attempt ${attempts}`);
           if (attempts === 1) {
             // Another function instance wants to write and waits for our lock.
             otherWrite = other.execute("INSERT INTO items (name) VALUES ('other instance')");
             await sleep(PAST_LOCK_TIMEOUT_MS);
           }
-          await insert(tx, `attempt ${attempts}, second statement`);
+          await insertItem(tx, `attempt ${attempts}, second statement`);
           return attempts;
         },
         { retryDelayMs: 1 },
@@ -131,13 +127,13 @@ describe('remote transactions', () => {
       const failure = await runInTransaction(
         handle.db,
         async (tx) => {
-          await insert(tx, 'before the steal');
+          await insertItem(tx, 'before the steal');
           const otherWrite = other.execute("INSERT INTO items (name) VALUES ('other instance')");
           await sleep(PAST_LOCK_TIMEOUT_MS);
           // A callback that (wrongly) swallows the failure and carries on.
-          const stolen = await insert(tx, 'after the steal').catch((error: unknown) => error);
+          const stolen = await insertItem(tx, 'after the steal').catch((error: unknown) => error);
           expect(classifySqlError(stolen).kind).toBe('transaction-timeout');
-          await insert(tx, 'would run in autocommit').catch(() => undefined);
+          await insertItem(tx, 'would run in autocommit').catch(() => undefined);
           await otherWrite;
         },
         { retries: 0 },
@@ -180,9 +176,9 @@ describe('remote transactions', () => {
       handle.db,
       async (tx) => {
         attempts++;
-        await insert(tx, `attempt ${attempts}`);
+        await insertItem(tx, `attempt ${attempts}`);
         if (attempts === 1) await sleep(PAST_STREAM_EXPIRY_MS);
-        await insert(tx, `attempt ${attempts}, second statement`);
+        await insertItem(tx, `attempt ${attempts}, second statement`);
       },
       { retryDelayMs: 1 },
     );

@@ -16,7 +16,7 @@ import {
 import { hashToken } from '@/server/auth/tokens';
 import type { SessionUser } from '@/server/auth/types';
 import { countRows } from '@tests/support/db';
-import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
+import { createKey, expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
 import {
   blueFarmSpec,
   BLUE_FARM_URL,
@@ -138,10 +138,7 @@ describe('recovery links', () => {
     const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
-    const key = keyOfBookmarklet(
-      (await harness.auth.createBookmarkletKey(member.user, 'Lost laptop', 'http://localhost:3000'))
-        .bookmarklets.popup,
-    );
+    const key = await createKey(harness.auth, member.user, { label: 'Lost laptop' });
     const viaKey = defined(await harness.auth.signInWithKey(key, 'Lost laptop'));
     const deviceLink = tokenOfPath((await harness.auth.createDeviceLink(member.user)).path);
     const recovery = tokenOfPath((await harness.auth.createRecoveryLink(admin.user, member.user.id)).path);
@@ -179,9 +176,7 @@ describe('recovery links', () => {
       const anna = await sharedHistory(harness, 'Anna');
       // A thief with Mikko's stolen laptop key shares the deck, notes included; Mikko had
       // shared it himself too, in the browser his invite signed in (made through no key).
-      const key = keyOfBookmarklet(
-        (await harness.auth.createBookmarkletKey(mikko.owner.user, 'Laptop', APP_URL)).bookmarklets.popup,
-      );
+      const key = await createKey(harness.auth, mikko.owner.user, { appUrl: APP_URL });
       const thief = defined(await harness.auth.signInWithKey(key, 'Thief browser'));
       const links = {
         thiefs: await share(harness, thief.user, mikko.deckId, 'For Mikko'),

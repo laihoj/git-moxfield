@@ -9,6 +9,8 @@ import { drizzle as drizzleRemote } from 'drizzle-orm/libsql/http';
 import { drizzle as drizzleLocal } from 'drizzle-orm/libsql/sqlite3';
 import { describe, expect, it } from 'vitest';
 
+import { rejectionOf } from '@tests/support/errors';
+
 import {
   openRawDatabase,
   probeDatabaseEntryInChildProcess,
@@ -30,12 +32,7 @@ import { classifySqlError } from './sql-errors';
 
 /** The classified message of the error `operation` rejects with. */
 async function failureMessage(operation: Promise<unknown>): Promise<string> {
-  try {
-    await operation;
-  } catch (error) {
-    return classifySqlError(error).message;
-  }
-  throw new Error('expected the operation to fail');
+  return classifySqlError(await rejectionOf(operation)).message;
 }
 
 async function pragma(handle: LibsqlDatabase, name: string): Promise<unknown> {

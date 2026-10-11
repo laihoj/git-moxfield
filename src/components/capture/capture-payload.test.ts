@@ -2,7 +2,13 @@ import { gzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { envelopeJson, gzipPayload, incompressibleJson, UNICODE_SAMPLE } from '@tests/support/capture-codec';
+import {
+  brokenCompressionStream,
+  envelopeJson,
+  gzipPayload,
+  incompressibleJson,
+  UNICODE_SAMPLE,
+} from '@tests/support/capture-codec';
 
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
 import {
@@ -23,11 +29,6 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-/** A `CompressionStream` that cannot be constructed (`new` on a function that throws). */
-function brokenCompressionStream(): never {
-  throw new TypeError('CompressionStream is broken');
-}
 
 describe('prepareCapturePayload', () => {
   it('compresses JSON so that the server decodes the exact text', async () => {

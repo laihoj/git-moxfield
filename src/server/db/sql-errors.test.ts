@@ -3,6 +3,7 @@ import { createClient as createLocalClient } from '@libsql/client/sqlite3';
 import { DrizzleQueryError, eq, sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { rejectionOf } from '@tests/support/errors';
 import { openRawDatabase, scratchFileUrl, seedDeckHistory } from '@tests/support/libsql';
 
 import type { LibsqlDatabase } from './libsql';
@@ -339,15 +340,6 @@ describe('classifySqlError with real local libSQL errors', () => {
     await applyMigrations(database.db);
   });
 
-  async function failure(operation: () => Promise<unknown>): Promise<unknown> {
-    try {
-      await operation();
-    } catch (error) {
-      return error;
-    }
-    throw new Error('expected the operation to fail');
-  }
-
   it('classifies constraint violations of the app schema', async () => {
     const { db } = database;
     const seeded = await seedDeckHistory(db);
@@ -409,7 +401,7 @@ describe('classifySqlError with real local libSQL errors', () => {
       ],
     ];
     for (const [kind, message, operation] of cases) {
-      const error = await failure(operation);
+      const error = await rejectionOf(operation);
       expect(error).toBeInstanceOf(DrizzleQueryError);
       expect(classifySqlError(error), message).toMatchObject({ kind, message, retryable: false });
     }
@@ -418,12 +410,14 @@ describe('classifySqlError with real local libSQL errors', () => {
   it('classifies a CHECK constraint and a failing batch', async () => {
     const { db } = database;
     await db.run(sql`CREATE TABLE checked (n INTEGER CHECK (n > 0))`);
-    expect(classifySqlError(await failure(() => db.run(sql`INSERT INTO checked VALUES (0)`)))).toMatchObject({
+    expect(
+      classifySqlError(await rejectionOf(() => db.run(sql`INSERT INTO checked VALUES (0)`))),
+    ).toMatchObject({
       kind: 'check',
       message: 'CHECK constraint failed: n > 0',
     });
 
-    const batchError = await failure(() =>
+    const batchError = await rejectionOf(() =>
       db.batch([db.run(sql`INSERT INTO checked VALUES (1)`), db.run(sql`INSERT INTO checked VALUES (-1)`)]),
     );
     expect(batchError).toBeInstanceOf(LibsqlBatchError);
@@ -439,7 +433,7 @@ describe('classifySqlError with real local libSQL errors', () => {
     try {
       await handle.db.run(sql`CREATE TABLE t (n INTEGER)`);
       const blocking = await other.transaction('write');
-      const error = await failure(() => handle.db.run(sql`INSERT INTO t VALUES (1)`));
+      const error = await rejectionOf(() => handle.db.run(sql`INSERT INTO t VALUES (1)`));
       await blocking.rollback();
       expect(classifySqlError(error)).toEqual({
         kind: 'busy',

@@ -11,14 +11,15 @@ import {
   type SharedDeckAccess,
   type ShareLinkServices,
 } from '@/server/services';
-import { signUp } from '@tests/support/auth';
+import { signUp, tokenOfPath } from '@tests/support/auth';
 import {
   blueFarmSpec,
   commitReviewed,
   committed,
   defined,
-  moveCard,
   publishAndRefresh,
+  trackDeck,
+  withDressDownCut,
   type ServiceHarness,
 } from '@tests/support/services';
 import type { MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
@@ -42,8 +43,8 @@ export function openShared(harness: ServiceHarness, token: unknown): Promise<Sha
 
 /** The token at the end of a share link URL (`…/s/gmv_…`). */
 export function tokenOfShareUrl(url: string): string {
-  const token = new URL(url).pathname.split('/').at(-1);
-  if (!token?.startsWith('gmv_')) throw new Error(`No share token in ${url}`);
+  const token = tokenOfPath(new URL(url).pathname);
+  if (!token.startsWith('gmv_')) throw new Error(`No share token in ${url}`);
   return token;
 }
 
@@ -56,8 +57,8 @@ export async function publishAndCommit(
   message: string,
   tags?: string[],
 ) {
-  await publishAndRefresh({ ...harness, services }, deckId, spec);
-  return committed(await commitReviewed({ ...harness, services }, deckId, message, tags));
+  await publishAndRefresh(harness, deckId, spec, services);
+  return committed(await commitReviewed(harness, deckId, message, tags, services));
 }
 
 export interface SharedHistory {
@@ -78,22 +79,24 @@ export interface SharedHistory {
 export async function sharedHistory(harness: ServiceHarness, name = 'Mikko'): Promise<SharedHistory> {
   const owner = await signUp(harness.auth, name);
   const services = harness.servicesForWorkspace(owner.user.workspaceId);
-  harness.api.setDeck(blueFarmSpec());
-  const tracked = await services.trackDeck('https://moxfield.com/decks/' + blueFarmSpec().publicId);
-  if (!tracked.ok) throw new Error(tracked.reason);
-  const { deckId } = tracked;
-  committed(await commitReviewed({ ...harness, services }, deckId, 'First list', ['tournament']));
+  const deckId = await trackDeck(harness, blueFarmSpec(), services);
+  committed(await commitReviewed(harness, deckId, 'First list', ['tournament'], services));
   await services.setNote(deckId, 1, 'Top 4 at the local');
-  const v2 = moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering');
+  const v2 = withDressDownCut();
   await publishAndCommit(harness, services, deckId, v2, 'Cut Dress Down');
-  await publishAndRefresh({ ...harness, services }, deckId, {
-    ...v2,
-    version: 3,
-    name: 'Blue Farm (secret tech)',
-    commanders: ['Tymna the Weaver', 'Thrasios, Triton Hero'],
-    mainboard: [...(v2.mainboard ?? []), 'Mystic Remnant'],
-    sideboard: [],
-  });
+  await publishAndRefresh(
+    harness,
+    deckId,
+    {
+      ...v2,
+      version: 3,
+      name: 'Blue Farm (secret tech)',
+      commanders: ['Tymna the Weaver', 'Thrasios, Triton Hero'],
+      mainboard: [...(v2.mainboard ?? []), 'Mystic Remnant'],
+      sideboard: [],
+    },
+    services,
+  );
   const overview = defined(await services.getOverview(deckId));
   if (overview.status !== 'uncommitted') throw new Error('Expected uncommitted changes');
   return { owner, services, shareLinks: shareLinksOf(harness, owner.user), deckId };

@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { createAuthService, SETUP_CODE_SETTING, SYSTEM_ACTOR } from '@/server/auth/service';
 import { SETUP_CODE_PATTERN } from '@/server/auth/setup-code';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
-import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
+import { createKey, expectServiceError, signUp, tokenOfPath } from '@tests/support/auth';
 import { openTestDatabaseHandle } from '@tests/support/db';
 import { scratchDir } from '@tests/support/libsql';
 import {
@@ -25,7 +25,7 @@ describe('user management', () => {
     const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
-    await harness.auth.createBookmarkletKey(member.user, 'Laptop', 'http://localhost:3000');
+    await createKey(harness.auth, member.user);
 
     await expectServiceError(harness.auth.listUsers(member.user), 'forbidden');
     const users = await harness.auth.listUsers(admin.user);
@@ -47,10 +47,7 @@ describe('user management', () => {
     const harness = await createServiceHarness();
     const admin = await signUp(harness.auth, 'Admin', { role: 'admin' });
     const member = await signUp(harness.auth, 'Mikko');
-    const key = keyOfBookmarklet(
-      (await harness.auth.createBookmarkletKey(member.user, 'Laptop', 'http://localhost:3000')).bookmarklets
-        .popup,
-    );
+    const key = await createKey(harness.auth, member.user);
 
     const disabled = await harness.auth.disableUser(admin.user, member.user.id);
     expect(disabled).toMatchObject({

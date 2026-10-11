@@ -5,24 +5,23 @@
  * indexed, and the token never reaches the logs.
  */
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { restoreText } from '@/app/restore-download';
 import type * as DbModule from '@/server/db/client';
 import type * as SourcesModule from '@/server/sources';
+import type { LogEntry } from '@tests/support/recording-logger';
+import { currentHarness, setUpRouteHarness } from '@tests/support/route-harness';
 import { appRequest } from '@tests/support/routes';
-import { createServiceHarness, defined, type ServiceHarness } from '@tests/support/services';
+import { defined, type ServiceHarness } from '@tests/support/services';
 import { APP_URL, sharedHistory, tokenOfShareUrl, type SharedHistory } from '@tests/support/sharing';
 
 const state = vi.hoisted(() => ({
   harness: undefined as ServiceHarness | undefined,
-  logs: [] as { level: string; message: string; context: Record<string, unknown> | undefined }[],
+  logs: [] as LogEntry[],
 }));
 
-function harness(): ServiceHarness {
-  if (state.harness === undefined) throw new Error('No harness for this test');
-  return state.harness;
-}
+const harness = (): ServiceHarness => currentHarness(state);
 
 vi.mock('@/server/db/client', async (importOriginal) => ({
   ...(await importOriginal<typeof DbModule>()),
@@ -32,16 +31,9 @@ vi.mock('@/server/sources', async (importOriginal) => ({
   ...(await importOriginal<typeof SourcesModule>()),
   getDeckSourceRegistry: () => harness().sources,
 }));
-vi.mock('@/server/logger', () => ({
-  createLogger: () => {
-    const log =
-      (level: string) =>
-      (message: string, context?: Record<string, unknown>): void => {
-        state.logs.push({ level, message, context });
-      };
-    return { debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
-  },
-}));
+vi.mock('@/server/logger', async () =>
+  (await import('@tests/support/recording-logger')).recordingLoggerModule(state.logs),
+);
 
 const { GET } = await import('@/app/s/[token]/versions/[sequence]/restore.txt/route');
 
@@ -49,9 +41,9 @@ let history: SharedHistory;
 let token: string;
 let linkId: string;
 
+setUpRouteHarness(state);
+
 beforeEach(async () => {
-  state.harness = await createServiceHarness();
-  state.logs.length = 0;
   history = await sharedHistory(harness());
   const created = await history.shareLinks.createShareLink(
     history.deckId,
@@ -60,10 +52,6 @@ beforeEach(async () => {
   );
   token = tokenOfShareUrl(created.url);
   linkId = created.link.id;
-});
-
-afterEach(() => {
-  state.harness = undefined;
 });
 
 function download(shareToken: string, sequence: string): Promise<Response> {

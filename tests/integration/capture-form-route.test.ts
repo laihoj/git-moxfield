@@ -6,7 +6,7 @@
  * `Origin` header only rules out explicit third-party origins, compressed payloads are
  * decoded within hard limits, and keys never reach logs or pages.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CAPTURE_GZIP_TAG,
@@ -26,21 +26,20 @@ import type { SessionUser, SignIn } from '@/server/auth/types';
 import type * as ConfigModule from '@/server/config';
 import type { AppConfig } from '@/server/config';
 import { CAPTURE_FORM_BODY_LIMIT } from '@/app/api/capture/read-body';
-import { keyOfBookmarklet, signUp } from '@tests/support/auth';
+import { createKey, signUp } from '@tests/support/auth';
 import { gzipPayload } from '@tests/support/capture-codec';
 import { buildCaptureEnvelope } from '@tests/support/moxfield-deck-builder';
+import type { LogEntry } from '@tests/support/recording-logger';
+import { currentHarness, setUpRouteHarness } from '@tests/support/route-harness';
 import { appRequest, setCookies } from '@tests/support/routes';
-import { blueFarmSpec, createServiceHarness, defined, type ServiceHarness } from '@tests/support/services';
+import { blueFarmSpec, defined, type ServiceHarness } from '@tests/support/services';
 
 const state = vi.hoisted(() => ({
   harness: undefined as ServiceHarness | undefined,
-  logs: [] as { level: string; message: string; context: Record<string, unknown> | undefined }[],
+  logs: [] as LogEntry[],
 }));
 
-function harness(): ServiceHarness {
-  if (state.harness === undefined) throw new Error('No harness for this test');
-  return state.harness;
-}
+const harness = (): ServiceHarness => currentHarness(state);
 
 vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
@@ -54,16 +53,9 @@ vi.mock('@/server/config', async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
   getConfig: (): AppConfig => harness().config,
 }));
-vi.mock('@/server/logger', () => ({
-  createLogger: () => {
-    const log =
-      (level: string) =>
-      (message: string, context?: Record<string, unknown>): void => {
-        state.logs.push({ level, message, context });
-      };
-    return { debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
-  },
-}));
+vi.mock('@/server/logger', async () =>
+  (await import('@tests/support/recording-logger')).recordingLoggerModule(state.logs),
+);
 
 const { POST } = await import('@/app/api/capture/form/route');
 
@@ -72,21 +64,11 @@ const MOXFIELD = 'https://moxfield.com';
 let owner: SignIn;
 let key: string;
 
-beforeEach(async () => {
-  state.harness = await createServiceHarness();
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(state.harness.clock.now());
-  state.logs.length = 0;
-  owner = await signUp(harness().auth, 'Mikko');
-  key = keyOfBookmarklet(
-    (await harness().auth.createBookmarkletKey(owner.user, 'Phone', 'http://localhost:3000')).bookmarklets
-      .sameTab,
-  );
-});
+setUpRouteHarness(state, { fakeDate: true });
 
-afterEach(() => {
-  vi.useRealTimers();
-  state.harness = undefined;
+beforeEach(async () => {
+  owner = await signUp(harness().auth, 'Mikko');
+  key = await createKey(harness().auth, owner.user, { label: 'Phone', mode: 'sameTab' });
 });
 
 interface PostOptions {
@@ -156,10 +138,7 @@ describe('POST /api/capture/form', () => {
   it('accepts anyone’s valid key from any page, but only ever into that key owner’s own workspace', async () => {
     // What a forged post can do: Mallory posts her own key from her page with `Origin: null`.
     const mallory = await signUp(harness().auth, 'Mallory');
-    const malloryKey = keyOfBookmarklet(
-      (await harness().auth.createBookmarkletKey(mallory.user, 'Hers', 'http://localhost:3000')).bookmarklets
-        .sameTab,
-    );
+    const malloryKey = await createKey(harness().auth, mallory.user, { label: 'Hers', mode: 'sameTab' });
     const response = await post({
       fields: { [CAPTURE_FORM_TOKEN_FIELD]: malloryKey, [CAPTURE_FORM_FIELD]: '' },
     });
@@ -298,10 +277,7 @@ describe('POST /api/capture/form', () => {
     expect((await post()).status).toBe(403);
 
     const anna = await signUp(harness().auth, 'Anna');
-    key = keyOfBookmarklet(
-      (await harness().auth.createBookmarkletKey(anna.user, 'Phone', 'http://localhost:3000')).bookmarklets
-        .sameTab,
-    );
+    key = await createKey(harness().auth, anna.user, { label: 'Phone', mode: 'sameTab' });
     await harness().repos.users.setDisabled(anna.user.id, true);
     expect((await post()).status).toBe(403);
   });

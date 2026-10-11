@@ -22,7 +22,7 @@ import {
 } from './support/accounts';
 import { createBookmarkletOnSetupPage, runBookmarklet } from './support/bookmarklet';
 import { APP_URL } from './support/constants';
-import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
+import { expectNoHorizontalOverflow, trackAndCommitV1 } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { BLUE_FARM_PUBLIC_ID, mockMoxfield } from './support/mock';
 import { createShareLink, expectLinkNotWorking } from './support/share';
@@ -36,10 +36,11 @@ test('a recovery link lets someone back in after they revoked every bookmarklet'
     displayName: uniqueName('Forgetful'),
     bookmarkletLabel: 'Lost laptop',
   });
-  const deck = await createBlueFarmCopy(testInfo, 'Treasured Farm');
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Before the loss' });
-  await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v1' })).toBeVisible();
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Treasured Farm',
+    message: 'Before the loss',
+    confirm: 'status',
+  });
   let recoveryUrl = '';
 
   await test.step('they revoke their only bookmarklet and sign out', async () => {
@@ -141,16 +142,17 @@ test('a recovery link signs the lost devices out, and an admin can withdraw one 
   consoleErrors,
 }, testInfo) => {
   // The browser reports the refused capture's and the dead share link's status in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 40[34]/);
+  consoleErrors.allowHttpStatus(403, 404);
   const { user, bookmarklets } = await signIn(context, {
     displayName: uniqueName('Robbed'),
     bookmarkletLabel: 'Stolen laptop',
   });
   // Whoever has the stolen laptop shares a deck with themselves, notes included.
-  const deck = await createBlueFarmCopy(testInfo, 'Robbed Farm');
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Before the theft' });
-  await expect(page.getByText('Committed v1')).toBeVisible();
+  const { deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Robbed Farm',
+    message: 'Before the theft',
+    confirm: 'toast',
+  });
   const thiefsLink = await createShareLink(page, deckId, { label: 'Backup', includeNotes: true });
   const thief = await (await newContext()).newPage();
   await thief.goto(thiefsLink.path);

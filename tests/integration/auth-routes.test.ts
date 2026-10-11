@@ -4,26 +4,24 @@
  * and the end-to-end suite's test-only `POST /api/e2e/session` and
  * `GET /api/e2e/setup-code`, against the real auth service on an in-memory database.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type * as AuthModule from '@/server/auth';
 import { HANDOFF_LIFETIME_MS } from '@/server/auth/service';
 import type { SignIn } from '@/server/auth/types';
 import type * as ConfigModule from '@/server/config';
 import { parseConfig, type AppConfig } from '@/server/config';
-import { keyOfBookmarklet, signUp } from '@tests/support/auth';
+import { createKey, keyOfBookmarklet, signUp } from '@tests/support/auth';
+import { currentHarness, setUpRouteHarness } from '@tests/support/route-harness';
 import { appRequest, setCookies } from '@tests/support/routes';
-import { createServiceHarness, defined, type ServiceHarness } from '@tests/support/services';
+import { defined, type ServiceHarness } from '@tests/support/services';
 
 const state = vi.hoisted(() => ({
   harness: undefined as ServiceHarness | undefined,
   config: undefined as AppConfig | undefined,
 }));
 
-function harness(): ServiceHarness {
-  if (state.harness === undefined) throw new Error('No harness for this test');
-  return state.harness;
-}
+const harness = (): ServiceHarness => currentHarness(state);
 
 vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
@@ -38,22 +36,15 @@ const { GET: handoffRoute, POST: handoffConfirmRoute } = await import('@/app/api
 const { POST: e2eSession } = await import('@/app/api/e2e/session/route');
 const { GET: e2eSetupCode } = await import('@/app/api/e2e/setup-code/route');
 
-beforeEach(async () => {
-  state.harness = await createServiceHarness();
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(state.harness.clock.now());
-});
+setUpRouteHarness(state, { fakeDate: true });
 
 afterEach(() => {
-  vi.useRealTimers();
-  state.harness = undefined;
   state.config = undefined;
 });
 
 async function keyOwner(name = 'Mikko'): Promise<{ owner: SignIn; key: string }> {
   const owner = await signUp(harness().auth, name);
-  const created = await harness().auth.createBookmarkletKey(owner.user, 'Phone', 'http://localhost:3000');
-  return { owner, key: keyOfBookmarklet(created.bookmarklets.sameTab) };
+  return { owner, key: await createKey(harness().auth, owner.user, { label: 'Phone', mode: 'sameTab' }) };
 }
 
 const SESSION = '__Host-gm_session';
