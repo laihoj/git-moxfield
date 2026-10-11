@@ -146,7 +146,7 @@ test('revoking a link, or untracking its deck, ends its access at once', async (
     await page.goto(`/decks/${deckId}`);
     await page.getByRole('button', { name: 'Stop tracking' }).click();
     await page
-      .getByRole('group', { name: 'Confirm stop tracking' })
+      .getByRole('group', { name: /^Stop tracking .*\?/ })
       .getByRole('button', { name: 'Stop tracking and delete history' })
       .click();
     await expect(page).toHaveURL('/');
