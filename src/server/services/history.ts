@@ -19,7 +19,7 @@ import 'server-only';
 import { allCards, cardName, cardZoneIndex, emptySnapshot } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
 import { diffSnapshots, renamedKeys } from '@/core/diff';
-import { deriveCardHistory, traceCardKeys } from '@/core/history/card-history';
+import { deriveCardHistory, traceCardPoints } from '@/core/history/card-history';
 import type { CardHistory, CardVersionPoint, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { primerLineDiff } from '@/core/primer/primer-diff';
@@ -348,42 +348,24 @@ export class DeckHistory {
     const inputs = new CardHistoryInputs(this.repos, deckId, lineage, working?.snapshot ?? null);
     const [, keyFacts] = await Promise.all([inputs.prefetch(key), this.repos.catalog.getMany([key])]);
 
+    const versions: Omit<CardVersionPoint, 'zones' | 'renamedFrom'>[] = lineage.map((commit) => ({
+      commitId: commit.id,
+      sequence: commit.sequence,
+      at: commit.createdAt,
+      message: commit.message,
+    }));
+    if (working) {
+      versions.push({ commitId: null, sequence: null, at: working.fetchedAt, message: working.label });
+    }
     const traced = await inputs.run(() => {
-      const points: CardVersionPoint[] = lineage.map((commit) => ({
-        commitId: commit.id,
-        sequence: commit.sequence,
-        at: commit.createdAt,
-        message: commit.message,
-        zones: [],
-      }));
-      if (working) {
-        points.push({
-          commitId: null,
-          sequence: null,
-          at: working.fetchedAt,
-          message: working.label,
-          zones: [],
-        });
-      }
-      const keys = traceCardKeys({
-        key,
-        length: points.length,
-        contains: (pointKey, index) => inputs.zonesAt(pointKey, index).length > 0,
+      const { points, keys } = traceCardPoints(key, {
+        points: versions,
+        zonesAt: (pointKey, index) => inputs.zonesAt(pointKey, index),
         renames: (index) => {
           const [before, after] = inputs.snapshotPair(index - 1, index);
           return renamedKeys(before, after);
         },
-      });
-      points.forEach((point, index) => {
-        const pointKey = keys[index] ?? key;
-        point.zones = inputs.zonesAt(pointKey, index);
-        const previousKey = keys[index - 1];
-        if (previousKey !== undefined && previousKey !== pointKey) {
-          point.renamedFrom = {
-            key: previousKey,
-            name: cardName(inputs.snapshotAt(index - 1), previousKey) ?? previousKey,
-          };
-        }
+        nameAt: (pointKey, index) => cardName(inputs.snapshotAt(index), pointKey) ?? pointKey,
       });
       const newest = points.findLastIndex((point) => point.zones.length > 0);
       if (newest === -1) return null;

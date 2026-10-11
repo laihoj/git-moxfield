@@ -15,28 +15,21 @@ import { formatBytes } from '@/core/text';
 import { DeckSourceError, hasBrand } from '../deck-source';
 
 import {
-  CAPTURE_GZIP_TAG,
-  CAPTURE_TAG_NAMESPACE,
+  decodeUtf8Strict,
   DEFAULT_CAPTURE_CODEC_LIMITS,
   exceedsUtf8Bytes,
+  isBase64Url,
+  parseCapturePayload,
   type CaptureCodecLimits,
+  type CapturePayloadFailure,
 } from './capture-codec-protocol';
 import { NEW_BOOKMARKLET_HINT } from './capture-protocol';
 import { MOXFIELD_SOURCE_ID } from './constants';
 
 const gunzipAsync = promisify(gunzip);
 
-/** The base64url alphabet (RFC 4648 §5), without padding. */
-const BASE64URL = /^[A-Za-z0-9_-]*$/;
-
-/** Why a capture payload was refused. */
-export type CapturePayloadErrorReason =
-  /** Over one of the {@link CaptureCodecLimits}. */
-  | 'too-large'
-  /** Tagged as compressed, but not valid base64url, gzip or UTF-8. */
-  | 'malformed'
-  /** Tagged with an encoding this version does not know. */
-  | 'unsupported-encoding';
+/** Why a capture payload was refused (the failures every decoder of the wire format reports). */
+export type CapturePayloadErrorReason = CapturePayloadFailure;
 
 /**
  * Brand for {@link isCapturePayloadError}, a registered symbol like `DeckSourceError`'s, so
@@ -129,33 +122,31 @@ export async function decodeCapturePayload(
   limits: CaptureCodecLimits = DEFAULT_CAPTURE_CODEC_LIMITS,
 ): Promise<string> {
   assertLimits(limits);
-  const text = input.trim();
-  if (!text.startsWith(CAPTURE_TAG_NAMESPACE)) return decodePlain(input, limits);
-  if (!text.startsWith(CAPTURE_GZIP_TAG)) {
-    throw new CapturePayloadError(
-      'unsupported-encoding',
-      'The deck data is encoded in a format this version of git-moxfield does not support.',
-    );
-  }
-  if (text.length > limits.maxEncodedChars) {
-    throw new CapturePayloadError(
-      'too-large',
-      `The deck data is too large (limit ${formatBytes(limits.maxEncodedChars)} compressed).`,
-    );
+  const parsed = parseCapturePayload(input, limits.maxEncodedChars);
+  if (parsed.kind === 'plain') return decodePlain(input, limits);
+  if (parsed.kind === 'rejected') {
+    throw parsed.reason === 'unsupported-encoding'
+      ? new CapturePayloadError(
+          'unsupported-encoding',
+          'The deck data is encoded in a format this version of git-moxfield does not support.',
+        )
+      : new CapturePayloadError(
+          'too-large',
+          `The deck data is too large (limit ${formatBytes(limits.maxEncodedChars)} compressed).`,
+        );
   }
 
-  const data = text.slice(CAPTURE_GZIP_TAG.length);
+  const { data } = parsed;
   // Buffer's base64 decoder skips characters it does not know and ignores unusable trailing
   // bits, so the alphabet is checked first and the result must encode back to the input.
-  const compressed = BASE64URL.test(data) ? Buffer.from(data, 'base64url') : null;
+  const compressed = isBase64Url(data) ? Buffer.from(data, 'base64url') : null;
   if (compressed?.toString('base64url') !== data) {
     throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid base64url).`);
   }
 
-  const inflated = await inflate(compressed, limits.maxDecodedBytes);
-  try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(inflated);
-  } catch (error) {
-    throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid UTF-8 text).`, { cause: error });
+  const text = decodeUtf8Strict(await inflate(compressed, limits.maxDecodedBytes));
+  if (text === null) {
+    throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid UTF-8 text).`);
   }
+  return text;
 }

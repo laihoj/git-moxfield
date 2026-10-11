@@ -25,7 +25,10 @@ import {
   type CapturePayloadErrorReason,
 } from './capture-codec';
 import {
+  base64UrlToBytes,
+  bytesToBase64Url,
   CAPTURE_GZIP_TAG,
+  decodeUtf8Strict,
   DEFAULT_CAPTURE_CODEC_LIMITS,
   ENCODE_CAPTURE_PAYLOAD_SOURCE,
   encodeCapturePayload,
@@ -35,6 +38,7 @@ import {
   MAX_DECODED_CAPTURE_BYTES,
   MAX_ENCODED_CAPTURE_CHARS,
   MAX_PLAIN_CAPTURE_BYTES,
+  parseCapturePayload,
   type CaptureCodecLimits,
 } from './capture-codec-protocol';
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD, MAX_CAPTURE_BYTES } from './capture-protocol';
@@ -152,6 +156,50 @@ describe('exceedsUtf8Bytes', () => {
   it('answers from the length alone for text that is too long whatever it contains', () => {
     expect(exceedsUtf8Bytes('x'.repeat(11), 10)).toBe(true);
     expect(exceedsUtf8Bytes('x'.repeat(10), 10)).toBe(false);
+  });
+});
+
+describe('the shared steps of reading a payload', () => {
+  it('parseCapturePayload tells plain from compressed, and refuses in the order the decoders do', () => {
+    expect(parseCapturePayload('  {"a":1} ', 100)).toEqual({ kind: 'plain', text: '  {"a":1} ' });
+    expect(parseCapturePayload(` \n${CAPTURE_GZIP_TAG}QUJD `, 100)).toEqual({
+      kind: 'compressed',
+      data: 'QUJD',
+    });
+    expect(parseCapturePayload('gm-other:x', 100)).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported-encoding',
+    });
+    // The tag is checked before the length: an unknown tag is unsupported however long it is.
+    expect(parseCapturePayload(`gm-other:${'x'.repeat(200)}`, 100)).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported-encoding',
+    });
+    const atLimit = `${CAPTURE_GZIP_TAG}${'A'.repeat(100 - CAPTURE_GZIP_TAG.length)}`;
+    expect(parseCapturePayload(atLimit, 100).kind).toBe('compressed');
+    expect(parseCapturePayload(`${atLimit}A`, 100)).toEqual({ kind: 'rejected', reason: 'too-large' });
+  });
+
+  it('bytesToBase64Url and base64UrlToBytes are each other’s inverse, for canonical data only', () => {
+    for (const bytes of [
+      new Uint8Array(),
+      new Uint8Array([0xfb, 0xff, 0xfe]),
+      new Uint8Array(100_000).fill(0xab),
+    ]) {
+      const data = bytesToBase64Url(bytes);
+      expect(data).toBe(Buffer.from(bytes).toString('base64url'));
+      expect(base64UrlToBytes(data)).toEqual(bytes);
+    }
+    for (const invalid of ['A', 'AAAAA', 'AA==', 'a+b/', 'AB', 'ABC', 'AAAA\n']) {
+      expect(base64UrlToBytes(invalid), JSON.stringify(invalid)).toBeNull();
+    }
+    expect(base64UrlToBytes('AA')).toEqual(new Uint8Array([0]));
+  });
+
+  it('decodeUtf8Strict refuses invalid UTF-8 and keeps a byte order mark', () => {
+    expect(decodeUtf8Strict(new Uint8Array([0xff, 0xfe]))).toBeNull();
+    expect(decodeUtf8Strict(Buffer.from('\ufeff{}'))).toBe('\ufeff{}');
+    expect(decodeUtf8Strict(Buffer.from(UNICODE_SAMPLE))).toBe(UNICODE_SAMPLE);
   });
 });
 

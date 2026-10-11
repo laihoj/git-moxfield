@@ -10,13 +10,16 @@
  */
 import { readStreamLimited } from '@/core/streams';
 import {
-  CAPTURE_GZIP_TAG,
+  base64UrlToBytes,
+  decodeUtf8Strict,
   encodeCapturePayload,
   exceedsCapturePayloadLimit,
   isEncodedCapturePayload,
   MAX_DECODED_CAPTURE_BYTES,
   MAX_ENCODED_CAPTURE_CHARS,
   MAX_PLAIN_CAPTURE_BYTES,
+  parseCapturePayload,
+  type CapturePayloadFailure,
 } from '@/integrations/moxfield/capture-codec-protocol';
 import { formatBytes } from '@/lib/format';
 
@@ -64,36 +67,14 @@ export async function prepareCapturePayload(text: string): Promise<PreparedCaptu
   };
 }
 
-/** Why {@link inflateCapturePayload} could not return the JSON text. */
-export type InflateFailure =
-  /** Over the limits of a compressed payload, compressed or inflated. */
-  | 'too-large'
-  /** Not valid base64url, gzip or UTF-8: damaged or cut off, e.g. by copying. */
-  | 'malformed'
-  /** Tagged with an encoding this version does not know. */
-  | 'unsupported-encoding'
-  /** This browser has no `DecompressionStream`. */
-  | 'unavailable';
+/**
+ * Why {@link inflateCapturePayload} could not return the JSON text: a failure of the wire
+ * format (too large, damaged or cut off, e.g. by copying, or an encoding this version does
+ * not know), or that this browser has no `DecompressionStream`.
+ */
+export type InflateFailure = CapturePayloadFailure | 'unavailable';
 
 export type InflatedCapturePayload = { ok: true; text: string } | { ok: false; reason: InflateFailure };
-
-/** The base64url alphabet (RFC 4648 §5), without padding. */
-const BASE64URL = /^[A-Za-z0-9_-]*$/;
-
-function base64UrlToBytes(data: string): Uint8Array<ArrayBuffer> | null {
-  // A single character in the last group carries no whole byte: never valid.
-  if (!BASE64URL.test(data) || data.length % 4 === 1) return null;
-  let binary: string;
-  try {
-    // `atob` accepts unpadded input (forgiving-base64).
-    binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-  } catch {
-    return null;
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
 
 /**
  * Inflates gzip through `decompression`, giving up as soon as the output exceeds
@@ -124,15 +105,14 @@ export async function inflateCapturePayload(
   payload: string,
   maxBytes: number = MAX_DECODED_CAPTURE_BYTES,
 ): Promise<InflatedCapturePayload> {
-  if (!isEncodedCapturePayload(payload)) return { ok: true, text: payload };
-  const text = payload.trim();
-  if (!text.startsWith(CAPTURE_GZIP_TAG)) return { ok: false, reason: 'unsupported-encoding' };
-  if (text.length > MAX_ENCODED_CAPTURE_CHARS) return { ok: false, reason: 'too-large' };
+  const parsed = parseCapturePayload(payload, MAX_ENCODED_CAPTURE_CHARS);
+  if (parsed.kind === 'plain') return { ok: true, text: payload };
+  if (parsed.kind === 'rejected') return { ok: false, reason: parsed.reason };
   const Decompression = (globalThis as { DecompressionStream?: typeof DecompressionStream })
     .DecompressionStream;
   if (Decompression === undefined) return { ok: false, reason: 'unavailable' };
 
-  const compressed = base64UrlToBytes(text.slice(CAPTURE_GZIP_TAG.length));
+  const compressed = base64UrlToBytes(parsed.data);
   if (compressed === null) return { ok: false, reason: 'malformed' };
   let inflated: Uint8Array | null;
   try {
@@ -142,9 +122,6 @@ export async function inflateCapturePayload(
     return { ok: false, reason: 'malformed' };
   }
   if (inflated === null) return { ok: false, reason: 'too-large' };
-  try {
-    return { ok: true, text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(inflated) };
-  } catch {
-    return { ok: false, reason: 'malformed' };
-  }
+  const decoded = decodeUtf8Strict(inflated);
+  return decoded === null ? { ok: false, reason: 'malformed' } : { ok: true, text: decoded };
 }

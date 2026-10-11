@@ -8,6 +8,8 @@ import {
   cardPointsFromSnapshots,
   deriveCardHistory,
   traceCardKeys,
+  traceCardPoints,
+  type CardPointSource,
   type VersionedSnapshot,
 } from './card-history';
 import type { CardHistory, CardHistoryEntry, CardTransition, CardVersionPoint, ZoneQuantity } from './types';
@@ -700,6 +702,82 @@ describe('traceCardKeys', () => {
     const points = [['a'], ['a'], ['a'], ['b'], ['b']];
     expect(trace('a', points, { 3: { a: 'b' } }).renameCalls).toEqual([3]);
     expect(trace('b', points, { 3: { a: 'b' } }).renameCalls).toEqual([3]);
+  });
+});
+
+describe('traceCardPoints', () => {
+  /** A source over point contents (key → quantity in the mainboard), recording what it was asked. */
+  function source(
+    contents: Record<string, number>[],
+    renamesInto: Record<number, Record<string, string>> = {},
+    names: Record<string, string> = {},
+  ) {
+    const calls: string[] = [];
+    const src: CardPointSource = {
+      points: contents.map((_, index) => ({
+        commitId: `commit-${index + 1}`,
+        sequence: index + 1,
+        at: `2026-01-0${index + 1}T00:00:00.000Z`,
+        message: `Version ${index + 1}`,
+      })),
+      zonesAt: (key, index) => {
+        calls.push(`zones:${key}@${index}`);
+        const quantity = contents[index]?.[key];
+        return quantity === undefined ? [] : [{ zone: 'mainboard', quantity }];
+      },
+      renames: (index) => {
+        calls.push(`renames@${index}`);
+        return new Map(Object.entries(renamesInto[index] ?? {}));
+      },
+      nameAt: (key, index) => {
+        calls.push(`name:${key}@${index}`);
+        return names[key] ?? key;
+      },
+    };
+    return { src, calls };
+  }
+
+  it('gives every point its zones under the key the card had there, and the name it had before a rename', () => {
+    const { src } = source([{ old: 1 }, { old: 1 }, { new: 2 }], { 2: { old: 'new' } }, { old: 'Old Name' });
+    const { points, keys } = traceCardPoints('new', src);
+    expect(keys).toEqual(['old', 'old', 'new']);
+    expect(points.map((point) => [point.sequence, point.zones, point.renamedFrom])).toEqual([
+      [1, [{ zone: 'mainboard', quantity: 1 }], undefined],
+      [2, [{ zone: 'mainboard', quantity: 1 }], undefined],
+      [3, [{ zone: 'mainboard', quantity: 2 }], { key: 'old', name: 'Old Name' }],
+    ]);
+    expect(points[0]).toMatchObject({
+      commitId: 'commit-1',
+      at: '2026-01-01T00:00:00.000Z',
+      message: 'Version 1',
+    });
+  });
+
+  it('keeps the requested key at every point of a card the deck never had', () => {
+    const { src } = source([{ x: 1 }, {}]);
+    const { points, keys } = traceCardPoints('missing', src);
+    expect(keys).toEqual(['missing', 'missing']);
+    expect(points.map((point) => point.zones)).toEqual([[], []]);
+  });
+
+  it('asks for renames and names only where the card was renamed', () => {
+    const { src, calls } = source([{ a: 1 }, { a: 1 }, { a: 1 }]);
+    traceCardPoints('a', src);
+    expect(calls.filter((call) => call.startsWith('renames') || call.startsWith('name:'))).toEqual([]);
+  });
+
+  it('lets what a source throws through, so a lazy source can abort the run and start over', () => {
+    const missing = new Error('not loaded yet');
+    const { src } = source([{ a: 1 }, { a: 1 }]);
+    expect(() =>
+      traceCardPoints('a', {
+        ...src,
+        zonesAt: (key, index) => {
+          if (index === 1) throw missing;
+          return src.zonesAt(key, index);
+        },
+      }),
+    ).toThrow(missing);
   });
 });
 

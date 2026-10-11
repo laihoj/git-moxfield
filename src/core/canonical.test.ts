@@ -5,6 +5,8 @@ import {
   allCards,
   cardName,
   cardNames,
+  cardZoneIndex,
+  cardZones,
   CanonicalizationError,
   canonicalizeSnapshot,
   compareStrings,
@@ -909,6 +911,27 @@ describe('card names', () => {
     expect(cardName(snapshot, 'sol ring')).toBe('Sol Ring');
     expect(cardName(snapshot, 'arcane signet')).toBe('Arcane Signet');
     expect(cardName(snapshot, 'mana vault')).toBeUndefined();
+  });
+
+  it('lists the zones that hold a card, with their quantities, in zone order', () => {
+    const twoZones = canonicalizeSnapshot(
+      raw({
+        zones: {
+          sideboard: [card('Sol Ring', 2)],
+          mainboard: [card('Sol Ring', 1), card('Arcane Signet', 1)],
+        },
+      }),
+    );
+    expect(cardZones(twoZones, 'sol ring')).toEqual([
+      { zone: 'mainboard', quantity: 1 },
+      { zone: 'sideboard', quantity: 2 },
+    ]);
+    expect(cardZones(twoZones, 'arcane signet')).toEqual([{ zone: 'mainboard', quantity: 1 }]);
+    expect(cardZones(twoZones, 'mana vault')).toEqual([]);
+    // The same answer as the per-card entry of the index of every card.
+    expect(
+      [...(cardZoneIndex(twoZones).get('sol ring') ?? [])].map(([zone, quantity]) => ({ zone, quantity })),
+    ).toEqual(cardZones(twoZones, 'sol ring'));
   });
 
   it('lists every card once, in zone order, and sorted by key in allCards', () => {

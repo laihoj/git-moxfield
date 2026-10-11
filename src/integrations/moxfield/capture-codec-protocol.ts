@@ -108,6 +108,86 @@ export const DEFAULT_CAPTURE_CODEC_LIMITS: CaptureCodecLimits = Object.freeze({
  */
 const BASE64_CHUNK_BYTES = 3 * 8192;
 
+/** The base64url alphabet (RFC 4648 §5), without padding. */
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
+
+/** Whether `data` consists of base64url characters only (nothing about its length or canonical form). */
+export function isBase64Url(data: string): boolean {
+  return BASE64URL.test(data);
+}
+
+/** Why a capture payload was refused, in the steps every decoder runs the same way. */
+export type CapturePayloadFailure =
+  /** Over one of the {@link CaptureCodecLimits}. */
+  | 'too-large'
+  /** Tagged as compressed, but not valid base64url, gzip or UTF-8. */
+  | 'malformed'
+  /** Tagged with an encoding this version does not know. */
+  | 'unsupported-encoding';
+
+/** What {@link parseCapturePayload} found: how the payload is encoded, or why it is refused. */
+export type ParsedCapturePayload =
+  /** Untagged: the text itself, as received. */
+  | { kind: 'plain'; text: string }
+  /** Tagged as gzip: the base64url `data` after the tag (not yet checked). */
+  | { kind: 'compressed'; data: string }
+  | { kind: 'rejected'; reason: CapturePayloadFailure };
+
+/**
+ * The first steps of reading a capture payload, the same for the server's decoder
+ * (`./capture-codec`) and the paste form's preview, in this order: surrounding whitespace
+ * is ignored; text in the {@link CAPTURE_TAG_NAMESPACE} must carry a known tag; and a
+ * compressed payload must fit `maxEncodedChars` (tag included). Plain payloads are
+ * returned unchanged (their size is the caller's business); the base64url data of a
+ * compressed one still has to be decoded ({@link base64UrlToBytes}, or the server's own).
+ */
+export function parseCapturePayload(input: string, maxEncodedChars: number): ParsedCapturePayload {
+  const text = input.trim();
+  if (!text.startsWith(CAPTURE_TAG_NAMESPACE)) return { kind: 'plain', text: input };
+  if (!text.startsWith(CAPTURE_GZIP_TAG)) return { kind: 'rejected', reason: 'unsupported-encoding' };
+  if (text.length > maxEncodedChars) return { kind: 'rejected', reason: 'too-large' };
+  return { kind: 'compressed', data: text.slice(CAPTURE_GZIP_TAG.length) };
+}
+
+/** `bytes` as base64url without padding (RFC 4648 §5), in {@link BASE64_CHUNK_BYTES} chunks. */
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  let base64 = '';
+  for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
+    base64 += btoa(String.fromCharCode(...bytes.subarray(start, start + BASE64_CHUNK_BYTES)));
+  }
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * The bytes of canonical base64url `data`, or `null` when it is not: characters outside the
+ * alphabet, a length that cannot end a group, or an encoding that is not the canonical one
+ * of its bytes (unused trailing bits set), which `atob` would silently accept. The same
+ * text is accepted here and by the server's decoder.
+ */
+export function base64UrlToBytes(data: string): Uint8Array<ArrayBuffer> | null {
+  // A single character in the last group carries no whole byte: never valid.
+  if (!isBase64Url(data) || data.length % 4 === 1) return null;
+  let binary: string;
+  try {
+    // `atob` accepts unpadded input (forgiving-base64).
+    binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytesToBase64Url(bytes) === data ? bytes : null;
+}
+
+/** `bytes` as UTF-8 text (a byte order mark is kept, as sent), or `null` when they are not valid UTF-8. */
+export function decodeUtf8Strict(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether `payload` is tagged, i.e. not plain JSON (it may still use an encoding this
  * version does not know). Cheap: looks at the first characters only.
@@ -157,12 +237,7 @@ export async function encodeCapturePayload(text: string): Promise<string> {
   const Compression = (globalThis as { CompressionStream?: typeof CompressionStream }).CompressionStream;
   if (Compression === undefined) return text;
   const compressed = new Blob([text]).stream().pipeThrough(new Compression('gzip'));
-  const bytes = new Uint8Array(await new Response(compressed).arrayBuffer());
-  let base64 = '';
-  for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
-    base64 += btoa(String.fromCharCode(...bytes.subarray(start, start + BASE64_CHUNK_BYTES)));
-  }
-  return CAPTURE_GZIP_TAG + base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return CAPTURE_GZIP_TAG + bytesToBase64Url(new Uint8Array(await new Response(compressed).arrayBuffer()));
 }
 
 /**

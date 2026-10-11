@@ -29,7 +29,7 @@
  *
  * Pure and deterministic; input points are never mutated.
  */
-import { cardName, findCard, snapshotZones } from '../canonical';
+import { cardName, cardZones } from '../canonical';
 import { renamedKeys } from '../diff/deck-diff';
 import type { CanonicalSnapshot, CardKey } from '../model';
 import { isPlayedZone, zoneEntries, type ZoneId } from '../zones';
@@ -137,34 +137,69 @@ export function cardPointsFromSnapshots(
   versions: readonly VersionedSnapshot[],
 ): CardVersionPoint[] {
   const snapshotAt = (index: number): CanonicalSnapshot | undefined => versions[index]?.snapshot;
-  const zonesAt = (cardKey: CardKey, index: number): ZoneQuantity[] => {
-    const snapshot = snapshotAt(index);
-    if (!snapshot) return [];
-    return snapshotZones(snapshot).flatMap((zone) => {
-      const card = findCard(snapshot, zone, cardKey);
-      return card ? [{ zone, quantity: card.quantity }] : [];
-    });
-  };
-  const keys = traceCardKeys({
-    key,
-    length: versions.length,
-    contains: (cardKey, index) => zonesAt(cardKey, index).length > 0,
+  return traceCardPoints(key, {
+    points: versions.map(({ commitId, sequence, at, message }) => ({ commitId, sequence, at, message })),
+    zonesAt: (cardKey, index) => {
+      const snapshot = snapshotAt(index);
+      return snapshot ? cardZones(snapshot, cardKey) : [];
+    },
     renames: (index) => {
       const before = snapshotAt(index - 1);
       const after = snapshotAt(index);
       return before && after ? renamedKeys(before, after) : new Map<CardKey, CardKey>();
     },
-  });
+    nameAt: (cardKey, index) => cardNameIn(snapshotAt(index), cardKey),
+  }).points;
+}
 
-  return versions.map(({ commitId, sequence, at, message }, index) => {
+/**
+ * Where the points of one card's history get their data. The callbacks may be lazy
+ * (the server loads inputs on demand and aborts a run that misses one, by throwing, to
+ * run again once they are loaded): {@link traceCardPoints} is pure and synchronous, and
+ * asks for each input only where it needs it.
+ */
+export interface CardPointSource {
+  /** The version metadata of every point, oldest → newest (the working state last). */
+  readonly points: readonly Omit<CardVersionPoint, 'zones' | 'renamedFrom'>[];
+  /** The zones of the card `key` at point `index` (empty when the point does not contain it). */
+  zonesAt: (key: CardKey, index: number) => ZoneQuantity[];
+  /** Renames from the point at `index - 1` to the point at `index` (see {@link TraceCardKeysInput.renames}). */
+  renames: (index: number) => ReadonlyMap<CardKey, CardKey>;
+  /** The display name of the card `key` at point `index`, or the key when the point has no such card. */
+  nameAt: (key: CardKey, index: number) => string;
+}
+
+/**
+ * One card's {@link CardVersionPoint}s, following it across renames (see
+ * {@link traceCardKeys}), and the key it had at every point. A point where the key changed
+ * carries `renamedFrom`: the previous point's key and the name the card had there.
+ */
+export function traceCardPoints(
+  key: CardKey,
+  source: CardPointSource,
+): { points: CardVersionPoint[]; keys: CardKey[] } {
+  const keys = traceCardKeys({
+    key,
+    length: source.points.length,
+    contains: (cardKey, index) => source.zonesAt(cardKey, index).length > 0,
+    renames: source.renames,
+  });
+  const points = source.points.map(({ commitId, sequence, at, message }, index) => {
     const pointKey = keys[index] ?? key;
-    const point: CardVersionPoint = { commitId, sequence, at, message, zones: zonesAt(pointKey, index) };
+    const point: CardVersionPoint = {
+      commitId,
+      sequence,
+      at,
+      message,
+      zones: source.zonesAt(pointKey, index),
+    };
     const previousKey = keys[index - 1];
     if (previousKey !== undefined && previousKey !== pointKey) {
-      point.renamedFrom = { key: previousKey, name: cardNameIn(snapshotAt(index - 1), previousKey) };
+      point.renamedFrom = { key: previousKey, name: source.nameAt(previousKey, index - 1) };
     }
     return point;
   });
+  return { points, keys };
 }
 
 export interface TraceCardKeysInput {

@@ -8,6 +8,7 @@
  */
 import { cardKey, normalizeCardName } from './card-key';
 import { getOrCreate } from './collections';
+import type { ZoneQuantity } from './history/types';
 import type {
   CanonicalCard,
   CanonicalPrinting,
@@ -332,6 +333,18 @@ export function cardZoneIndex(snapshot: CanonicalSnapshot): Map<CardKey, Map<Zon
     }
   }
   return index;
+}
+
+/**
+ * The zones that hold the card `key` and how many copies each holds, in canonical zone
+ * order; empty when the snapshot does not contain it. For one card; {@link cardZoneIndex}
+ * answers this for every card at once.
+ */
+export function cardZones(snapshot: CanonicalSnapshot, key: CardKey): ZoneQuantity[] {
+  return snapshotZones(snapshot).flatMap((zone) => {
+    const card = findCard(snapshot, zone, key);
+    return card ? [{ zone, quantity: card.quantity }] : [];
+  });
 }
 
 /** Finds a card entry by key in a zone. */
