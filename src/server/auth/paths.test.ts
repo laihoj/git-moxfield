@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { invitePath, loginLinkPath, safeRedirectPath, sharedDeckPath, signInPath } from './paths';
+import {
+  handoffConfirmPath,
+  handoffPath,
+  invitePath,
+  loginLinkPath,
+  safeRedirectPath,
+  sharedDeckPath,
+  signInPath,
+} from './paths';
 
 describe('safeRedirectPath', () => {
   it.each([
@@ -59,6 +67,17 @@ describe('account paths', () => {
     expect(signInPath('https://evil.example')).toBe('/signin');
     expect(signInPath('/.//evil.example')).toBe('/signin');
     expect(signInPath('/%2e%2e//evil.example/x')).toBe('/signin');
+  });
+
+  it('builds the hand-off paths with the same safe next target', () => {
+    expect(handoffPath('/decks/abc?captured=1')).toBe('/api/auth/handoff?next=%2Fdecks%2Fabc%3Fcaptured%3D1');
+    expect(handoffPath('/')).toBe('/api/auth/handoff');
+    expect(handoffPath('//evil.example')).toBe('/api/auth/handoff');
+    expect(handoffConfirmPath()).toBe('/signin/bookmarklet');
+    expect(handoffConfirmPath('/capture?mode=paste')).toBe(
+      '/signin/bookmarklet?next=%2Fcapture%3Fmode%3Dpaste',
+    );
+    expect(handoffConfirmPath('https://evil.example')).toBe('/signin/bookmarklet');
   });
 
   it('puts link tokens into the path', () => {

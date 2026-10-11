@@ -155,3 +155,14 @@ export function versionLabel(sequence: number): string {
 export function versionRangeLabel(first: number, last: number): string {
   return first === last ? versionLabel(first) : `${versionLabel(first)}–${versionLabel(last)}`;
 }
+
+/**
+ * A length of time in the largest unit that holds it exactly: `7 days` (from two days
+ * on), `24 hours`, `15 minutes`; otherwise rounded to whole minutes. For lifetimes of links
+ * and the like, which pages state next to the constants that set them.
+ */
+export function formatDuration(ms: number): string {
+  if (ms >= 2 * DAY && ms % DAY === 0) return pluralize(ms / DAY, 'day');
+  if (ms >= HOUR && ms % HOUR === 0) return pluralize(ms / HOUR, 'hour');
+  return pluralize(Math.max(1, Math.round(ms / MINUTE)), 'minute');
+}

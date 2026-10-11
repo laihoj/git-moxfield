@@ -20,3 +20,6 @@ export class ServiceError extends CodedError<ServiceErrorCode> {
 
 /** Type guard, optionally narrowing to one error code. */
 export const isServiceError = codedErrorGuard(ServiceError);
+
+/** The `not-found` message for a deck id that is not one of the user's tracked decks. */
+export const DECK_NOT_TRACKED = 'This deck is not tracked (it may have been removed).';

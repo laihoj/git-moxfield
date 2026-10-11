@@ -5,9 +5,8 @@
 import 'server-only';
 
 import { pluralize } from '@/core/text';
-import { MOXFIELD_SOURCE_ID } from '@/integrations/moxfield/constants';
-import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
+import { parseDeckReference } from '@/server/deck-reference';
 import type { DeckRecord, Repositories, UserRecord } from '@/server/repositories';
 
 import { HistoryImportError } from './errors';
@@ -56,10 +55,6 @@ export function describeSourceWorkspace(workspace: SourceWorkspace): string {
   return `workspace ${workspace.id} (${owner}): ${pluralize(workspace.deckCount, 'deck')}`;
 }
 
-function folded(text: string): string {
-  return text.trim().normalize('NFC').toLowerCase();
-}
-
 /**
  * Chooses the source workspace: `named` (a workspace id, a user id or a user's display
  * name) when given, otherwise the `local` workspace when it holds decks, otherwise the
@@ -95,10 +90,8 @@ export async function chooseSourceWorkspace(
     const wanted = named.trim();
     const byWorkspace = candidates.find((workspace) => workspace.id === wanted);
     if (byWorkspace) return choose(byWorkspace, 'named');
-    const users = await repos.users.list();
-    const byId = users.filter((user) => user.id === wanted);
-    const matches =
-      byId.length > 0 ? byId : users.filter((user) => folded(user.displayName) === folded(wanted));
+    const byId = await repos.users.getById(wanted);
+    const matches = byId ? [byId] : await repos.users.findByDisplayName(wanted);
     if (matches.length > 1) {
       throw new HistoryImportError(
         `Several users of the source are called ${JSON.stringify(named)}; name the workspace by its id. ${listing()}`,
@@ -161,17 +154,14 @@ export async function selectSourceDecks(
   if (filters.length === 0) return decks;
   const chosen = new Map<string, DeckRecord>();
   for (const filter of filters) {
-    const wanted = filter.trim();
-    let deck = decks.find((candidate) => candidate.id === wanted || candidate.externalId === wanted);
-    for (const origin of siteOrigins) {
-      if (deck) break;
-      const parsed = parseMoxfieldDeckInput(wanted, origin);
-      if (parsed.ok) {
-        deck = decks.find(
-          (candidate) =>
-            candidate.source === MOXFIELD_SOURCE_ID && candidate.externalId === parsed.ref.externalId,
-        );
-      }
+    const reference = parseDeckReference(filter, siteOrigins);
+    // Leniently, any source's external id counts as well as a valid Moxfield one.
+    let deck = decks.find(
+      (candidate) => candidate.id === reference?.id || candidate.externalId === reference?.id,
+    );
+    if (!deck && reference?.moxfield) {
+      const { source, externalId } = reference.moxfield;
+      deck = decks.find((candidate) => candidate.source === source && candidate.externalId === externalId);
     }
     if (!deck) {
       throw new HistoryImportError(

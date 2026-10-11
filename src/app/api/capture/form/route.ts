@@ -50,7 +50,7 @@ import { servicesFor } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { handoffCookie } from '@/server/auth/cookie-spec';
 import { appendCookie, requestCookieSecurity } from '@/server/auth/cookies';
-import { HANDOFF_PATH } from '@/server/auth/paths';
+import { handoffPath } from '@/server/auth/paths';
 import type { StartedHandoff } from '@/server/auth/types';
 import { getConfig } from '@/server/config';
 import { createLogger } from '@/server/logger';
@@ -78,7 +78,7 @@ function seeOther(location: string): Response {
  * cookie: once the key is accepted, every answer goes through the hand-off.
  */
 function handOff(request: NextRequest, started: StartedHandoff, target: string): Response {
-  const response = seeOther(`${HANDOFF_PATH}?next=${encodeURIComponent(target)}`);
+  const response = seeOther(handoffPath(target));
   return appendCookie(response, handoffCookie(started.handoff, new Date(), requestCookieSecurity(request)));
 }
 

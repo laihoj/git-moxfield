@@ -139,10 +139,16 @@ export interface IssuedLink {
   expiresAt: string;
 }
 
+/**
+ * Why a one-time link (an invite, a device or recovery link) cannot be used: `invalid`
+ * for a token that names nothing usable, else the link's state.
+ */
+export type OneTimeLinkProblem = 'invalid' | 'expired' | 'used' | 'revoked';
+
 /** What a device or recovery link would do, for the page that asks before signing in. */
 export type LoginLinkStatusDTO =
   | { status: 'valid'; purpose: LoginLinkPurpose; displayName: string; expiresAt: string }
-  | { status: 'invalid' | 'expired' | 'used' | 'revoked' };
+  | { status: OneTimeLinkProblem };
 
 /** A recovery link that can still be used, as listed to admins (never its token). */
 export interface RecoveryLinkDTO {
@@ -206,7 +212,22 @@ export interface HandoffConfirmationDTO {
 export type HandoffOutcome =
   { kind: 'kept'; signIn: SignIn } | { kind: 'confirm'; confirmation: HandoffConfirmationDTO };
 
-export type InviteStatus = 'pending' | 'used' | 'expired' | 'revoked';
+/** What to revoke together with a bookmarklet key (see `AuthService.revokeKey`). */
+export interface RevokeKeyOptions {
+  /** Also revoke the keys made through it. */
+  includeDerived?: boolean;
+  /** Also revoke the share links made in the browsers it signed in. */
+  includeShareLinks?: boolean;
+}
+
+/** An invite to create (see `AuthService.createInvite`). */
+export interface InviteInput {
+  role: UserRole;
+  /** A reminder for admins; never shown to the invitee. */
+  note?: string;
+}
+
+export type InviteStatus = 'pending' | Exclude<OneTimeLinkProblem, 'invalid'>;
 
 /** An invite as listed to admins. */
 export interface InviteDTO {
@@ -230,8 +251,7 @@ export interface IssuedInvite extends IssuedLink {
 
 /** What an invite link would do, for the invite page. */
 export type InviteLinkStatusDTO =
-  | { status: 'valid'; role: UserRole; expiresAt: string }
-  | { status: 'invalid' | 'expired' | 'used' | 'revoked' };
+  { status: 'valid'; role: UserRole; expiresAt: string } | { status: OneTimeLinkProblem };
 
 /** A user as listed to admins. */
 export interface UserDTO {
@@ -258,8 +278,7 @@ export type UserOutcome =
     };
 
 export type AcceptInviteOutcome =
-  | { ok: true; signIn: SignIn }
-  | { ok: false; reason: 'invalid' | 'expired' | 'used' | 'revoked' | 'invalid-name'; message: string };
+  { ok: true; signIn: SignIn } | { ok: false; reason: OneTimeLinkProblem | 'invalid-name'; message: string };
 
 export interface ClaimStatusDTO {
   /** True while the installation has no users: `/claim` with the setup code creates the first admin. */

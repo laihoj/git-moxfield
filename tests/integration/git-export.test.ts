@@ -20,7 +20,7 @@ import {
   defaultExportDirectory,
   exportCommitMessage,
   exportDeckToGit,
-  findDeckForExport,
+  locateDecksForExport,
   gitEnvironment,
   GitExportError,
   labelTagName,
@@ -453,21 +453,19 @@ describe('git export helpers', () => {
   it('finds decks by id, Moxfield id or URL', async () => {
     const { repos } = await createTestRepositories();
     const deck = await createTestDeck(repos, { externalId: 'FindMe0000000000000001' });
-    expect((await findDeckForExport(repos, deck.id))?.id).toBe(deck.id);
-    expect((await findDeckForExport(repos, ' FindMe0000000000000001 '))?.id).toBe(deck.id);
+    const find = async (reference: string, options?: { siteOrigins?: readonly string[] }) =>
+      (await locateDecksForExport(repos, reference, options)).map((found) => found.deckId);
+    expect(await find(deck.id)).toEqual([deck.id]);
+    expect(await find(' FindMe0000000000000001 ')).toEqual([deck.id]);
+    expect(await find('https://moxfield.com/decks/FindMe0000000000000001/primer')).toEqual([deck.id]);
     expect(
-      (await findDeckForExport(repos, 'https://moxfield.com/decks/FindMe0000000000000001/primer'))?.id,
-    ).toBe(deck.id);
-    expect(
-      (
-        await findDeckForExport(repos, 'http://localhost:4010/decks/FindMe0000000000000001', {
-          siteOrigins: ['http://localhost:4010'],
-        })
-      )?.id,
-    ).toBe(deck.id);
-    expect(await findDeckForExport(repos, 'https://example.com/decks/FindMe0000000000000001')).toBeNull();
-    expect(await findDeckForExport(repos, 'Unknown000000000000001')).toBeNull();
-    expect(await findDeckForExport(repos, '')).toBeNull();
+      await find('http://localhost:4010/decks/FindMe0000000000000001', {
+        siteOrigins: ['http://localhost:4010'],
+      }),
+    ).toEqual([deck.id]);
+    expect(await find('https://example.com/decks/FindMe0000000000000001')).toEqual([]);
+    expect(await find('Unknown000000000000001')).toEqual([]);
+    expect(await find('')).toEqual([]);
   });
 
   it('derives the default export directory from the deck id', () => {

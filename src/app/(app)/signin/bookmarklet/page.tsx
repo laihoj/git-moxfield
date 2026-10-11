@@ -6,8 +6,9 @@ import { Alert } from '@/components/ui/alert';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AbsoluteTime, ExpiryTime } from '@/components/ui/relative-time';
+import { formatDuration } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getAuthService } from '@/server/auth';
+import { getAuthService, HANDOFF_LIFETIME_MS } from '@/server/auth';
 import { readHandoffToken, readSessionToken } from '@/server/auth/cookies';
 import { getCurrentUser } from '@/server/auth/current-user';
 import { HANDOFF_PATH, safeRedirectPath } from '@/server/auth/paths';
@@ -103,7 +104,7 @@ function HandoffExpired({ signedIn }: { signedIn: boolean }) {
       icon={<Hourglass aria-hidden="true" />}
       tone="muted"
       title="This sign-in has expired"
-      description="A bookmarklet sign-in waits five minutes to be confirmed. Run your bookmarklet again."
+      description={`A bookmarklet sign-in waits ${formatDuration(HANDOFF_LIFETIME_MS)} to be confirmed. Run your bookmarklet again.`}
     >
       <div className="flex justify-center">
         {signedIn ? (

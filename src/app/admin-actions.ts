@@ -13,7 +13,6 @@
  * are returned once to the admin who asked and never logged.
  */
 import { revalidatePath } from 'next/cache';
-import { headers } from 'next/headers';
 import { z } from 'zod';
 
 import { USER_ROLES } from '@/core/roles';
@@ -22,16 +21,15 @@ import { requireUser } from '@/server/auth/current-user';
 import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
 import { isServiceError } from '@/server/services';
+import { absoluteAppUrl } from '@/core/http-url';
 import { routes } from '@/lib/routes';
 
 import type { AccountActionResult, CreateInviteState, IssuedLinkState } from './action-types';
-import { publicAppUrl } from './request-origin';
+import { actionAppUrl } from './request-origin';
 
 const log = createLogger('admin-actions');
 
 const GENERIC_ERROR = 'Something went wrong. Please try again.';
-const NO_APP_URL =
-  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
 
 /** Sanity bound for ids from the browser; the auth service looks them up. */
 const idSchema = z.string().trim().min(1).max(128);
@@ -68,15 +66,15 @@ export async function createInviteAction(
   const values = { note, role: rawRole };
   const role = roleSchema.safeParse(rawRole);
   if (!role.success) return { status: 'error', message: 'Choose member or admin.', values };
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL, values };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message, values };
   try {
     const auth = await getAuthService();
     const issued = await auth.createInvite(user, { role: role.data, note });
     revalidatePath('/admin');
     return {
       status: 'created',
-      url: new URL(issued.path, appUrl).href,
+      url: absoluteAppUrl(issued.path, app.appUrl),
       expiresAt: issued.expiresAt,
       note: issued.invite.note,
       role: issued.invite.role,
@@ -121,14 +119,14 @@ export async function createRecoveryLinkAction(userId: string): Promise<IssuedLi
   const user = await actor();
   const id = idSchema.safeParse(userId);
   if (!id.success) return { status: 'error', message: 'Invalid request.' };
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message };
   try {
     const auth = await getAuthService();
     const link = await auth.createRecoveryLink(user, id.data);
     // The page lists the recovery links that can still be used.
     revalidatePath('/admin');
-    return { status: 'created', url: new URL(link.path, appUrl).href, expiresAt: link.expiresAt };
+    return { status: 'created', url: absoluteAppUrl(link.path, app.appUrl), expiresAt: link.expiresAt };
   } catch (error) {
     return { status: 'error', message: failureMessage(error, 'createRecoveryLink', user) };
   }

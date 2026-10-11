@@ -15,9 +15,9 @@
 import { relative } from 'node:path';
 
 import { pluralize } from '@/core/text';
-import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { getConfig, type AppConfig } from '@/server/config';
 import { openConfiguredDatabase } from '@/server/db/client';
+import { operatorSiteOrigins } from '@/server/deck-reference';
 import {
   defaultExportDirectory,
   exportDeckToGit,
@@ -68,7 +68,7 @@ async function run(
   try {
     const system = createRepositories(db);
     const matches = await locateDecksForExport(system, reference, {
-      siteOrigins: [...new Set([config.moxfieldSiteOrigin, DEFAULT_MOXFIELD_SITE_ORIGIN])],
+      siteOrigins: operatorSiteOrigins(config),
     });
     const [match, ...others] = matches;
     if (match === undefined) {

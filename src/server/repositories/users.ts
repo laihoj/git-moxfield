@@ -271,6 +271,7 @@ export function requireDisplayName(displayName: string): string {
   return name;
 }
 
-function foldName(name: string): string {
+/** A display name in the form in which names are compared: NFC, trimmed, lower case. */
+export function foldName(name: string): string {
   return name.normalize('NFC').trim().toLowerCase();
 }

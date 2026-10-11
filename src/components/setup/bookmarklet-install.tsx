@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { BookmarkletLink } from '@/components/capture/bookmarklet-link';
 import { CopyButton } from '@/components/ui/copy-button';
+import { isLoopbackHostname } from '@/lib/hosts';
 
 export interface BookmarkletInstallProps {
   /** The popup bookmarklet (`javascript:` URL with the user's key). */
@@ -19,13 +20,7 @@ export interface BookmarkletInstallProps {
 /** Whether `appUrl` only works on the computer that runs git-moxfield. */
 function isLoopback(appUrl: string): boolean {
   try {
-    const { hostname } = new URL(appUrl);
-    return (
-      hostname === 'localhost' ||
-      hostname.endsWith('.localhost') ||
-      hostname === '127.0.0.1' ||
-      hostname === '[::1]'
-    );
+    return isLoopbackHostname(new URL(appUrl).hostname);
   } catch {
     return false;
   }

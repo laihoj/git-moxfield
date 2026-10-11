@@ -30,7 +30,8 @@
  * Values are tokens (base64url), safe in a cookie as they are. They never appear
  * anywhere else: not in URLs, logs or HTML.
  */
-import { hostnameOf } from '@/server/host-guard';
+import { isLoopbackHostname } from '@/lib/hosts';
+import { firstHeaderValue, forwardedHost, hostnameOf, type HeaderSource } from '@/server/host-guard';
 
 const DAY_S = 24 * 60 * 60;
 
@@ -39,10 +40,6 @@ export const SESSION_MAX_AGE_S = 400 * DAY_S;
 
 /** The proxy refreshes the session cookie at most this often (the freshness marker's lifetime). */
 export const SESSION_REFRESH_INTERVAL_S = DAY_S;
-
-interface HeaderSource {
-  get(name: string): string | null;
-}
 
 /** Everything about a cookie this app sets. */
 export interface CookieSpec {
@@ -76,8 +73,6 @@ export function cookieNames(secure: boolean): CookieNames {
   return secure ? SECURE_NAMES : PLAIN_NAMES;
 }
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
-
 /**
  * Whether cookies set in answer to a request get `Secure` (and the `__Host-` names): when
  * the request came over https (`X-Forwarded-Proto`, which Next.js fills in from the
@@ -90,11 +85,11 @@ export function isSecureCookieContext(
   requestHeaders: HeaderSource,
   publicAppUrl: string | undefined,
 ): boolean {
-  if (firstValue(requestHeaders.get('x-forwarded-proto')) === 'https') return true;
-  if (publicAppUrl?.startsWith('https:') === true) return true;
-  const host = firstValue(requestHeaders.get('x-forwarded-host')) ?? firstValue(requestHeaders.get('host'));
+  if (firstHeaderValue(requestHeaders.get('x-forwarded-proto')) === 'https') return true;
+  if (publicAppUrl?.toLowerCase().startsWith('https:') === true) return true;
+  const host = forwardedHost(requestHeaders);
   const hostname = host === null ? null : hostnameOf(host);
-  return hostname !== null && (LOOPBACK_HOSTS.has(hostname) || hostname.endsWith('.localhost'));
+  return hostname !== null && isLoopbackHostname(hostname);
 }
 
 /** The session cookie for `session`, expiring with it (`Max-Age` = its remaining lifetime). */
@@ -128,6 +123,18 @@ export function handoffCookie(
 /** Deletes the hand-off cookie. */
 export function expiredHandoffCookie(secure: boolean): CookieSpec {
   return cookie(cookieNames(secure).handoff, '', 0, secure);
+}
+
+/**
+ * The cookies that make `session` a browser's session: the session cookie, and the
+ * freshness marker (it was set just now, so the proxy need not refresh it).
+ */
+export function establishedSessionCookies(
+  session: { token: string; expiresAt: string },
+  now: Date,
+  secure: boolean,
+): CookieSpec[] {
+  return [sessionCookie(session, now, secure), freshMarkerCookie(secure)];
 }
 
 /** The freshness marker: the session cookie was (re)set just now. */
@@ -190,9 +197,4 @@ function cookie(name: string, value: string, maxAge: number, secure: boolean): C
 function remainingSeconds(expiresAt: string, now: Date): number {
   const ms = Date.parse(expiresAt) - now.getTime();
   return Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
-}
-
-function firstValue(value: string | null): string | null {
-  const first = value?.split(',')[0]?.trim() ?? '';
-  return first === '' ? null : first;
 }

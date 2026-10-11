@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CLAIM_PATH, SHARED_DECK_PATH, SIGN_IN_PATH, sharedDeckPath, signInPath } from '@/server/auth/paths';
+import { SHARED_DECK_PATH, sharedDeckPath } from '@/server/auth/paths';
 
 import {
   deckRoutes,
@@ -20,21 +20,22 @@ describe('capture routes', () => {
   });
 });
 
-/**
- * The server prints and redirects to the account pages (`src/server/auth/paths.ts`); the
- * UI's builders must produce exactly the same paths.
- */
 describe('account routes', () => {
-  it.each([undefined, '/', '/decks/abc', '/decks/abc/versions/3?tab=deck', '/capture?mode=paste'])(
-    'builds the same sign-in path as the server for next=%j',
-    (next) => {
-      expect(routes.signIn(next)).toBe(signInPath(next));
-    },
-  );
+  it('builds the sign-in page, returning to a local path afterwards', () => {
+    expect(routes.signIn()).toBe('/signin');
+    expect(routes.signIn('/')).toBe('/signin');
+    expect(routes.signIn('/decks/abc/versions/3?tab=deck')).toBe(
+      '/signin?next=%2Fdecks%2Fabc%2Fversions%2F3%3Ftab%3Ddeck',
+    );
+  });
 
-  it('uses the server paths of the sign-in and claim pages', () => {
-    expect(routes.signIn()).toBe(SIGN_IN_PATH);
-    expect(routes.claim()).toBe(CLAIM_PATH);
+  it('never returns to another site after signing in', () => {
+    expect(routes.signIn('//evil.example')).toBe('/signin');
+    expect(routes.signIn('https://evil.example')).toBe('/signin');
+  });
+
+  it('builds the claim page', () => {
+    expect(routes.claim()).toBe('/claim');
   });
 
   it('builds the onboarding variants of the Connect Moxfield page', () => {

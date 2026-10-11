@@ -120,6 +120,15 @@ export class DeckHistory {
     private readonly sources: DeckSourceRegistry,
   ) {}
 
+  /**
+   * A primer as portable markdown, converted by the deck's source (the primer itself for a
+   * source that is not registered); `null` for no primer.
+   */
+  primerMarkdown(source: string, primer: string | null): string | null {
+    if (primer === null || primer === '') return null;
+    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
+  }
+
   /** A stored snapshot; its absence means the database is inconsistent. */
   async snapshot(hash: string): Promise<CanonicalSnapshot> {
     return requireRecord(await this.repos.snapshots.get(hash), `Snapshot ${hash}`);
@@ -179,7 +188,11 @@ export class DeckHistory {
   }
 
   /** Version `sequence` of the deck with its diff, primer diff, notes and neighbours, or `null`. */
-  async versionDetail(deckId: string, sequence: number): Promise<VersionHistoryDetail | null> {
+  async versionDetail(
+    deck: Pick<DeckRecord, 'id' | 'source'>,
+    sequence: number,
+  ): Promise<VersionHistoryDetail | null> {
+    const deckId = deck.id;
     const commit = await this.repos.commits.getBySequence(deckId, sequence);
     if (!commit) return null;
     const [parent, lineage, tags, notes] = await Promise.all([
@@ -206,6 +219,7 @@ export class DeckHistory {
     return {
       version: toVersionListItemDTO({ commit, parent, snapshot, diff, tags }),
       snapshot,
+      primerMarkdown: this.primerMarkdown(deck.source, snapshot.primer),
       sourceMetadata: commit.sourceMetadata,
       diff,
       primerDiff,

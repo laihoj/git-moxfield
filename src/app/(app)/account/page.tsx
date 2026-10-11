@@ -13,8 +13,9 @@ import { Badge } from '@/components/ui/badge';
 import { ButtonLink } from '@/components/ui/button';
 import { Card, CardHeader } from '@/components/ui/card';
 import { roleLabel } from '@/lib/accounts';
+import { formatDuration } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getAuthService, MAX_DISPLAY_NAME_LENGTH } from '@/server/auth';
+import { DEVICE_LINK_LIFETIME_MS, getAuthService, MAX_DISPLAY_NAME_LENGTH } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -59,7 +60,7 @@ export default async function AccountPage() {
         <CardHeader
           id="device-link-heading"
           title="Sign in on another device"
-          description="Sign in on your phone or another computer without a bookmarklet: make a one-time link here and scan or open it there. It works once, for 15 minutes."
+          description={`Sign in on your phone or another computer without a bookmarklet: make a one-time link here and scan or open it there. It works once, for ${formatDuration(DEVICE_LINK_LIFETIME_MS)}.`}
         />
         <DeviceLinkPanel />
       </Card>

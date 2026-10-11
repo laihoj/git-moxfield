@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { httpBaseUrl, parseHttpUrl, stripTrailingSlashes } from './http-url';
+import { absoluteAppUrl, httpBaseUrl, parseHttpUrl, stripTrailingSlashes } from './http-url';
 
 describe('parseHttpUrl', () => {
   it.each([
@@ -48,5 +48,20 @@ describe('httpBaseUrl', () => {
       'https://tools.example/git-moxfield',
     );
     expect(httpBaseUrl(new URL('http://localhost:3000/'))).toBe('http://localhost:3000');
+  });
+});
+
+describe('absoluteAppUrl', () => {
+  it('puts a path on the app, keeping the base path', () => {
+    expect(absoluteAppUrl('/s/gmx_token', 'https://decks.example.com')).toBe(
+      'https://decks.example.com/s/gmx_token',
+    );
+    expect(absoluteAppUrl('/invite/abc', 'http://localhost:3000/')).toBe('http://localhost:3000/invite/abc');
+  });
+
+  it('refuses a base that is not an absolute http(s) URL', () => {
+    for (const base of ['', 'not a url', 'ftp://decks.example.com', 'javascript:alert(1)']) {
+      expect(() => absoluteAppUrl('/x', base)).toThrow(TypeError);
+    }
   });
 });

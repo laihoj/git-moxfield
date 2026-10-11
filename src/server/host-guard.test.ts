@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   configuredHostnames,
+  firstHeaderValue,
+  forwardedHost,
   hostnameOf,
   invalidAllowedHosts,
   isAllowedHostname,
   isAllowedRequestHost,
+  splitList,
 } from './host-guard';
 
 function headers(values: Record<string, string>): Headers {
@@ -149,5 +152,37 @@ describe('isAllowedRequestHost', () => {
       ),
     ).toBe(false);
     expect(isAllowedRequestHost(headers({ host, 'x-forwarded-host': '' }), configured)).toBe(false);
+  });
+});
+
+describe('firstHeaderValue', () => {
+  it.each([
+    ['a.example, b.example', 'a.example'],
+    ['  a.example  ', 'a.example'],
+    ['a.example', 'a.example'],
+    [', b.example', null],
+    ['', null],
+    [null, null],
+  ])('takes the first value of %j', (value, expected) => {
+    expect(firstHeaderValue(value)).toBe(expected);
+  });
+});
+
+describe('forwardedHost', () => {
+  it('prefers the first X-Forwarded-Host value over Host', () => {
+    expect(forwardedHost(headers({ host: 'inner:3000', 'x-forwarded-host': 'a.example, b.example' }))).toBe(
+      'a.example',
+    );
+    expect(forwardedHost(headers({ host: 'inner:3000' }))).toBe('inner:3000');
+    expect(forwardedHost(headers({ host: 'inner:3000', 'x-forwarded-host': ' ' }))).toBe('inner:3000');
+    expect(forwardedHost(headers({}))).toBeNull();
+  });
+});
+
+describe('splitList', () => {
+  it('splits a comma-separated setting into its trimmed, non-empty entries', () => {
+    expect(splitList(' a , b,,c ,')).toEqual(['a', 'b', 'c']);
+    expect(splitList('')).toEqual([]);
+    expect(splitList(undefined)).toEqual([]);
   });
 });

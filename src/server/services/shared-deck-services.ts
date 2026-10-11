@@ -100,7 +100,7 @@ class DefaultSharedDeckServices implements SharedDeckServices {
       const deck = await this.deck();
       if (!deck || !isSequence(sequence)) return null;
       const [detail, summary] = await Promise.all([
-        this.history.versionDetail(deck.id, sequence),
+        this.history.versionDetail(deck, sequence),
         this.summarizeAtHead(deck),
       ]);
       if (!detail) return null;
@@ -168,10 +168,6 @@ class DefaultSharedDeckServices implements SharedDeckServices {
 
   async listTags(): Promise<TagCountDTO[]> {
     return (await this.deck()) ? this.history.listTags(this.deckId) : [];
-  }
-
-  primerToMarkdown(source: string, primer: string): string {
-    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
   }
 
   // -------------------------------------------------------------------------

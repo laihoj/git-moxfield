@@ -13,7 +13,6 @@
  * development server's log of server function calls cannot show a URL either.
  */
 import { revalidatePath } from 'next/cache';
-import { headers } from 'next/headers';
 import { z } from 'zod';
 
 import { shareLinkServicesFor } from '@/server/access';
@@ -24,14 +23,12 @@ import { isServiceError } from '@/server/services';
 import { routes } from '@/lib/routes';
 
 import type { AccountActionResult, CreateShareLinkResult } from './action-types';
-import { publicAppUrl } from './request-origin';
+import { actionAppUrl } from './request-origin';
 
 const log = createLogger('share-actions');
 
 const GENERIC_ERROR = 'Something went wrong. Please try again.';
 const INVALID_REQUEST = 'Invalid request.';
-const NO_APP_URL =
-  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
 
 /** Sanity bound for ids from the browser; the services look them up within the user's workspace. */
 const idSchema = z.string().trim().min(1).max(128);
@@ -67,14 +64,14 @@ export async function createShareLinkAction(
   if (!id.success || typeof label !== 'string' || typeof includeNotes !== 'boolean') {
     return { status: 'error', message: INVALID_REQUEST };
   }
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message };
   try {
     const shareLinks = await shareLinkServicesFor(user);
     const created = await shareLinks.createShareLink(
       id.data,
       { label: label.slice(0, MAX_LABEL_INPUT_LENGTH), includeNotes },
-      appUrl,
+      app.appUrl,
     );
     revalidateShareLinks(id.data);
     return { status: 'created', url: created.url, link: created.link };

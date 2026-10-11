@@ -10,6 +10,16 @@ export function parseHttpUrl(value: string): URL | null {
   }
 }
 
+/**
+ * `path` on the app at `appUrl`, as an absolute URL.
+ * @throws {TypeError} when `appUrl` is not an absolute http(s) URL.
+ */
+export function absoluteAppUrl(path: string, appUrl: string): string {
+  const base = parseHttpUrl(appUrl);
+  if (base === null) throw new TypeError('The app URL must be an absolute http(s) URL');
+  return new URL(path, base).href;
+}
+
 /** `text` without its trailing slashes. */
 export function stripTrailingSlashes(text: string): string {
   let end = text.length;

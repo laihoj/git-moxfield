@@ -399,10 +399,11 @@ describe('the shared deck', () => {
     const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
-    const primer = '===panel: Mulligans\nKeep fast mana.\n===endpanel';
-    expect(viewer.primerToMarkdown('moxfield', primer)).toBe(
-      history.services.primerToMarkdown('moxfield', primer),
-    );
+    const owner = defined(await history.services.getVersion(history.deckId, 1));
+    const shared = defined(await viewer.getVersion(1));
+    expect(shared.primerMarkdown).toBe(owner.primerMarkdown);
+    expect(shared.primerMarkdown).toContain('Mulligans');
+    expect(shared.primerMarkdown).not.toContain('===panel');
   });
 
   it('is read-only by type and at runtime: viewing changes no deck data', async () => {

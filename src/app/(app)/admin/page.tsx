@@ -5,9 +5,9 @@ import { InviteList } from '@/components/admin/invite-list';
 import { PeopleList } from '@/components/admin/people-list';
 import { RecoveryLinkList } from '@/components/admin/recovery-link-list';
 import { Card, CardHeader } from '@/components/ui/card';
-import { pluralize } from '@/lib/format';
+import { formatDuration, pluralize } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getAuthService, MAX_INVITE_NOTE_LENGTH } from '@/server/auth';
+import { getAuthService, INVITE_LIFETIME_MS, MAX_INVITE_NOTE_LENGTH } from '@/server/auth';
 import { requireAdmin } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -44,7 +44,7 @@ export default async function AdminPage() {
         <CardHeader
           id="invite-heading"
           title="Invite someone"
-          description="Make a one-time link that creates an account. It works for 7 days."
+          description={`Make a one-time link that creates an account. It works for ${formatDuration(INVITE_LIFETIME_MS)}.`}
         />
         <InviteForm maxNoteLength={MAX_INVITE_NOTE_LENGTH} />
       </Card>

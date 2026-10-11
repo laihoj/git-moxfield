@@ -35,20 +35,15 @@ export default async function VersionPage({
 }: PageProps<'/decks/[deckId]/versions/[sequence]'>) {
   const detail = await loadVersion(params);
   if (detail === null) notFound();
-  const { deck, version, snapshot } = detail;
+  const { deck, version } = detail;
   const tags = await loadTags(deck.id);
   const note = detail.notes.find((entry) => entry.kind === FREE_TEXT_NOTE_KIND) ?? null;
-  const primerMarkdown =
-    snapshot.primer === null || snapshot.primer === ''
-      ? null
-      : (await deckServices(deck.id)).primerToMarkdown(deck.source, snapshot.primer);
 
   return (
     <VersionContent
       scope={{ kind: 'owner', deckId: deck.id }}
       detail={detail}
       tab={parseVersionTab((await searchParams).tab)}
-      primerMarkdown={primerMarkdown}
       hasWorking={deck.working !== null}
       tags={
         <TagEditor

@@ -7,12 +7,9 @@ import { Link } from '@/components/ui/navigation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { VersionListItemDTO } from '@/server/services/types';
 
-/** Versions listed on the deck's first page; History has all of them. */
-export const RECENT_VERSIONS_SHOWN = 5;
-
 export interface RecentVersionsProps {
   scope: DeckScope;
-  /** The newest versions, newest first (only the first {@link RECENT_VERSIONS_SHOWN} are shown). */
+  /** The newest versions, newest first, as many as the overview carries (History has all of them). */
   versions: readonly VersionListItemDTO[];
   versionCount: number;
   headSequence: number | null;
@@ -31,7 +28,6 @@ export function RecentVersions({
   headSequence,
   emptyDescription,
 }: RecentVersionsProps) {
-  const recent = versions.slice(0, RECENT_VERSIONS_SHOWN);
   return (
     <Card as="section" aria-labelledby="recent-heading" flush>
       <div className="flex items-center justify-between gap-3 px-4 pt-3 md:px-5 md:pt-4 md:pb-1">
@@ -48,10 +44,10 @@ export function RecentVersions({
           </Link>
         )}
       </div>
-      {recent.length > 0 ? (
+      {versions.length > 0 ? (
         <VersionTimeline
           scope={scope}
-          versions={recent}
+          versions={versions}
           headSequence={headSequence}
           compact
           className="pb-1"

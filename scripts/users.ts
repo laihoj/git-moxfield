@@ -2,13 +2,13 @@
  * Manages accounts from the command line (ADR 0006), acting as the operator:
  *
  *   pnpm users invite [--admin] [--note <text>] [--base-url <url>]
- *       Prints a one-time invite link (valid 7 days). With --admin the new user is an
+ *       Prints a one-time invite link. With --admin the new user is an
  *       admin; the first admin adopts the history of a pre-account installation, so this
  *       is the command-line alternative to /claim.
  *   pnpm users list
  *       Lists every user with role, status, deck and key counts.
  *   pnpm users recover <user id | display name> [--base-url <url>]
- *       Prints a one-time recovery link (valid 24 hours) for a user who lost every key
+ *       Prints a one-time recovery link for a user who lost every key
  *       and signed-in device.
  *   pnpm users claim-code
  *       Prints the setup code while the installation has no users.
@@ -21,27 +21,34 @@
  */
 import { parseArgs } from 'node:util';
 
-import { parseHttpUrl } from '@/core/http-url';
-import { createAuthService, SYSTEM_ACTOR, type AuthService } from '@/server/auth/service';
+import { absoluteAppUrl } from '@/core/http-url';
+import { formatDuration } from '@/lib/format';
+import {
+  createAuthService,
+  INVITE_LIFETIME_MS,
+  RECOVERY_LINK_LIFETIME_MS,
+  SYSTEM_ACTOR,
+  type AuthService,
+} from '@/server/auth/service';
 import type { UserDTO } from '@/server/auth/types';
 import { getConfig, type AppConfig } from '@/server/config';
 import { openConfiguredDatabase, type Db } from '@/server/db/client';
 import type { LibsqlDatabase } from '@/server/db/libsql';
 import { createLogger, type Logger } from '@/server/logger';
+import { foldName } from '@/server/repositories';
 import { isServiceError } from '@/server/services/errors';
 
+import { DEFAULT_APP_URL, resolveBaseUrl } from './app-url';
 import { describeConfiguredDatabase, describeFailure } from './database';
 import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 
-const DEFAULT_APP_URL = 'http://localhost:3000';
-
 export const USAGE = `Usage: pnpm users <command>
 
 Commands:
-  invite [--admin] [--note <text>] [--base-url <url>]   Print a one-time invite link (7 days)
+  invite [--admin] [--note <text>] [--base-url <url>]   Print a one-time invite link (${formatDuration(INVITE_LIFETIME_MS)})
   list                                                  List users
-  recover <user id | display name> [--base-url <url>]   Print a one-time recovery link (24 hours)
+  recover <user id | display name> [--base-url <url>]   Print a one-time recovery link (${formatDuration(RECOVERY_LINK_LIFETIME_MS)})
   claim-code                                            Print the setup code of an unclaimed installation`;
 
 export interface UsersCommandIO {
@@ -110,14 +117,14 @@ async function invite(auth: AuthService, deps: UsersCommandDependencies, args: s
     note: { type: 'string', default: '' },
     'base-url': { type: 'string' },
   });
-  const baseUrl = resolveBaseUrl(values['base-url'], deps.config);
+  const baseUrl = baseUrlOf(values['base-url'], deps.config);
   const role = values.admin === true ? 'admin' : 'member';
   const note = typeof values.note === 'string' ? values.note : '';
   const issued = await auth.createInvite(SYSTEM_ACTOR, { role, note });
   deps.io.out(
     `Invite for a new ${role}${issued.invite.note === '' ? '' : ` (${issued.invite.note})`}, valid until ${issued.expiresAt}:`,
   );
-  deps.io.out(new URL(issued.path, baseUrl).href);
+  deps.io.out(absoluteAppUrl(issued.path, baseUrl));
   return 0;
 }
 
@@ -140,11 +147,11 @@ async function recover(auth: AuthService, deps: UsersCommandDependencies, args: 
   if (who === undefined || who.trim() === '' || extra.length > 0) {
     throw new UsageError('recover needs exactly one user id or display name.');
   }
-  const baseUrl = resolveBaseUrl(values['base-url'], deps.config);
+  const baseUrl = baseUrlOf(values['base-url'], deps.config);
   const users = await auth.listUsers(SYSTEM_ACTOR);
-  const wanted = who.trim().normalize('NFC').toLowerCase();
+  const wanted = foldName(who);
   const byId = users.filter((user) => user.id === who.trim());
-  const matches = byId.length > 0 ? byId : users.filter((user) => user.displayName.toLowerCase() === wanted);
+  const matches = byId.length > 0 ? byId : users.filter((user) => foldName(user.displayName) === wanted);
   const [user, ...others] = matches;
   if (user === undefined) {
     deps.io.err(`No user matches ${JSON.stringify(who)}. Users:`);
@@ -158,7 +165,7 @@ async function recover(auth: AuthService, deps: UsersCommandDependencies, args: 
   }
   const link = await auth.createRecoveryLink(SYSTEM_ACTOR, user.id);
   deps.io.out(`One-time sign-in link for ${user.displayName}, valid until ${link.expiresAt}:`);
-  deps.io.out(new URL(link.path, baseUrl).href);
+  deps.io.out(absoluteAppUrl(link.path, baseUrl));
   return 0;
 }
 
@@ -183,12 +190,11 @@ function parse(args: string[], options: OptionSpec, allowPositionals = false) {
   }
 }
 
-function resolveBaseUrl(option: unknown, config: AppConfig): string {
-  const value = typeof option === 'string' ? option : (config.PUBLIC_APP_URL ?? DEFAULT_APP_URL);
-  const url = parseHttpUrl(value);
-  if (url === null)
+function baseUrlOf(option: unknown, config: AppConfig): string {
+  const baseUrl = resolveBaseUrl(option, config);
+  if (baseUrl === null)
     throw new UsageError(`--base-url must be an absolute http(s) URL such as ${DEFAULT_APP_URL}.`);
-  return url.href;
+  return baseUrl;
 }
 
 function describeUser(user: UserDTO): string {

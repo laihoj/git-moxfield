@@ -17,6 +17,7 @@ import {
   CAPTURE_PASTE_MODE,
   type CaptureFormError,
 } from '@/integrations/moxfield/capture-protocol';
+import { CLAIM_PATH, signInPath } from '@/server/auth/paths';
 import type { VersionRef } from '@/server/services/contract';
 
 const enc = encodeURIComponent;
@@ -49,12 +50,11 @@ export const routes = {
   capturePaste: (query: { error?: CaptureFormError } = {}): Route =>
     withQuery(CAPTURE_PAGE_PATH, { [CAPTURE_MODE_PARAM]: CAPTURE_PASTE_MODE, error: query.error }),
 
-  // Account pages. The server prints the same paths (`src/server/auth/paths.ts`); a test
-  // keeps the two in step.
+  // Account pages, at the paths the server prints and redirects to (`src/server/auth/paths.ts`).
 
   /** The sign-in page; `next` is a local path to return to afterwards. */
-  signIn: (next?: string): Route => withQuery('/signin', { next: next === '/' ? undefined : next }),
-  claim: (): Route => '/claim',
+  signIn: (next?: string): Route => signInPath(next) as Route,
+  claim: (): Route => CLAIM_PATH,
   account: (): Route => '/account',
   admin: (): Route => '/admin',
 

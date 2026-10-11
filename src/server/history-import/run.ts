@@ -14,6 +14,7 @@ import 'server-only';
 
 import { pluralize } from '@/core/text';
 
+import { countsOf, type ImportCounts } from './counts';
 import { HistoryImportError } from './errors';
 import type { DeckImportPlan, ImportEndpoints, ImportPlan } from './plan';
 
@@ -91,6 +92,15 @@ async function mergeCardFacts(endpoints: ImportEndpoints, cardKeys: readonly str
   await endpoints.target.historyTransfer.mergeCatalog(facts);
 }
 
+/** The kinds of rows `verifyImported` counts, in the order its problems are reported. */
+const COUNT_KINDS = [
+  'versions',
+  'tags',
+  'notes',
+  'observations',
+  'relinks',
+] as const satisfies readonly (keyof ImportCounts)[];
+
 /** Step 4: the target holds exactly the source's history of the deck. */
 async function verifyImported(
   endpoints: ImportEndpoints,
@@ -107,10 +117,10 @@ async function verifyImported(
   if (ids(sourceLineage) !== ids(targetLineage)) problems.push('the version lineage differs');
   if (written === null) problems.push('the deck is missing');
   else {
-    if (written.commits.length !== plan.counts.versions) problems.push('versions are missing');
-    if (written.versionTags.length !== plan.counts.tags) problems.push('tags are missing');
-    if (written.commitNotes.length !== plan.counts.notes) problems.push('notes are missing');
-    if (written.observations.length !== plan.counts.observations) problems.push('observations are missing');
+    const counts = countsOf(written);
+    for (const kind of COUNT_KINDS) {
+      if (counts[kind] !== plan.counts[kind]) problems.push(`${kind} are missing`);
+    }
   }
   if (problems.length > 0) {
     throw new HistoryImportError(

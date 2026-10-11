@@ -39,8 +39,6 @@ export interface VersionContentProps {
   /** The version (an owner's `VersionDetailDTO` fits too: its deck has every field used here). */
   detail: SharedVersionDetailDTO;
   tab: VersionTab;
-  /** The primer as portable markdown; `null` without a primer. */
-  primerMarkdown: string | null;
   /** Whether the deck has a current Moxfield state to compare with (owners only). */
   hasWorking: boolean;
   /** The version's tags: the owner's editor, or a read-only list for viewers. */
@@ -58,16 +56,8 @@ export function parseVersionTab(value: string | string[] | undefined): VersionTa
 }
 
 /** One version of a deck: what changed, the full deck, the primer, tags, notes and details. */
-export function VersionContent({
-  scope,
-  detail,
-  tab,
-  primerMarkdown,
-  hasWorking,
-  tags,
-  notes,
-}: VersionContentProps) {
-  const { deck, version, snapshot, diff, primerDiff, catalog, previous, next } = detail;
+export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: VersionContentProps) {
+  const { deck, version, snapshot, primerMarkdown, diff, primerDiff, catalog, previous, next } = detail;
   const routes = deckRoutes(scope);
   const isLatest = deck.head?.sequence === version.sequence;
   const initial = version.parentSequence === null;

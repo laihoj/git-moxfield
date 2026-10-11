@@ -8,8 +8,14 @@ import { Alert } from '@/components/ui/alert';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ExpiryTime } from '@/components/ui/relative-time';
+import { formatDuration } from '@/lib/format';
 import { routes } from '@/lib/routes';
-import { getAuthService, type LoginLinkStatusDTO } from '@/server/auth';
+import {
+  DEVICE_LINK_LIFETIME_MS,
+  getAuthService,
+  RECOVERY_LINK_LIFETIME_MS,
+  type OneTimeLinkProblem,
+} from '@/server/auth';
 import { getCurrentUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -62,9 +68,7 @@ export default async function LoginLinkPage({ params }: PageProps<'/signin/[toke
   );
 }
 
-type Problem = Exclude<LoginLinkStatusDTO['status'], 'valid'>;
-
-const PROBLEMS: Record<Problem, { icon: ReactNode; title: string; description: string }> = {
+const PROBLEMS: Record<OneTimeLinkProblem, { icon: ReactNode; title: string; description: string }> = {
   invalid: {
     icon: <Unlink aria-hidden="true" />,
     title: 'This sign-in link doesn’t work',
@@ -73,8 +77,7 @@ const PROBLEMS: Record<Problem, { icon: ReactNode; title: string; description: s
   expired: {
     icon: <Hourglass aria-hidden="true" />,
     title: 'This sign-in link has expired',
-    description:
-      'Device links work for 15 minutes, recovery links for a day. Make a new one in Account on a signed-in device, or ask your admin.',
+    description: `Device links work for ${formatDuration(DEVICE_LINK_LIFETIME_MS)}, recovery links for ${formatDuration(RECOVERY_LINK_LIFETIME_MS)}. Make a new one in Account on a signed-in device, or ask your admin.`,
   },
   used: {
     icon: <CircleCheck aria-hidden="true" />,
@@ -90,7 +93,7 @@ const PROBLEMS: Record<Problem, { icon: ReactNode; title: string; description: s
   },
 };
 
-function LinkProblem({ status, signedIn }: { status: Problem; signedIn: boolean }) {
+function LinkProblem({ status, signedIn }: { status: OneTimeLinkProblem; signedIn: boolean }) {
   const { icon, title, description } = PROBLEMS[status];
   return (
     <AuthPanel

@@ -181,34 +181,35 @@ export async function commitAction(_previous: CommitState, formData: FormData): 
 
 const tagInputSchema = z.object({ deckId: deckIdSchema, sequence: sequenceSchema, tag: tagSchema });
 
-/** Adds a tag to a version. Returns the version's tags after the change. */
-export async function addTagAction(deckId: string, sequence: number, tag: string): Promise<TagResult> {
+async function changeTagAction(
+  op: 'add' | 'remove',
+  deckId: string,
+  sequence: number,
+  tag: string,
+): Promise<TagResult> {
   const services = await ownerServices();
   const parsed = tagInputSchema.safeParse({ deckId, sequence, tag });
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? 'Invalid tag.' };
   try {
-    const outcome = await services.addTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
+    const { deckId: id, sequence: version, tag: name } = parsed.data;
+    const outcome =
+      op === 'add' ? await services.addTag(id, version, name) : await services.removeTag(id, version, name);
     if (!outcome.ok) return { ok: false, message: outcome.reason };
     revalidateDeck(parsed.data.deckId);
     return { ok: true, tags: outcome.tags };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'addTag', { deckId, sequence }) };
+    return { ok: false, message: failureMessage(error, `${op}Tag`, { deckId, sequence }) };
   }
+}
+
+/** Adds a tag to a version. Returns the version's tags after the change. */
+export async function addTagAction(deckId: string, sequence: number, tag: string): Promise<TagResult> {
+  return changeTagAction('add', deckId, sequence, tag);
 }
 
 /** Removes a tag from a version. Returns the version's tags after the change. */
 export async function removeTagAction(deckId: string, sequence: number, tag: string): Promise<TagResult> {
-  const services = await ownerServices();
-  const parsed = tagInputSchema.safeParse({ deckId, sequence, tag });
-  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? 'Invalid tag.' };
-  try {
-    const outcome = await services.removeTag(parsed.data.deckId, parsed.data.sequence, parsed.data.tag);
-    if (!outcome.ok) return { ok: false, message: outcome.reason };
-    revalidateDeck(parsed.data.deckId);
-    return { ok: true, tags: outcome.tags };
-  } catch (error) {
-    return { ok: false, message: failureMessage(error, 'removeTag', { deckId, sequence }) };
-  }
+  return changeTagAction('remove', deckId, sequence, tag);
 }
 
 const noteSchema = z.object({

@@ -48,19 +48,14 @@ export default async function SharedVersionPage({
   const found = await loadVersion(token, sequence);
   if (found === null) return <SharedPageMissing access={await loadSharedDeck(token)} />;
   const { access, detail } = found;
-  const { deck, version, snapshot } = detail;
+  const { version } = detail;
   const note = detail.notes.find((entry) => entry.kind === FREE_TEXT_NOTE_KIND) ?? null;
-  const primerMarkdown =
-    snapshot.primer === null || snapshot.primer === ''
-      ? null
-      : access.services.primerToMarkdown(deck.source, snapshot.primer);
 
   return (
     <VersionContent
       scope={sharedDeckRoutes(token).scope}
       detail={detail}
       tab={parseVersionTab((await searchParams).tab)}
-      primerMarkdown={primerMarkdown}
       hasWorking={false}
       tags={<VersionTags tags={version.tags} />}
       notes={

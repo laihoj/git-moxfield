@@ -24,6 +24,25 @@ describe('parseConfig — ALLOWED_HOSTS', () => {
   });
 });
 
+describe('parseConfig — CAPTURE_ALLOWED_ORIGINS', () => {
+  it('defaults to the origin of the Moxfield site', () => {
+    expect(parseConfig({}).captureAllowedOrigins).toEqual(['https://moxfield.com']);
+  });
+
+  it('takes the origins of a comma-separated list', () => {
+    const config = parseConfig({
+      CAPTURE_ALLOWED_ORIGINS: 'https://moxfield.com/decks, http://localhost:4010 ,',
+    });
+    expect(config.captureAllowedOrigins).toEqual(['https://moxfield.com', 'http://localhost:4010']);
+  });
+
+  it('refuses an entry that is not a URL, as a configuration error', () => {
+    expect(() => parseConfig({ CAPTURE_ALLOWED_ORIGINS: 'https://moxfield.com, moxfield.org' })).toThrow(
+      /CAPTURE_ALLOWED_ORIGINS: expected origins such as https:\/\/moxfield\.com, got "moxfield\.org"/,
+    );
+  });
+});
+
 describe('parseConfig — base URLs', () => {
   it('strips trailing slashes once, from the app URL and the Moxfield API base URL', () => {
     const config = parseConfig({

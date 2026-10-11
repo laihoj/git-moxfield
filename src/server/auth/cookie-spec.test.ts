@@ -8,6 +8,7 @@ import {
   freshMarkerCookie,
   handoffCookie,
   isCookieAmbiguous,
+  establishedSessionCookies,
   isSecureCookieContext,
   readCookie,
   refreshedSessionCookie,
@@ -38,6 +39,11 @@ describe('isSecureCookieContext', () => {
     ['http://[::1]', { host: '[::1]:3000', 'x-forwarded-proto': 'http' }, undefined],
     ['http://app.localhost', { host: 'app.localhost:3000', 'x-forwarded-proto': 'http' }, undefined],
     ['a forwarded localhost host', { host: 'proxy', 'x-forwarded-host': 'localhost:3100' }, undefined],
+    [
+      'an https PUBLIC_APP_URL in capitals',
+      { host: 'decks.example.com', 'x-forwarded-proto': 'http' },
+      'HTTPS://decks.example.com',
+    ],
   ])('uses Secure for %s', (_case, values, publicAppUrl) => {
     expect(isSecureCookieContext(headers(values), publicAppUrl)).toBe(true);
   });
@@ -180,5 +186,17 @@ describe('readCookie', () => {
   it('never reads the unprefixed name for the __Host- one or the other way round', () => {
     expect(readCookie(`gm_session=${TOKEN}`, '__Host-gm_session')).toBeNull();
     expect(readCookie(`__Host-gm_session=${TOKEN}`, 'gm_session')).toBeNull();
+  });
+});
+
+describe('establishedSessionCookies', () => {
+  it('are the session cookie and the freshness marker, set together', () => {
+    const session = { token: TOKEN, expiresAt: IN_400_DAYS };
+    for (const secure of [true, false]) {
+      expect(establishedSessionCookies(session, NOW, secure)).toEqual([
+        sessionCookie(session, NOW, secure),
+        freshMarkerCookie(secure),
+      ]);
+    }
   });
 });

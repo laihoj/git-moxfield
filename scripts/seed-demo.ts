@@ -26,6 +26,7 @@
  */
 import { parseArgs } from 'node:util';
 
+import { absoluteAppUrl } from '@/core/http-url';
 import type { CapturedIngestMethod } from '@/integrations/deck-source';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
@@ -43,6 +44,7 @@ import {
   type MoxDeckSpec,
 } from '@tests/support/moxfield-deck-builder';
 
+import { resolveBaseUrl } from './app-url';
 import { describeConfiguredDatabase } from './database';
 import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
@@ -52,9 +54,6 @@ export const DEMO_PUBLIC_ID = 'gitMoxfieldDemoBlueFarm';
 
 /** Display name of the demo user who owns the demo deck. */
 export const DEMO_USER_NAME = 'Demo';
-
-/** Base URL printed in the sign-in link when `PUBLIC_APP_URL` is not set. */
-const DEFAULT_APP_URL = 'http://localhost:3000';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -607,11 +606,12 @@ async function main(): Promise<number> {
     // Signs a browser in as the demo user (the real clock: the link must be valid now).
     const auth = createAuthService({ db, config: appConfig, logger });
     const link = await auth.createRecoveryLink(SYSTEM_ACTOR, demoUser.id);
-    const appUrl = appConfig.PUBLIC_APP_URL ?? DEFAULT_APP_URL;
+    const appUrl = resolveBaseUrl(undefined, appConfig);
+    if (appUrl === null) throw new Error('PUBLIC_APP_URL is not an absolute http(s) URL.');
     console.log(
       `\nSign in as the demo user "${demoUser.displayName}" with this one-time link (valid until ${link.expiresAt}):`,
     );
-    console.log(new URL(link.path, appUrl).href);
+    console.log(absoluteAppUrl(link.path, appUrl));
     return 0;
   } finally {
     database.close();

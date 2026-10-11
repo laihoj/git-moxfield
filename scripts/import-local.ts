@@ -30,11 +30,11 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { pluralize } from '@/core/text';
-import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { formatBytes } from '@/lib/format';
 import { getConfig, type AppConfig } from '@/server/config';
 import { openConfiguredDatabase, type Db } from '@/server/db/client';
 import { databaseFileOf, type LibsqlDatabase } from '@/server/db/libsql';
+import { describeDeckRef, operatorSiteOrigins } from '@/server/deck-reference';
 import {
   chooseSourceWorkspace,
   describeSourceWorkspace,
@@ -46,7 +46,6 @@ import {
   selectSourceDecks,
   type DeckImportPlan,
   type ImportCounts,
-  type ImportDeck,
   type SourceCopy,
   type SourceWorkspaceChoice,
 } from '@/server/history-import';
@@ -145,18 +144,14 @@ function describeCounts(counts: ImportCounts): string {
   return parts.join(', ');
 }
 
-function describeDeck(deck: ImportDeck): string {
-  return `“${deck.name}” (${deck.source}:${deck.externalId})`;
-}
-
 function describePlan(plan: DeckImportPlan): string {
   switch (plan.action) {
     case 'import':
-      return `  import    ${describeDeck(plan.deck)}: ${describeCounts(plan.counts)}`;
+      return `  import    ${describeDeckRef(plan.deck)}: ${describeCounts(plan.counts)}`;
     case 'skip':
-      return `  skip      ${describeDeck(plan.deck)}: already imported (${pluralize(plan.counts.versions, 'version')})`;
+      return `  skip      ${describeDeckRef(plan.deck)}: already imported (${pluralize(plan.counts.versions, 'version')})`;
     case 'conflict':
-      return `  CONFLICT  ${describeDeck(plan.deck)}: ${plan.message}`;
+      return `  CONFLICT  ${describeDeckRef(plan.deck)}: ${plan.message}`;
   }
 }
 
@@ -192,9 +187,7 @@ async function importHistory(
     io.out(`  Not read: ${describeSourceWorkspace(other)} (import it with --from-workspace ${other.id})`);
   }
   const sourceRepos = createRepositories(source.database.db, { workspaceId: choice.workspace.id });
-  const decks = await selectSourceDecks(sourceRepos, args.decks, [
-    ...new Set([config.moxfieldSiteOrigin, DEFAULT_MOXFIELD_SITE_ORIGIN]),
-  ]);
+  const decks = await selectSourceDecks(sourceRepos, args.decks, operatorSiteOrigins(config));
 
   const user = await findTargetUser(createRepositories(target.db), args.toUser);
   io.out(
@@ -253,7 +246,7 @@ async function importHistory(
     onProgress: (event) => {
       if (event.kind === 'copying') {
         io.out(
-          `Importing ${describeDeck(event.deck.deck)}: copying ${pluralize(event.snapshots, 'snapshot')} and ` +
+          `Importing ${describeDeckRef(event.deck.deck)}: copying ${pluralize(event.snapshots, 'snapshot')} and ` +
             `${pluralize(event.rawBlobs, 'raw payload')} (${formatBytes(event.bytes)})…`,
         );
       } else {

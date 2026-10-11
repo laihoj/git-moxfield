@@ -70,7 +70,9 @@ import type { DeckSourceRegistry } from '@/server/sources';
 
 import { mapConcurrently } from './concurrency';
 import type {
+  CommitInput,
   DeckServices,
+  IngestCaptureInput,
   RelinkDeckOutcome,
   SetupInfoDTO,
   TagOutcome,
@@ -78,7 +80,7 @@ import type {
   VersionRef,
 } from './contract';
 import { deckStatus, diffCardKeys, toCommitNoteDTO, toObservationDTO, toVersionRefDTO } from './dto';
-import { ServiceError } from './errors';
+import { DECK_NOT_TRACKED, ServiceError } from './errors';
 import { DeckHistory, type ResolvedSide } from './history';
 import { unlessDeckVanished } from './invariants';
 import type { KeyedMutex } from './mutex';
@@ -107,8 +109,11 @@ import type {
 /** Note kind of the free-text note managed by {@link DeckServices.setNote}; data is `{ text }`. */
 export const FREE_TEXT_NOTE_KIND = 'note';
 
-/** Number of versions in {@link DeckOverviewDTO.recentVersions}. */
-export const RECENT_VERSION_COUNT = 8;
+/**
+ * Number of versions in {@link DeckOverviewDTO.recentVersions}: the Recent versions card
+ * lists them all, and the compare page's defaults need the newest two.
+ */
+export const RECENT_VERSION_COUNT = 5;
 
 /**
  * The source that browser captures and manual pastes come from. The capture protocol
@@ -147,6 +152,20 @@ interface IngestRelink {
 type RelinkFailure = Extract<RelinkDeckOutcome, { ok: false }>;
 
 type FetchResult = ({ ok: true } & Ingested) | { ok: false; error: FetchErrorDTO };
+
+/**
+ * Points `deck` at another source deck inside `tx`. Its working state is the old source
+ * deck's: it must not be committed as the new one, so the observations go too (the
+ * caller then records the new deck's state).
+ */
+async function relinkInTx(tx: Repositories, deck: DeckRecord, to: IngestRelink): Promise<void> {
+  await tx.decks.relink(deck.id, {
+    expectedExternalId: deck.externalId,
+    externalId: to.externalId,
+    url: to.url,
+  });
+  await tx.observations.pruneForDeck(deck.id, []);
+}
 
 /**
  * A stored deck state: a snapshot and its content hash (what an observation or a commit
@@ -221,8 +240,7 @@ class DefaultDeckServices implements DeckServices {
     });
     if (!created) return { ok: true, deckId: deck.id, alreadyTracked: true, fetch: null };
 
-    const fetch =
-      source.serverFetchStatus().state === 'available' ? await this.refresh(deck.id, 'manual') : null;
+    const fetch = await this.refreshIfAvailable(source, deck.id);
     return { ok: true, deckId: deck.id, alreadyTracked: false, fetch };
   }
 
@@ -251,11 +269,7 @@ class DefaultDeckServices implements DeckServices {
       const refused = await this.relinkRefusal(deck, source, externalId);
       if (refused) return refused;
       try {
-        await this.repos.transaction(async (tx) => {
-          await tx.decks.relink(deck.id, { expectedExternalId: deck.externalId, externalId, url });
-          // The working state is the old source deck's: it must not be committed as this one.
-          await tx.observations.pruneForDeck(deck.id, []);
-        });
+        await this.repos.transaction((tx) => relinkInTx(tx, deck, { externalId, url }));
       } catch (error) {
         // Another request (or function instance) got there first.
         if (!isRepositoryError(error, 'conflict')) throw error;
@@ -275,8 +289,7 @@ class DefaultDeckServices implements DeckServices {
     });
     if (failure) return failure;
 
-    const fetch =
-      source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+    const fetch = await this.refreshIfAvailable(source, deckId);
     return { ok: true, externalId, url, fetch };
   }
 
@@ -355,12 +368,7 @@ class DefaultDeckServices implements DeckServices {
     });
   }
 
-  async ingestCapture(input: {
-    data: unknown;
-    method: CapturedIngestMethod;
-    track: boolean;
-    relinkDeckId?: string;
-  }): Promise<CaptureOutcome> {
+  async ingestCapture(input: IngestCaptureInput): Promise<CaptureOutcome> {
     const source = this.sources.require(CAPTURE_SOURCE_ID);
     // Both throw DeckSourceError('schema') for unusable data; callers answer 400.
     const raw = source.parseCapturedPayload(input.data);
@@ -411,6 +419,11 @@ class DefaultDeckServices implements DeckServices {
    * captured source deck (unless it follows it already) and ingests the capture as its
    * working state, in one transaction (see {@link ingest}).
    */
+  /** A first fetch of `deckId`, when its source can be fetched from the server; `null` otherwise. */
+  private async refreshIfAvailable(source: DeckSource, deckId: string): Promise<FetchOutcome | null> {
+    return source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+  }
+
   private async ingestContinuing(
     deckId: string,
     source: DeckSource,
@@ -500,15 +513,7 @@ class DefaultDeckServices implements DeckServices {
   // Commit
   // -------------------------------------------------------------------------
 
-  async commit(
-    deckId: string,
-    input: {
-      message: string;
-      expectedObservationId: string;
-      expectedHeadCommitId: string | null;
-      tags?: string[];
-    },
-  ): Promise<CommitOutcome> {
+  async commit(deckId: string, input: CommitInput): Promise<CommitOutcome> {
     const message = normalizeMultilineText(input.message);
     const length = codePointLength(message);
     if (length === 0) return commitFailure('invalid-message', 'Write a commit message.');
@@ -713,7 +718,7 @@ class DefaultDeckServices implements DeckServices {
       const deck = await this.repos.decks.getById(deckId);
       if (!deck) return null;
       const [detail, state] = await Promise.all([
-        this.history.versionDetail(deckId, sequence),
+        this.history.versionDetail(deck, sequence),
         this.loadState(deck),
       ]);
       if (!detail) return null;
@@ -806,21 +811,27 @@ class DefaultDeckServices implements DeckServices {
     });
   }
 
-  async addTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
-    const commit = await this.repos.commits.getBySequence(deckId, sequence);
-    if (!commit) return { ok: false, reason: versionNotFound(sequence) };
-    const validation = normalizeVersionTag(tag);
-    if (!validation.ok) return { ok: false, reason: validation.reason };
-    await this.repos.tags.add(commit.id, validation.name);
-    return { ok: true, tags: await this.repos.tags.listForCommit(commit.id) };
+  addTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+    return this.changeTag('add', deckId, sequence, tag);
   }
 
-  async removeTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+  removeTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+    return this.changeTag('remove', deckId, sequence, tag);
+  }
+
+  /** Adds or removes a tag of a version; the outcome carries the version's tags afterwards. */
+  private async changeTag(
+    op: 'add' | 'remove',
+    deckId: string,
+    sequence: number,
+    tag: string,
+  ): Promise<TagOutcome> {
     const commit = await this.repos.commits.getBySequence(deckId, sequence);
     if (!commit) return { ok: false, reason: versionNotFound(sequence) };
     const validation = normalizeVersionTag(tag);
     if (!validation.ok) return { ok: false, reason: validation.reason };
-    await this.repos.tags.remove(commit.id, validation.name);
+    if (op === 'add') await this.repos.tags.add(commit.id, validation.name);
+    else await this.repos.tags.remove(commit.id, validation.name);
     return { ok: true, tags: await this.repos.tags.listForCommit(commit.id) };
   }
 
@@ -846,10 +857,6 @@ class DefaultDeckServices implements DeckServices {
   // Setup
   // -------------------------------------------------------------------------
 
-  primerToMarkdown(source: string, primer: string): string {
-    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
-  }
-
   getSetupInfo(): SetupInfoDTO {
     return setupInfo(this.config, this.sources);
   }
@@ -869,7 +876,7 @@ class DefaultDeckServices implements DeckServices {
 
   private async requireDeck(deckId: string): Promise<DeckRecord> {
     const deck = await this.repos.decks.getById(deckId);
-    if (!deck) throw new ServiceError('not-found', 'This deck is not tracked (it may have been removed).');
+    if (!deck) throw new ServiceError('not-found', DECK_NOT_TRACKED);
     return deck;
   }
 
@@ -1002,14 +1009,7 @@ class DefaultDeckServices implements DeckServices {
     }
     const fetchedAt = this.now().toISOString();
     return this.repos.transaction(async (tx) => {
-      if (relink) {
-        await tx.decks.relink(deck.id, {
-          expectedExternalId: deck.externalId,
-          externalId: relink.externalId,
-          url: relink.url,
-        });
-        await tx.observations.pruneForDeck(deck.id, []);
-      }
+      if (relink) await relinkInTx(tx, deck, relink);
       const previous = await tx.observations.latestWithSnapshot(deck.id);
       const rawBlobHash = await tx.rawBlobs.put({ mediaType: raw.mediaType, data: raw.data });
       const snapshotHash = await tx.snapshots.put(snapshot);

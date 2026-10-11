@@ -97,6 +97,7 @@ export interface DeckOverviewDTO extends DeckSummaryDTO {
   /** The deck's changes of Moxfield deck, newest first. */
   relinks: DeckRelinkDTO[];
   warnings: IngestWarning[];
+  /** The newest versions, newest first (`RECENT_VERSION_COUNT` of them at most). */
   recentVersions: VersionListItemDTO[];
   serverFetch: ServerFetchStatus;
   /** Card facts for every card key referenced by `diff`. */
@@ -119,6 +120,8 @@ export interface VersionDetailDTO {
   deck: DeckSummaryDTO;
   version: VersionListItemDTO;
   snapshot: CanonicalSnapshot;
+  /** The snapshot's primer as portable markdown (converted by the deck's source); `null` without a primer. */
+  primerMarkdown: string | null;
   sourceMetadata: SourceDeckMetadata;
   /** Diff relative to the parent (or empty deck). */
   diff: DeckDiff;
@@ -307,7 +310,7 @@ export interface SharedDeckDTO {
 
 /** A shared deck's overview: the deck and its newest versions. */
 export interface SharedOverviewDTO extends SharedDeckDTO {
-  /** The newest versions, newest first (at most `RECENT_VERSION_COUNT`). */
+  /** The newest versions, newest first (`RECENT_VERSION_COUNT` of them at most). */
   recentVersions: VersionListItemDTO[];
 }
 

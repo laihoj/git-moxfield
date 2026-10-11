@@ -24,7 +24,7 @@ import {
   SUPPORTED_DATABASE_URLS_HINT,
   type DatabaseLocationSource,
 } from './db/database-location';
-import { invalidAllowedHosts } from './host-guard';
+import { invalidAllowedHosts, splitList } from './host-guard';
 import { runsOnNetlify } from './platform';
 
 const boolish = z
@@ -89,7 +89,18 @@ const schema = z.object({
   AUTO_REFRESH_AFTER_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
 
   /** Comma-separated origins allowed to hand captured decks to /capture. Defaults to the Moxfield site origin. */
-  CAPTURE_ALLOWED_ORIGINS: z.string().optional(),
+  CAPTURE_ALLOWED_ORIGINS: z
+    .string()
+    .optional()
+    .superRefine((value, ctx) => {
+      const invalid = splitList(value).filter((entry) => !URL.canParse(entry));
+      if (invalid.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `expected origins such as https://moxfield.com, got ${invalid.map((v) => JSON.stringify(v)).join(', ')}`,
+        });
+      }
+    }),
   /** Public URL of this app, baked into bookmarklets. Defaults to the request origin. */
   PUBLIC_APP_URL: httpUrl().transform(stripTrailingSlashes).optional(),
   /**
@@ -202,11 +213,9 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     );
   }
   const moxfieldSiteOrigin = new URL(config.MOXFIELD_SITE_ORIGIN).origin;
-  const captureAllowedOrigins = (config.CAPTURE_ALLOWED_ORIGINS ?? moxfieldSiteOrigin)
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean)
-    .map((o) => new URL(o).origin);
+  const captureAllowedOrigins = splitList(config.CAPTURE_ALLOWED_ORIGINS ?? moxfieldSiteOrigin).map(
+    (o) => new URL(o).origin,
+  );
   const location = databaseLocationFromEnv(cleaned);
   const database = new DatabaseLocation(location.source, location.url, location.authToken);
   return {

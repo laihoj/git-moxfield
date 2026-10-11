@@ -11,7 +11,6 @@
  * returned once to the browser that asked, and never logged.
  */
 import { revalidatePath } from 'next/cache';
-import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
@@ -21,6 +20,7 @@ import { requireUser } from '@/server/auth/current-user';
 import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
 import { isServiceError } from '@/server/services';
+import { absoluteAppUrl } from '@/core/http-url';
 import { routes } from '@/lib/routes';
 
 import type {
@@ -30,13 +30,11 @@ import type {
   RenameState,
 } from './action-types';
 import { qrCode } from './qr-code';
-import { publicAppUrl } from './request-origin';
+import { actionAppUrl } from './request-origin';
 
 const log = createLogger('account-actions');
 
 const GENERIC_ERROR = 'Something went wrong. Please try again.';
-const NO_APP_URL =
-  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
 
 /** Sanity bound for ids from the browser; the services look them up within the user's scope. */
 const idSchema = z.string().trim().min(1).max(128);
@@ -87,11 +85,11 @@ export async function createBookmarkletAction(
 ): Promise<CreateBookmarkletState> {
   const user = await requireUser({ next: routes.setup() });
   const label = formString(formData, 'label');
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL, label };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message, label };
   try {
     const auth = await getAuthService();
-    const created = await auth.createBookmarkletKey(user, label, appUrl);
+    const created = await auth.createBookmarkletKey(user, label, app.appUrl);
     revalidateAccount();
     return {
       status: 'created',
@@ -201,12 +199,12 @@ export async function signOutEverywhereAction(): Promise<AccountActionResult> {
 /** A one-time link (and its QR code) that signs another device in as this user, for 15 minutes. */
 export async function createDeviceLinkAction(): Promise<IssuedLinkState> {
   const user = await requireUser({ next: routes.account() });
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message };
   try {
     const auth = await getAuthService();
     const link = await auth.createDeviceLink(user);
-    const url = new URL(link.path, appUrl).href;
+    const url = absoluteAppUrl(link.path, app.appUrl);
     return { status: 'created', url, expiresAt: link.expiresAt, qr: qrCode(url) };
   } catch (error) {
     return { status: 'error', message: failureMessage(error, 'createDeviceLink', user) };
