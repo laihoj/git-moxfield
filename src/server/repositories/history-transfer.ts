@@ -41,11 +41,13 @@ import {
 
 import { classifySqlError } from '@/server/db/sql-errors';
 
+import { catalogUpserts } from './catalog';
 import { corruptData } from './codec';
 import {
   assertStorableSize,
   batches,
   distinct,
+  excluded,
   isUniqueViolation,
   withTransaction,
   writeAll,
@@ -464,30 +466,10 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
         if (known === undefined || row.updatedAt > known.updatedAt) latest.set(row.key, row);
       }
       const values = [...latest.values()].map((row) => ({ ...row, workspaceId: ctx.workspaceId }));
-      const [first = [], ...rest] = batches(values);
-      await writeAll(ctx, (db) => {
-        const upsert = (batch: typeof values) =>
-          db
-            .insert(cardCatalog)
-            .values(batch)
-            .onConflictDoUpdate({
-              target: [cardCatalog.workspaceId, cardCatalog.key],
-              set: {
-                name: excluded(cardCatalog.name),
-                typeLine: excluded(cardCatalog.typeLine),
-                primaryType: excluded(cardCatalog.primaryType),
-                manaCost: excluded(cardCatalog.manaCost),
-                cmc: excluded(cardCatalog.cmc),
-                colorIdentityJson: excluded(cardCatalog.colorIdentityJson),
-                layout: excluded(cardCatalog.layout),
-                scryfallId: excluded(cardCatalog.scryfallId),
-                updatedAt: excluded(cardCatalog.updatedAt),
-              },
-              // The facts written last win, wherever they were written.
-              setWhere: sql`${excluded(cardCatalog.updatedAt)} > ${cardCatalog.updatedAt}`,
-            });
-        return [upsert(first), ...rest.map(upsert)] as const;
-      });
+      // The facts written last win, wherever they were written.
+      await writeAll(ctx, (db) =>
+        catalogUpserts(db, values, sql`${excluded(cardCatalog.updatedAt)} > ${cardCatalog.updatedAt}`),
+      );
     },
   };
 }
@@ -620,9 +602,4 @@ async function insertChunks<
   for (const batch of batches(rows, HISTORY_ROWS_PER_STATEMENT)) {
     await db.insert(table).values(batch);
   }
-}
-
-/** The value an upsert tried to insert into `column` (SQLite's `excluded` pseudo-table). */
-function excluded(column: SQLiteColumn): SQL {
-  return sql.raw(`excluded."${column.name}"`);
 }

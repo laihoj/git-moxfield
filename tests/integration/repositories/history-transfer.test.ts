@@ -3,10 +3,11 @@
  * databases without changing a byte, verifies everything it copies, writes a deck's
  * history atomically and refuses what would duplicate or corrupt history in the target.
  */
-import { sql } from 'drizzle-orm';
+import { eq, getTableColumns, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { commitId } from '@/core/hash';
+import { cardCatalog } from '@/server/db/schema';
 import { createRepositories, type DeckHistoryRows, type Repositories } from '@/server/repositories';
 import { batchBySize, TRANSFER_BATCH_BYTES, TRANSFER_BATCH_ROWS } from '@/server/history-import';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
@@ -235,6 +236,36 @@ describe('history transfer repository', () => {
       { ...facts, typeLine: 'Newest', updatedAt: '3000-01-01T00:00:00.000Z' },
     ]);
     expect((await repos.catalog.getMany(['sol ring'])).get('sol ring')?.typeLine).toBe('Newest');
+  });
+});
+
+describe('mergeCatalog', () => {
+  it('overwrites every card-fact column of card_catalog when newer facts arrive', async () => {
+    const source = await sourceDeck();
+    const [facts] = await source.repos.historyTransfer.readCatalog(['sol ring']);
+    if (!facts) throw new Error('no facts');
+    const { db, repos } = await createTestRepositories();
+    await repos.historyTransfer.mergeCatalog([facts]);
+
+    // The fact columns are whatever card_catalog has besides its key and `updated_at`, so a
+    // column added to the table later is covered without touching this test.
+    const factFields = Object.keys(getTableColumns(cardCatalog)).filter(
+      (field) => !['workspaceId', 'key', 'updatedAt'].includes(field),
+    );
+    expect(factFields).toHaveLength(8);
+    const newer: Record<string, unknown> = { ...facts, updatedAt: '2999-01-01T00:00:00.000Z' };
+    for (const field of factFields) {
+      const value = (facts as Record<string, unknown>)[field];
+      newer[field] =
+        typeof value === 'number' ? value + 1 : `${typeof value === 'string' ? value : 'none'} (newer)`;
+    }
+    await repos.historyTransfer.mergeCatalog([newer as typeof facts]);
+
+    const [stored] = await db.select().from(cardCatalog).where(eq(cardCatalog.key, 'sol ring'));
+    for (const field of factFields) {
+      expect(stored, field).toHaveProperty(field, newer[field]);
+    }
+    expect(stored?.updatedAt).toBe('2999-01-01T00:00:00.000Z');
   });
 });
 

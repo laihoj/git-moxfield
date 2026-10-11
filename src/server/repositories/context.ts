@@ -239,6 +239,11 @@ export function valuesTable(values: readonly string[]): SQL {
   )})`;
 }
 
+/** The value an upsert tried to insert into `column` (SQLite's `excluded` pseudo-table). */
+export function excluded(column: SQLiteColumn): SQL {
+  return sql.raw(`excluded."${column.name}"`);
+}
+
 /** Distinct values in first-seen order. */
 export function distinct<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
