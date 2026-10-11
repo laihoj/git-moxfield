@@ -5,6 +5,7 @@ import { useId, useOptimistic, useRef, useState, useTransition, type SubmitEvent
 
 import { addTagAction, removeTagAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/field';
 import { normalizeTagInput, tagProblem } from '@/lib/tags';
 
 export interface TagEditorProps {
@@ -122,7 +123,7 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
             New tag
           </label>
           <div className="flex gap-2">
-            <input
+            <Input
               ref={input}
               id={inputId}
               value={draft}
@@ -132,7 +133,7 @@ export function TagEditor({ deckId, sequence, tags, suggestions }: TagEditorProp
               enterKeyHint="done"
               maxLength={80}
               aria-invalid={error !== null || undefined}
-              className="h-11 min-w-0 flex-1 rounded-lg border border-border-strong bg-surface px-3 text-base text-fg shadow-card placeholder:text-subtle focus:border-accent focus:ring-3 focus:ring-accent/20 focus:outline-none md:h-9 md:text-sm"
+              className="min-w-0 flex-1"
               onChange={(event) => {
                 setDraft(event.target.value);
                 setError(null);

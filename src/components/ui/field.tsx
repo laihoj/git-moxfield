@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { ChevronDown } from 'lucide-react';
-import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, ReactNode } from 'react';
 
 /**
  * Form controls. Font size is 16px on small screens so iOS Safari does not zoom into
@@ -53,7 +53,7 @@ export function Field({ label, htmlFor, hint, error, aside, className, children 
   );
 }
 
-export function Input({ className, ...props }: ComponentPropsWithoutRef<'input'>) {
+export function Input({ className, ...props }: ComponentPropsWithRef<'input'>) {
   // Long values and placeholders end in an ellipsis instead of being cut mid-letter.
   return <input className={clsx(CONTROL, 'h-11 px-3 text-ellipsis md:h-10', className)} {...props} />;
 }
