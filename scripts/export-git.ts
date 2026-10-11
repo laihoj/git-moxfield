@@ -15,8 +15,7 @@
 import { relative } from 'node:path';
 
 import { pluralize } from '@/core/text';
-import { getConfig, type AppConfig } from '@/server/config';
-import { openConfiguredDatabase } from '@/server/db/client';
+import type { AppConfig } from '@/server/config';
 import { operatorSiteOrigins } from '@/server/deck-reference';
 import {
   defaultExportDirectory,
@@ -26,9 +25,14 @@ import {
 } from '@/server/git-export';
 import { createRepositories, type DeckLocation, type Repositories } from '@/server/repositories';
 
-import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
-import { runMain } from './cli';
-import { loadEnvFiles } from './load-env';
+import { consoleIO, isEntryPoint, runMain, scriptArgs } from './cli';
+import {
+  describeConfiguredDatabase,
+  describeFailure,
+  isMissingDatabaseFile,
+  loadConfigOrReport,
+  openConfiguredDatabaseOrReport,
+} from './database';
 
 const USAGE = 'Usage: pnpm export:git <deck id | Moxfield deck id | Moxfield deck URL> [outDir]';
 
@@ -63,7 +67,8 @@ async function run(
     );
     return 1;
   }
-  const database = await openConfiguredDatabase(config);
+  const database = await openConfiguredDatabaseOrReport(config, consoleIO);
+  if (database === null) return 1;
   const { db } = database;
   try {
     const system = createRepositories(db);
@@ -114,9 +119,8 @@ async function run(
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  // pnpm forwards a literal `--` when users separate script arguments with it.
-  const args = argv.filter((arg) => arg !== '--');
-  if (args.includes('--help') || args.includes('-h')) {
+  const { args, help } = scriptArgs(argv);
+  if (help) {
     console.log(USAGE);
     return 0;
   }
@@ -125,14 +129,8 @@ async function main(argv: readonly string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  let config: AppConfig;
-  try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    console.error(describeFailure(error));
-    return 1;
-  }
+  const config = loadConfigOrReport(consoleIO);
+  if (config === null) return 1;
   try {
     return await run(config, reference, outDir);
   } catch (error) {
@@ -141,4 +139,5 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-runMain('export:git', () => main(process.argv.slice(2)));
+// Run only as a script (`pnpm export:git`), not when imported.
+if (isEntryPoint(import.meta.url)) runMain('export:git', () => main(process.argv.slice(2)));

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { createRepositories, type Repositories } from '@/server/repositories';
-import { createServices, KeyedMutex, type DeckServices } from '@/server/services';
+import { KeyedMutex, type DeckServices } from '@/server/services';
 import { createDeckServices } from '@/server/services/deck-services';
 import { countRows } from '@tests/support/db';
 import { buildCaptureEnvelope, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 import {
   BLUE_FARM_PRIMER,
   blueFarmSpec,
+  captureNext,
   commitReviewed,
   committed,
   createServiceHarness,
@@ -339,16 +339,8 @@ describe('deck services: commit', () => {
     // deck locks, so only the database orders an instance's commit and another's captures.
     const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const { services, db, config, sources, clock, logger } = harness;
-    const capture = async (instance: DeckServices, spec: MoxDeckSpec): Promise<string> => {
-      clock.advance(1);
-      const outcome = await instance.ingestCapture({
-        data: buildCaptureEnvelope(spec, clock.iso()),
-        method: 'browser-capture',
-        track: true,
-      });
-      if (outcome.status !== 'ingested') throw new Error(`Capture not ingested: ${outcome.status}`);
-      return outcome.deckId;
-    };
+    const capture = (instance: DeckServices, spec: MoxDeckSpec): Promise<string> =>
+      captureNext(harness, instance, spec);
     const deckId = await capture(services, blueFarmSpec());
     const v1 = committed(await commitReviewed(harness, deckId, 'Initial version'));
     await capture(services, moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering'));
@@ -356,15 +348,7 @@ describe('deck services: commit', () => {
 
     // Another instance captures twice more after this commit's checks, before its
     // transaction: pruning drops the reviewed observation and its snapshot.
-    const otherInstance = createServices({
-      db,
-      sources,
-      config,
-      workspaceId: LOCAL_WORKSPACE_ID,
-      now: clock.now,
-      logger,
-      locks: new KeyedMutex(),
-    });
+    const otherInstance = harness.otherInstance();
     const repos = createRepositories(db, { now: clock.now });
     let interfere = true;
     const racedRepos: Repositories = {

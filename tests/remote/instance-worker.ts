@@ -6,12 +6,11 @@
  *
  *   INSTANCE=a ROUNDS=30 LIBSQL_TEST_URL=… node --import tsx --conditions=react-server tests/remote/instance-worker.ts
  */
-import { parseConfig } from '@/server/config';
-import { LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
+import { openDatabase } from '@/server/db/client';
 import type { Logger } from '@/server/logger';
-import { createServices, KeyedMutex, type DeckServices } from '@/server/services';
-import { createDeckSourceRegistry } from '@/server/sources';
+import type { DeckServices } from '@/server/services';
 // Not `@tests/support/services`: it imports Vitest, which only works inside a test run.
+import { captureOnlyServices, commitWorkingState } from '@tests/support/flows';
 import { buildCaptureEnvelope, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
 import { remoteTarget } from './support';
@@ -48,6 +47,7 @@ async function work(services: DeckServices, name: string, rounds: number): Promi
         version: round + 2,
         mainboard: [...(CONCURRENT_DECK.mainboard ?? []), `Card ${name}-${round}`],
       };
+      // Reports the status instead of throwing: this worker collects what went wrong.
       const captured = await services.ingestCapture({
         data: buildCaptureEnvelope(spec, new Date().toISOString()),
         method: 'browser-capture',
@@ -62,13 +62,7 @@ async function work(services: DeckServices, name: string, rounds: number): Promi
       attempt('list', async () => `${(await services.listDecks()).length}`),
       attempt('compare', async () => ((await services.compare(id, 'empty', 'working')) ? 'ok' : 'none')),
       attempt('commit', async () => {
-        const overview = await services.getOverview(id);
-        if (!overview?.working) return 'no-working-state';
-        const outcome = await services.commit(id, {
-          message: `${name} round ${round}`,
-          expectedObservationId: overview.working.id,
-          expectedHeadCommitId: overview.head?.commitId ?? null,
-        });
+        const outcome = await commitWorkingState(services, id, { message: `${name} round ${round}` });
         return outcome.ok ? 'ok' : outcome.reason;
       }),
     ]);
@@ -80,17 +74,9 @@ async function main(): Promise<void> {
   const { url, authToken } = remoteTarget();
   const handle = await openDatabase({ url, authToken });
   try {
-    const config = parseConfig({ MOXFIELD_SERVER_FETCH: 'off' });
     const silent = (): void => undefined;
     const logger: Logger = { debug: silent, info: silent, warn: silent, error: silent };
-    const services = createServices({
-      db: handle.db,
-      sources: createDeckSourceRegistry(config, { logger }),
-      config,
-      workspaceId: LOCAL_WORKSPACE_ID,
-      logger,
-      locks: new KeyedMutex(),
-    });
+    const services = captureOnlyServices(handle.db, { logger });
     const report = await work(services, process.env.INSTANCE ?? 'a', Number(process.env.ROUNDS ?? '10'));
     process.stdout.write(JSON.stringify(report));
   } finally {

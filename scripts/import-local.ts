@@ -25,14 +25,11 @@
  * Exit codes: 0 done (or nothing to do), 1 refused or failed, 2 wrong usage. See
  * `src/server/history-import` for how the import works.
  */
-import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseArgs } from 'node:util';
-
 import { pluralize } from '@/core/text';
 import { formatBytes } from '@/lib/format';
-import { getConfig, type AppConfig } from '@/server/config';
-import { openConfiguredDatabase, type Db } from '@/server/db/client';
+import type { AppConfig } from '@/server/config';
+import type { Db } from '@/server/db/client';
 import { databaseFileOf, type LibsqlDatabase } from '@/server/db/libsql';
 import { describeDeckRef, operatorSiteOrigins } from '@/server/deck-reference';
 import {
@@ -51,9 +48,22 @@ import {
 } from '@/server/history-import';
 import { createRepositories, isRepositoryError } from '@/server/repositories';
 
-import { isEntryPoint, runMain } from './cli';
-import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
-import { loadEnvFiles } from './load-env';
+import {
+  consoleIO,
+  isEntryPoint,
+  parseArgsOrUsage,
+  runMain,
+  sameFile,
+  scriptArgs,
+  UsageError,
+  type CommandIO,
+} from './cli';
+import {
+  describeConfiguredDatabase,
+  isMissingDatabaseFile,
+  loadConfigOrReport,
+  openConfiguredDatabaseOrReport,
+} from './database';
 
 export const USAGE = `Usage: pnpm import:local -- --from <sqlite file> --to-user <user id | display name> [options]
 
@@ -69,14 +79,9 @@ Options:
   --skip-existing               Leave out decks the user tracks with a different history
   --dry-run                     Show what would be imported; write nothing`;
 
-export interface ImportCommandIO {
-  out(line: string): void;
-  err(line: string): void;
-}
-
 export interface ImportCommandDependencies {
   config: AppConfig;
-  io: ImportCommandIO;
+  io: CommandIO;
   /**
    * The target database, already open, and how to name it (tests). Default: the configured
    * database, opened like the app opens it (a dry run only checks that it is migrated,
@@ -86,9 +91,6 @@ export interface ImportCommandDependencies {
   /** Id generator for rows whose id is taken in the target. Default: random UUIDs. */
   newId?: () => string;
 }
-
-/** Thrown for wrong usage; the message is shown with the usage text. */
-class UsageError extends Error {}
 
 interface ImportArguments {
   from: string;
@@ -100,27 +102,21 @@ interface ImportArguments {
 }
 
 function parseArguments(argv: readonly string[]): ImportArguments | 'help' {
-  // pnpm forwards a literal `--` when users separate script arguments with it.
-  const args = argv.filter((arg) => arg !== '--');
-  if (args.includes('--help') || args.includes('-h')) return 'help';
-  let values;
-  try {
-    ({ values } = parseArgs({
-      args,
-      strict: true,
-      allowPositionals: false,
-      options: {
-        from: { type: 'string' },
-        'to-user': { type: 'string' },
-        'from-workspace': { type: 'string' },
-        deck: { type: 'string', multiple: true },
-        'skip-existing': { type: 'boolean', default: false },
-        'dry-run': { type: 'boolean', default: false },
-      },
-    }));
-  } catch (error) {
-    throw new UsageError(error instanceof Error ? error.message : String(error));
-  }
+  const { args, help } = scriptArgs(argv);
+  if (help) return 'help';
+  const { values } = parseArgsOrUsage({
+    args,
+    strict: true,
+    allowPositionals: false,
+    options: {
+      from: { type: 'string' },
+      'to-user': { type: 'string' },
+      'from-workspace': { type: 'string' },
+      deck: { type: 'string', multiple: true },
+      'skip-existing': { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
+    },
+  });
   const from = values.from?.trim() ?? '';
   const toUser = values['to-user']?.trim() ?? '';
   if (from === '') throw new UsageError('--from is required: the database file to import from.');
@@ -160,15 +156,6 @@ const CHOICE_REASONS: Record<SourceWorkspaceChoice['reason'], string> = {
   local: 'the local workspace, where an installation from before accounts keeps its decks',
   'first-admin': "the first admin's workspace",
 };
-
-/** Whether `a` and `b` are the same file (both must exist). */
-function sameFile(a: string, b: string): boolean {
-  try {
-    return realpathSync(a) === realpathSync(b);
-  } catch {
-    return false;
-  }
-}
 
 async function importHistory(
   args: ImportArguments,
@@ -300,12 +287,9 @@ export async function runImportCommand(
         );
         return 1;
       }
-      try {
-        ownTarget = await openConfiguredDatabase(config, { verifyOnly: args.dryRun });
-      } catch (error) {
-        io.err(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`);
-        return 1;
-      }
+      ownTarget =
+        (await openConfiguredDatabaseOrReport(config, io, { verifyOnly: args.dryRun })) ?? undefined;
+      if (ownTarget === undefined) return 1;
       target = { db: ownTarget.db, description: describeConfiguredDatabase(config) };
     }
     source = await openSourceCopy(resolve(args.from));
@@ -330,23 +314,8 @@ export async function runImportCommand(
 }
 
 async function main(): Promise<number> {
-  const io: ImportCommandIO = {
-    out: (line) => {
-      console.log(line);
-    },
-    err: (line) => {
-      console.error(line);
-    },
-  };
-  let config: AppConfig;
-  try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    io.err(describeFailure(error));
-    return 1;
-  }
-  return runImportCommand(process.argv.slice(2), { config, io });
+  const config = loadConfigOrReport(consoleIO);
+  return config === null ? 1 : runImportCommand(process.argv.slice(2), { config, io: consoleIO });
 }
 
 // Run only as a script (`pnpm import:local`), not when imported by tests.

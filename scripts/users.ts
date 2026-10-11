@@ -19,8 +19,6 @@
  * `DATABASE_PATH`) and the rest of its configuration, read from the environment and
  * `.env*` files like the app does (see `./database`).
  */
-import { parseArgs } from 'node:util';
-
 import { absoluteAppUrl } from '@/core/http-url';
 import { formatDuration } from '@/lib/format';
 import {
@@ -31,17 +29,23 @@ import {
   type AuthService,
 } from '@/server/auth/service';
 import type { UserDTO } from '@/server/auth/types';
-import { getConfig, type AppConfig } from '@/server/config';
-import { openConfiguredDatabase, type Db } from '@/server/db/client';
-import type { LibsqlDatabase } from '@/server/db/libsql';
-import { createLogger, type Logger } from '@/server/logger';
+import type { AppConfig } from '@/server/config';
+import type { Db } from '@/server/db/client';
 import { foldName } from '@/server/repositories';
 import { isServiceError } from '@/server/services/errors';
 
 import { DEFAULT_APP_URL, resolveBaseUrl } from './app-url';
-import { describeConfiguredDatabase, describeFailure } from './database';
-import { isEntryPoint, runMain } from './cli';
-import { loadEnvFiles } from './load-env';
+import {
+  consoleIO,
+  isEntryPoint,
+  parseArgsOrUsage,
+  quietLogger,
+  runMain,
+  scriptArgs,
+  UsageError,
+  type CommandIO,
+} from './cli';
+import { loadConfigOrReport, openConfiguredDatabaseOrReport } from './database';
 
 export const USAGE = `Usage: pnpm users <command>
 
@@ -51,39 +55,35 @@ Commands:
   recover <user id | display name> [--base-url <url>]   Print a one-time recovery link (${formatDuration(RECOVERY_LINK_LIFETIME_MS)})
   claim-code                                            Print the setup code of an unclaimed installation`;
 
-export interface UsersCommandIO {
-  out(line: string): void;
-  err(line: string): void;
-}
-
 export interface UsersCommandDependencies {
   db: Db;
   config: AppConfig;
-  io: UsersCommandIO;
+  io: CommandIO;
   /** Default: system time. */
   now?: () => Date;
 }
-
-/** Thrown for wrong usage; the message is shown with the usage text. */
-class UsageError extends Error {}
 
 /** Runs one `pnpm users` command. @returns the process exit code. */
 export async function runUsersCommand(
   argv: readonly string[],
   deps: UsersCommandDependencies,
 ): Promise<number> {
-  // pnpm forwards a literal `--` when users separate script arguments with it.
-  const args = argv.filter((arg) => arg !== '--');
+  const { args, help } = scriptArgs(argv);
   const { io } = deps;
   if (args.length === 0) {
     io.err(USAGE);
     return 2;
   }
-  if (args.includes('--help') || args.includes('-h')) {
+  if (help) {
     io.out(USAGE);
     return 0;
   }
-  const auth = createAuthService({ db: deps.db, config: deps.config, logger: quietLogger(), now: deps.now });
+  const auth = createAuthService({
+    db: deps.db,
+    config: deps.config,
+    logger: quietLogger('users'),
+    now: deps.now,
+  });
   try {
     const [command = '', ...rest] = args;
     switch (command) {
@@ -112,15 +112,17 @@ export async function runUsersCommand(
 }
 
 async function invite(auth: AuthService, deps: UsersCommandDependencies, args: string[]): Promise<number> {
-  const { values } = parse(args, {
-    admin: { type: 'boolean', default: false },
-    note: { type: 'string', default: '' },
-    'base-url': { type: 'string' },
+  const { values } = parseArgsOrUsage({
+    args,
+    options: {
+      admin: { type: 'boolean', default: false },
+      note: { type: 'string', default: '' },
+      'base-url': { type: 'string' },
+    },
   });
   const baseUrl = baseUrlOf(values['base-url'], deps.config);
-  const role = values.admin === true ? 'admin' : 'member';
-  const note = typeof values.note === 'string' ? values.note : '';
-  const issued = await auth.createInvite(SYSTEM_ACTOR, { role, note });
+  const role = values.admin ? 'admin' : 'member';
+  const issued = await auth.createInvite(SYSTEM_ACTOR, { role, note: values.note });
   deps.io.out(
     `Invite for a new ${role}${issued.invite.note === '' ? '' : ` (${issued.invite.note})`}, valid until ${issued.expiresAt}:`,
   );
@@ -129,7 +131,7 @@ async function invite(auth: AuthService, deps: UsersCommandDependencies, args: s
 }
 
 async function list(auth: AuthService, deps: UsersCommandDependencies, args: string[]): Promise<number> {
-  parse(args, {});
+  parseArgsOrUsage({ args, options: {} });
   const users = await auth.listUsers(SYSTEM_ACTOR);
   if (users.length === 0) {
     deps.io.out(
@@ -142,7 +144,11 @@ async function list(auth: AuthService, deps: UsersCommandDependencies, args: str
 }
 
 async function recover(auth: AuthService, deps: UsersCommandDependencies, args: string[]): Promise<number> {
-  const { values, positionals } = parse(args, { 'base-url': { type: 'string' } }, true);
+  const { values, positionals } = parseArgsOrUsage({
+    args,
+    options: { 'base-url': { type: 'string' } },
+    allowPositionals: true,
+  });
   const [who, ...extra] = positionals;
   if (who === undefined || who.trim() === '' || extra.length > 0) {
     throw new UsageError('recover needs exactly one user id or display name.');
@@ -170,7 +176,7 @@ async function recover(auth: AuthService, deps: UsersCommandDependencies, args: 
 }
 
 async function claimCode(auth: AuthService, deps: UsersCommandDependencies, args: string[]): Promise<number> {
-  parse(args, {});
+  parseArgsOrUsage({ args, options: {} });
   const code = await auth.setupCode();
   if (code === null) {
     deps.io.err('git-moxfield is already claimed. Admins invite new users (`pnpm users invite`).');
@@ -178,16 +184,6 @@ async function claimCode(auth: AuthService, deps: UsersCommandDependencies, args
   }
   deps.io.out(code);
   return 0;
-}
-
-type OptionSpec = Record<string, { type: 'boolean' | 'string'; default?: boolean | string }>;
-
-function parse(args: string[], options: OptionSpec, allowPositionals = false) {
-  try {
-    return parseArgs({ args, options, allowPositionals, strict: true });
-  } catch (error) {
-    throw new UsageError(error instanceof Error ? error.message : String(error));
-  }
 }
 
 function baseUrlOf(option: unknown, config: AppConfig): string {
@@ -203,43 +199,13 @@ function describeUser(user: UserDTO): string {
   return `  ${user.id}  ${user.displayName}  ${user.role}, ${status}, ${user.deckCount} decks, ${user.activeKeyCount} keys, ${seen}`;
 }
 
-/** Only warnings and errors: the command's own output is the point. */
-function quietLogger(): Logger {
-  const logger = createLogger('users');
-  return { ...logger, debug: () => undefined, info: () => undefined };
-}
-
 async function main(): Promise<number> {
-  let config: AppConfig;
+  const config = loadConfigOrReport(consoleIO);
+  if (config === null) return 1;
+  const database = await openConfiguredDatabaseOrReport(config, consoleIO);
+  if (database === null) return 1;
   try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    console.error(describeFailure(error));
-    return 1;
-  }
-  let database: LibsqlDatabase;
-  try {
-    database = await openConfiguredDatabase(config);
-  } catch (error) {
-    console.error(
-      `Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`,
-    );
-    return 1;
-  }
-  try {
-    return await runUsersCommand(process.argv.slice(2), {
-      db: database.db,
-      config,
-      io: {
-        out: (line) => {
-          console.log(line);
-        },
-        err: (line) => {
-          console.error(line);
-        },
-      },
-    });
+    return await runUsersCommand(process.argv.slice(2), { db: database.db, config, io: consoleIO });
   } finally {
     database.close();
   }

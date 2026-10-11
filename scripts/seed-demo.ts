@@ -30,25 +30,15 @@ import { absoluteAppUrl } from '@/core/http-url';
 import type { CapturedIngestMethod } from '@/integrations/deck-source';
 import { routes } from '@/lib/routes';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
-import { getConfig, parseConfig } from '@/server/config';
-import { openConfiguredDatabase } from '@/server/db/client';
-import { createLogger, type Logger } from '@/server/logger';
 import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
-import { createServices, type DeckServices } from '@/server/services';
-import { createDeckSourceRegistry } from '@/server/sources';
-import {
-  buildCaptureEnvelope,
-  buildMoxfieldDeck,
-  buildMoxfieldPrimer,
-  FakeMoxfieldApi,
-  type MoxCardSpec,
-  type MoxDeckSpec,
-} from '@tests/support/moxfield-deck-builder';
+import type { DeckServices } from '@/server/services';
+import { ManualClock } from '@tests/support/clock';
+import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
+import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
 import { resolveBaseUrl } from './app-url';
-import { describeConfiguredDatabase } from './database';
-import { isEntryPoint, runMain } from './cli';
-import { loadEnvFiles } from './load-env';
+import { consoleIO, isEntryPoint, quietLogger, runMain } from './cli';
+import { describeConfiguredDatabase, loadConfigOrReport, openConfiguredDatabaseOrReport } from './database';
 
 /** Moxfield-style public id of the demo deck (not a real Moxfield deck). */
 export const DEMO_PUBLIC_ID = 'gitMoxfieldDemoBlueFarm';
@@ -470,24 +460,6 @@ export async function ensureDemoUser(repos: Repositories): Promise<UserRecord> {
   return repos.users.create({ displayName: DEMO_USER_NAME, role: 'admin' });
 }
 
-/** A clock the seed moves forward explicitly; the services must be created with its `now`. */
-export class DemoClock {
-  constructor(private ms: number) {}
-  readonly now = (): Date => new Date(this.ms);
-  set(ms: number): void {
-    this.ms = ms;
-  }
-  advance(ms: number): void {
-    this.ms += ms;
-  }
-}
-
-/** Services log info lines for every capture and commit; keep the script's output short. */
-function quietLogger(): Logger {
-  const logger = createLogger('seed-demo');
-  return { ...logger, debug: () => undefined, info: () => undefined };
-}
-
 /**
  * Hands the deck's current state to git-moxfield like a user would: the bookmarklet's
  * capture envelope, or the two API responses pasted into /capture?mode=paste.
@@ -495,18 +467,12 @@ function quietLogger(): Logger {
 async function capture(
   services: DeckServices,
   deck: DemoDeck,
-  clock: DemoClock,
+  clock: ManualClock,
   method: CapturedIngestMethod,
 ): Promise<string> {
   // Edited on Moxfield 25 minutes before it was sent to git-moxfield.
   const spec = deck.spec(new Date(clock.now().getTime() - 25 * MINUTE_MS));
-  const data =
-    method === 'browser-capture'
-      ? buildCaptureEnvelope(spec, clock.now().toISOString())
-      : { deck: JSON.stringify(buildMoxfieldDeck(spec)), primer: JSON.stringify(buildMoxfieldPrimer(spec)) };
-  const outcome = await services.ingestCapture({ data, method, track: true });
-  if (outcome.status !== 'ingested') throw new Error('The demo capture was not ingested');
-  return outcome.deckId;
+  return captureSpec(services, spec, clock.iso(), method);
 }
 
 /**
@@ -514,7 +480,7 @@ async function capture(
  * `end` (epoch ms), with tags and notes, then leaves uncommitted changes on top. The
  * services must use `clock.now` as their clock. Returns the deck id.
  */
-export async function seedDemoDeck(services: DeckServices, clock: DemoClock, end: number): Promise<string> {
+export async function seedDemoDeck(services: DeckServices, clock: ManualClock, end: number): Promise<string> {
   // Midnight UTC ten weeks ago; versions are committed in the (UTC) evening.
   const start = Math.floor(end / DAY_MS) * DAY_MS - 70 * DAY_MS;
   const deck = new DemoDeck();
@@ -527,13 +493,9 @@ export async function seedDemoDeck(services: DeckServices, clock: DemoClock, end
     }
     deckId = await capture(services, deck, clock, version.method ?? 'browser-capture');
 
-    clock.advance(3 * MINUTE_MS);
-    const overview = await services.getOverview(deckId);
-    if (!overview?.working) throw new Error('The demo deck has no working state');
-    const outcome = await services.commit(deckId, {
+    clock.advanceMs(3 * MINUTE_MS);
+    const outcome = await commitWorkingState(services, deckId, {
       message: version.message,
-      expectedObservationId: overview.working.id,
-      expectedHeadCommitId: overview.head?.commitId ?? null,
       ...(version.tags ? { tags: version.tags } : {}),
     });
     if (!outcome.ok) throw new Error(`Committing "${version.message}" failed: ${outcome.message}`);
@@ -557,30 +519,27 @@ async function main(): Promise<number> {
     );
     return 1;
   }
-  loadEnvFiles();
-  const appConfig = getConfig();
+  const appConfig = loadConfigOrReport(consoleIO);
+  if (appConfig === null) return 1;
   const api = new FakeMoxfieldApi();
-  const config = parseConfig({
-    ...process.env,
-    MOXFIELD_API_BASE_URL: api.apiBaseUrl,
-    MOXFIELD_SERVER_FETCH: 'off',
-  });
-  const logger = quietLogger();
+  // The services log info lines for every capture and commit; keep the script's output short.
+  const logger = quietLogger('seed-demo');
   const end = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
-  const clock = new DemoClock(end);
+  const clock = new ManualClock(end);
 
   const where = describeConfiguredDatabase(appConfig);
-  const database = await openConfiguredDatabase(appConfig);
+  const database = await openConfiguredDatabaseOrReport(appConfig, consoleIO);
+  if (database === null) return 1;
   const { db } = database;
   try {
     const demoUser = await ensureDemoUser(createRepositories(db));
-    const services = createServices({
-      db,
-      sources: createDeckSourceRegistry(config, { fetchImpl: api.fetch, logger }),
-      config,
+    // Server fetching is off: seeding never contacts Moxfield, whose API is the fake one.
+    const services = captureOnlyServices(db, {
+      logger,
       workspaceId: demoUser.workspaceId,
       now: clock.now,
-      logger,
+      fetchImpl: api.fetch,
+      env: { ...process.env, MOXFIELD_API_BASE_URL: api.apiBaseUrl },
     });
 
     const existing = (await services.listDecks()).find(

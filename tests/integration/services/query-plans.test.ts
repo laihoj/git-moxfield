@@ -15,9 +15,9 @@ import * as schema from '@/server/db/schema';
 import { createRepositories } from '@/server/repositories';
 import { KeyedMutex, type DeckServices } from '@/server/services';
 import { createDeckServices } from '@/server/services/deck-services';
-import { buildCaptureEnvelope, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 import {
   blueFarmSpec,
+  captureNext,
   commitReviewed,
   committed,
   createServiceHarness,
@@ -71,31 +71,21 @@ async function plans(
 /** A scan of the workspace's decks through the `(workspace_id, …)` index. */
 const WORKSPACE_DECK_SCAN = /USING (COVERING )?INDEX decks_workspace_source_external_uq \(workspace_id=\?\)$/;
 
-async function capture(harness: ServiceHarness, services: DeckServices, spec: MoxDeckSpec): Promise<void> {
-  harness.clock.advance(1);
-  const outcome = await services.ingestCapture({
-    data: buildCaptureEnvelope(spec, harness.clock.iso()),
-    method: 'browser-capture',
-    track: true,
-  });
-  if (outcome.status !== 'ingested') throw new Error(`Capture not ingested: ${outcome.status}`);
-}
-
 describe('query plans of a deck', () => {
   it('never read every deck of the workspace, on its pages, when capturing or committing', async () => {
     const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const { services } = harness;
     // Other decks in the workspace, and a deck with two versions, a tag, a note and a review.
     for (const n of [1, 2, 3])
-      await capture(harness, services, blueFarmSpec({ publicId: `OtherDeck0000000000000${n}` }));
-    await capture(harness, services, blueFarmSpec());
+      await captureNext(harness, services, blueFarmSpec({ publicId: `OtherDeck0000000000000${n}` }));
+    await captureNext(harness, services, blueFarmSpec());
     const deckId = defined(
       (await services.listDecks()).find((deck) => deck.externalId === blueFarmSpec().publicId),
     ).id;
     committed(await commitReviewed(harness, deckId, 'Initial version', ['stable']));
     await services.setNote(deckId, 1, 'Top 4');
     const moved = moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering');
-    await capture(harness, services, moved);
+    await captureNext(harness, services, moved);
 
     const statements: Statement[] = [];
     const recorded = recordingServices(harness, statements);
@@ -108,8 +98,8 @@ describe('query plans of a deck', () => {
     await recorded.searchCards(deckId, 'dress');
     await recorded.restoreExport(deckId, 1);
     await recorded.listTags(deckId);
-    await capture(harness, recorded, moved);
-    await capture(harness, recorded, blueFarmSpec({ version: 3, sideboard: [] }));
+    await captureNext(harness, recorded, moved);
+    await captureNext(harness, recorded, blueFarmSpec({ version: 3, sideboard: [] }));
     harness.clock.advance(1);
     const latest = defined(defined(await recorded.getOverview(deckId)).working);
     committed(

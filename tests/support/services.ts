@@ -25,29 +25,12 @@ import {
 } from '@/server/services';
 import { createDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
 import type { LibsqlDatabase } from '@/server/db/libsql';
+import { ManualClock } from '@tests/support/clock';
+import { captureSpec, commitWorkingState } from '@tests/support/flows';
 import { openTestDatabaseHandle } from '@tests/support/db';
 import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
-/** A clock that only moves when told to. */
-export class ManualClock {
-  private ms: number;
-
-  constructor(start = '2026-10-09T12:00:00.000Z') {
-    this.ms = Date.parse(start);
-  }
-
-  readonly now = (): Date => new Date(this.ms);
-
-  readonly epochMs = (): number => this.ms;
-
-  advance(seconds: number): void {
-    this.ms += seconds * 1000;
-  }
-
-  iso(): string {
-    return new Date(this.ms).toISOString();
-  }
-}
+export { ManualClock };
 
 export interface LogEntry {
   level: LogLevel;
@@ -89,6 +72,12 @@ export interface ServiceHarness {
   sibling(): DeckServices;
   /** Services bound to `workspaceId`, on the same database, sources, clock and locks. */
   servicesForWorkspace(workspaceId: string): DeckServices;
+  /**
+   * Services on the same database, sources, config, clock and logger, with deck locks of
+   * their own: another function instance, as on Netlify, where only the database orders
+   * what two instances do to a deck.
+   */
+  otherInstance(workspaceId?: string): DeckServices;
   /** Creates a user with a workspace of their own (directly, bypassing invites). */
   createUser(displayName: string, role?: UserRole): Promise<HarnessUser>;
   /** The auth service on the same database, config, clock and logger. */
@@ -149,6 +138,8 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     logger,
     sibling: build,
     servicesForWorkspace,
+    otherInstance: (workspaceId = LOCAL_WORKSPACE_ID) =>
+      createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks: new KeyedMutex() }),
     createUser: async (displayName, role = 'member') => {
       const user = await repos.users.create({ displayName, role });
       return { user, services: servicesForWorkspace(user.workspaceId) };
@@ -261,15 +252,21 @@ export async function commitReviewed(
   message: string,
   tags?: string[],
 ): Promise<CommitOutcome> {
-  const overview = defined(await harness.services.getOverview(deckId), 'overview');
-  const working = defined(overview.working, 'working state');
   harness.clock.advance(1);
-  return harness.services.commit(deckId, {
-    message,
-    expectedObservationId: working.id,
-    expectedHeadCommitId: overview.head?.commitId ?? null,
-    ...(tags ? { tags } : {}),
-  });
+  return commitWorkingState(harness.services, deckId, { message, ...(tags ? { tags } : {}) });
+}
+
+/**
+ * Captures `spec` through `services` one second after the harness clock's time, like the
+ * bookmarklet does; returns the deck's id.
+ */
+export async function captureNext(
+  harness: Pick<ServiceHarness, 'clock'>,
+  services: DeckServices,
+  spec: MoxDeckSpec,
+): Promise<string> {
+  harness.clock.advance(1);
+  return captureSpec(services, spec, harness.clock.iso());
 }
 
 /** The version of a successful commit; fails the test for any other outcome. */

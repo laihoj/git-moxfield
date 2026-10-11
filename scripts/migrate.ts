@@ -26,26 +26,25 @@
  */
 
 import { pluralize } from '@/core/text';
-import { getConfig, type AppConfig } from '@/server/config';
+import type { AppConfig } from '@/server/config';
 import { ensureLocalWorkspace } from '@/server/db/client';
 import { createLibsqlDatabase, databaseKindOf, type LibsqlDatabase } from '@/server/db/libsql';
 import { applyMigrations } from '@/server/db/migration-state';
 import { runsOnNetlify, type PlatformEnv } from '@/server/platform';
 
-import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
-import { isEntryPoint, runMain } from './cli';
-import { loadEnvFiles } from './load-env';
-
-export interface MigrateCommandIO {
-  out(line: string): void;
-  err(line: string): void;
-}
+import { consoleIO, isEntryPoint, runMain, type CommandIO } from './cli';
+import {
+  describeConfiguredDatabase,
+  describeFailure,
+  isMissingDatabaseFile,
+  loadConfigOrReport,
+} from './database';
 
 export interface MigrateCommandDependencies {
   config: AppConfig;
   /** The process environment, to tell where the script runs. Default: `process.env`. */
   env?: PlatformEnv;
-  io: MigrateCommandIO;
+  io: CommandIO;
   /** Folder with the migrations and their journal. Default: `drizzle/` in the working directory. */
   migrationsFolder?: string;
 }
@@ -116,23 +115,8 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
 }
 
 async function main(): Promise<number> {
-  const io: MigrateCommandIO = {
-    out: (line) => {
-      console.log(line);
-    },
-    err: (line) => {
-      console.error(line);
-    },
-  };
-  let config: AppConfig;
-  try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    io.err(describeFailure(error));
-    return 1;
-  }
-  return runMigrateCommand({ config, io });
+  const config = loadConfigOrReport(consoleIO);
+  return config === null ? 1 : runMigrateCommand({ config, io: consoleIO });
 }
 
 // Run only as a script (`pnpm db:migrate`), not when imported by tests.

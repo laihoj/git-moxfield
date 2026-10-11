@@ -5,9 +5,13 @@
  */
 import { existsSync } from 'node:fs';
 
-import type { AppConfig } from '@/server/config';
-import { databaseFileOf, databaseKindOf, describeDatabaseUrl } from '@/server/db/libsql';
+import { getConfig, type AppConfig } from '@/server/config';
+import { openConfiguredDatabase } from '@/server/db/client';
+import { databaseFileOf, databaseKindOf, describeDatabaseUrl, type LibsqlDatabase } from '@/server/db/libsql';
 import { classifySqlError, connectionFailureOf } from '@/server/db/sql-errors';
+
+import type { CommandIO } from './cli';
+import { loadEnvFiles } from './load-env';
 
 /** What the configured database is, safe to print (never a credential). */
 export function describeConfiguredDatabase(config: AppConfig): string {
@@ -21,6 +25,37 @@ export function describeConfiguredDatabase(config: AppConfig): string {
 export function isMissingDatabaseFile(config: AppConfig): boolean {
   const file = databaseFileOf(config.database.url);
   return file !== undefined && !existsSync(file);
+}
+
+/**
+ * The app's configuration for a script (the environment and the `.env*` files, see
+ * `./load-env`), or `null` after reporting to `io.err` why it is not usable.
+ */
+export function loadConfigOrReport(io: CommandIO): AppConfig | null {
+  try {
+    loadEnvFiles();
+    return getConfig();
+  } catch (error) {
+    io.err(describeFailure(error));
+    return null;
+  }
+}
+
+/**
+ * Opens the configured database as the app does (see `openConfiguredDatabase`), or `null`
+ * after reporting to `io.err` why it could not be opened. The caller closes the handle.
+ */
+export async function openConfiguredDatabaseOrReport(
+  config: AppConfig,
+  io: CommandIO,
+  options: Parameters<typeof openConfiguredDatabase>[1] = {},
+): Promise<LibsqlDatabase | null> {
+  try {
+    return await openConfiguredDatabase(config, options);
+  } catch (error) {
+    io.err(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`);
+    return null;
+  }
 }
 
 /**
