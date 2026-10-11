@@ -21,6 +21,7 @@
  */
 import { parseArgs } from 'node:util';
 
+import { parseHttpUrl } from '@/core/http-url';
 import { createAuthService, SYSTEM_ACTOR, type AuthService } from '@/server/auth/service';
 import type { UserDTO } from '@/server/auth/types';
 import { getConfig, type AppConfig } from '@/server/config';
@@ -184,15 +185,9 @@ function parse(args: string[], options: OptionSpec, allowPositionals = false) {
 
 function resolveBaseUrl(option: unknown, config: AppConfig): string {
   const value = typeof option === 'string' ? option : (config.PUBLIC_APP_URL ?? DEFAULT_APP_URL);
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new UsageError(`--base-url must be an absolute URL such as ${DEFAULT_APP_URL}.`);
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new UsageError('--base-url must be an http or https URL.');
-  }
+  const url = parseHttpUrl(value);
+  if (url === null)
+    throw new UsageError(`--base-url must be an absolute http(s) URL such as ${DEFAULT_APP_URL}.`);
   return url.href;
 }
 

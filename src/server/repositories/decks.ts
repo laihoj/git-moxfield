@@ -5,7 +5,7 @@
 import { and, asc, desc, eq, getTableColumns, ne, or, sql } from 'drizzle-orm';
 
 import { isRecord } from '@/core/guards';
-import type { DeckSourceErrorCode } from '@/integrations/deck-source';
+import { isDeckSourceErrorCode, type DeckSourceErrorCode } from '@/integrations/deck-source';
 import { branches, commits, deckRelinks, decks, observations } from '@/server/db/schema';
 
 import { corruptData, decodeJson, encodeJson } from './codec';
@@ -392,25 +392,13 @@ export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
   };
 }
 
-const FETCH_ERROR_CODES: Record<DeckSourceErrorCode, true> = {
-  'invalid-ref': true,
-  'not-found': true,
-  forbidden: true,
-  blocked: true,
-  'rate-limited': true,
-  unavailable: true,
-  timeout: true,
-  network: true,
-  schema: true,
-};
-
 function decodeFetchError(text: string, deckId: string): FetchErrorRecord {
   const what = `Fetch error of deck ${deckId}`;
   const value = decodeJson(text, what);
   if (
     !isRecord(value) ||
     typeof value.code !== 'string' ||
-    !Object.hasOwn(FETCH_ERROR_CODES, value.code) ||
+    !isDeckSourceErrorCode(value.code) ||
     typeof value.message !== 'string' ||
     typeof value.at !== 'string' ||
     (value.retryAfterSeconds !== null && typeof value.retryAfterSeconds !== 'number')

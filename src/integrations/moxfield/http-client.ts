@@ -7,20 +7,21 @@
  * Cloudflare block pauses all further requests for `blockBackoffSeconds`, and a 429
  * pauses them for its `Retry-After` (at most `blockBackoffSeconds`).
  */
+import { httpBaseUrl, parseHttpUrl } from '@/core/http-url';
+import type { Logger } from '@/core/logger';
+import { SerialQueue } from '@/core/serial-queue';
 import { readStreamLimited } from '@/core/streams';
 
-import { DeckSourceError, retryAfterSecondsUntil, type DeckSourceErrorCode } from '../deck-source';
+import { retryAfterSecondsUntil, type DeckSourceError, type DeckSourceErrorCode } from '../deck-source';
 
-import { DEFAULT_MOXFIELD_USER_AGENT, MOXFIELD_INTERNAL_ID_PATTERN, MOXFIELD_SOURCE_ID } from './constants';
+import {
+  DEFAULT_MOXFIELD_USER_AGENT,
+  MOXFIELD_INTERNAL_ID_PATTERN,
+  moxfieldDeckApiPath,
+  moxfieldPrimerApiPath,
+} from './constants';
+import { moxfieldError } from './errors';
 import { isValidMoxfieldPublicId } from './url';
-
-/** Structured logger; compatible with `src/server/logger.ts`. */
-export interface MoxfieldLogger {
-  debug(message: string, context?: Record<string, unknown>): void;
-  info(message: string, context?: Record<string, unknown>): void;
-  warn(message: string, context?: Record<string, unknown>): void;
-  error(message: string, context?: Record<string, unknown>): void;
-}
 
 export interface MoxfieldHttpClientOptions {
   /** API base URL, e.g. `https://api2.moxfield.com` (a path prefix is allowed). */
@@ -37,7 +38,7 @@ export interface MoxfieldHttpClientOptions {
   /** Clock in epoch milliseconds. Defaults to `Date.now`. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  logger?: MoxfieldLogger;
+  logger?: Logger;
 }
 
 /** Delay before the single retry of a 5xx or network failure. */
@@ -54,6 +55,18 @@ const DEFAULT_RATE_LIMIT_PAUSE_SECONDS = 60;
 
 /** Generous safety cap for a response body (a large deck is a few MB). */
 const MAX_RESPONSE_BYTES = 16_000_000;
+
+/** Why requests are held back: Moxfield's bot protection blocked them, or answered 429. */
+type PauseKind = 'blocked' | 'rate-limited';
+
+/** In the order a request checks them: a block wins over a rate limit. */
+const PAUSE_KINDS: readonly PauseKind[] = ['blocked', 'rate-limited'];
+
+const PAUSE_MESSAGES: Record<PauseKind, string> = {
+  blocked:
+    'Moxfield is blocking server-side requests (bot protection); server fetches are paused. Use browser capture instead.',
+  'rate-limited': 'Moxfield is rate limiting requests; try again later.',
+};
 
 interface Failure {
   error: DeckSourceError;
@@ -111,21 +124,19 @@ export class MoxfieldHttpClient {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly logger: MoxfieldLogger | undefined;
+  private readonly logger: Logger | undefined;
 
-  /** Tail of the request queue; each request runs after the previous one settled. */
-  private queue: Promise<void> = Promise.resolve();
+  /** Each request runs after the previous one settled. */
+  private readonly queue = new SerialQueue();
   private lastRequestStart: number | null = null;
-  private blockedUntilMs: number | null = null;
-  private rateLimitedUntilMs: number | null = null;
+  /** Epoch ms until which requests are paused, per kind of pause. */
+  private readonly pausedUntilMs: Record<PauseKind, number | null> = { blocked: null, 'rate-limited': null };
 
   /** @throws {TypeError} when `apiBaseUrl` is not an absolute http(s) URL. */
   constructor(options: MoxfieldHttpClientOptions) {
-    const base = new URL(options.apiBaseUrl);
-    if (base.protocol !== 'http:' && base.protocol !== 'https:') {
-      throw new TypeError('Moxfield apiBaseUrl must use http or https');
-    }
-    this.baseUrl = `${base.origin}${base.pathname.replace(/\/+$/, '')}`;
+    const base = parseHttpUrl(options.apiBaseUrl);
+    if (base === null) throw new TypeError('Moxfield apiBaseUrl must be an absolute http(s) URL');
+    this.baseUrl = httpBaseUrl(base);
     this.userAgent = options.userAgent ?? DEFAULT_MOXFIELD_USER_AGENT;
     this.timeoutMs = options.timeoutMs;
     this.minRequestIntervalMs = options.minRequestIntervalMs;
@@ -145,10 +156,10 @@ export class MoxfieldHttpClient {
   getDeckJson(publicId: string, signal?: AbortSignal): Promise<unknown> {
     if (!isValidMoxfieldPublicId(publicId)) {
       return Promise.reject(
-        this.error('invalid-ref', `Invalid Moxfield deck id: ${JSON.stringify(publicId)}`),
+        moxfieldError('invalid-ref', `Invalid Moxfield deck id: ${JSON.stringify(publicId)}`),
       );
     }
-    return this.enqueue(`/v3/decks/all/${encodeURIComponent(publicId)}`, signal);
+    return this.enqueue(moxfieldDeckApiPath(publicId), signal);
   }
 
   /**
@@ -160,16 +171,15 @@ export class MoxfieldHttpClient {
   getPrimerJson(internalId: string, signal?: AbortSignal): Promise<unknown> {
     if (!MOXFIELD_INTERNAL_ID_PATTERN.test(internalId)) {
       return Promise.reject(
-        this.error('schema', `Invalid Moxfield internal deck id: ${JSON.stringify(internalId)}`),
+        moxfieldError('schema', `Invalid Moxfield internal deck id: ${JSON.stringify(internalId)}`),
       );
     }
-    return this.enqueue(`/v1/decks/${encodeURIComponent(internalId)}/primer`, signal);
+    return this.enqueue(moxfieldPrimerApiPath(internalId), signal);
   }
 
   /** Epoch ms until which requests are paused after a block, or `null` when not blocked. */
   blockedUntil(): number | null {
-    if (this.blockedUntilMs !== null && this.now() >= this.blockedUntilMs) this.blockedUntilMs = null;
-    return this.blockedUntilMs;
+    return this.activePause('blocked');
   }
 
   /**
@@ -178,33 +188,24 @@ export class MoxfieldHttpClient {
    * unavailable: requests in the window fail fast with `rate-limited` instead.
    */
   rateLimitedUntil(): number | null {
-    if (this.rateLimitedUntilMs !== null && this.now() >= this.rateLimitedUntilMs) {
-      this.rateLimitedUntilMs = null;
-    }
-    return this.rateLimitedUntilMs;
+    return this.activePause('rate-limited');
   }
 
   /** Ends a pause after a block or a 429 right away: the next request is sent again. */
   clearPauses(): void {
-    this.blockedUntilMs = null;
-    this.rateLimitedUntilMs = null;
+    this.pausedUntilMs.blocked = null;
+    this.pausedUntilMs['rate-limited'] = null;
   }
 
-  private error(
-    code: DeckSourceErrorCode,
-    message: string,
-    extra: { status?: number; retryAfterSeconds?: number; cause?: unknown } = {},
-  ): DeckSourceError {
-    return new DeckSourceError(code, message, { source: MOXFIELD_SOURCE_ID, ...extra });
+  /** Until when `kind` of pause lasts, or `null` once it is over (or was never set). */
+  private activePause(kind: PauseKind): number | null {
+    const until = this.pausedUntilMs[kind];
+    if (until !== null && this.now() >= until) this.pausedUntilMs[kind] = null;
+    return this.pausedUntilMs[kind];
   }
 
   private enqueue(path: string, signal: AbortSignal | undefined): Promise<unknown> {
-    const run = this.queue.then(() => this.request(path, signal));
-    this.queue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    return this.queue.run(() => this.request(path, signal));
   }
 
   private async request(path: string, signal: AbortSignal | undefined): Promise<unknown> {
@@ -224,20 +225,12 @@ export class MoxfieldHttpClient {
     }
   }
 
-  private blockedError(until: number, status?: number): DeckSourceError {
+  /** The error of a request refused (or answered) while a `kind` of pause lasts until `until`. */
+  private pauseError(kind: PauseKind, until: number, status?: number): DeckSourceError {
     const retryAfterSeconds = retryAfterSecondsUntil(until, this.now());
-    return this.error(
-      'blocked',
-      'Moxfield is blocking server-side requests (bot protection); server fetches are paused. Use browser capture instead.',
-      status === undefined ? { retryAfterSeconds } : { status, retryAfterSeconds },
-    );
-  }
-
-  private rateLimitedError(until: number, status?: number): DeckSourceError {
-    const retryAfterSeconds = retryAfterSecondsUntil(until, this.now());
-    return this.error(
-      'rate-limited',
-      'Moxfield is rate limiting requests; try again later.',
+    return moxfieldError(
+      kind,
+      PAUSE_MESSAGES[kind],
       status === undefined ? { retryAfterSeconds } : { status, retryAfterSeconds },
     );
   }
@@ -257,15 +250,13 @@ export class MoxfieldHttpClient {
     extra: { status?: number; retryAfterSeconds?: number; cause?: unknown } = {},
     retryable = false,
   ): Failure {
-    return { error: this.error(code, message, extra), retryable };
+    return { error: moxfieldError(code, message, extra), retryable };
   }
 
   private async attempt(path: string, signal: AbortSignal | undefined): Promise<{ body: unknown } | Failure> {
-    const blockedUntil = this.blockedUntil();
-    if (blockedUntil !== null) return { error: this.blockedError(blockedUntil), retryable: false };
-    const rateLimitedUntil = this.rateLimitedUntil();
-    if (rateLimitedUntil !== null) {
-      return { error: this.rateLimitedError(rateLimitedUntil), retryable: false };
+    for (const kind of PAUSE_KINDS) {
+      const until = this.activePause(kind);
+      if (until !== null) return { error: this.pauseError(kind, until), retryable: false };
     }
     signal?.throwIfAborted();
     await this.throttle();
@@ -326,8 +317,8 @@ export class MoxfieldHttpClient {
     await discardBody(response);
     if (isBotProtectionBlock(response, contentType, isJson)) {
       const until = this.now() + this.blockBackoffMs;
-      this.blockedUntilMs = until;
-      return { error: this.blockedError(until, status), retryable: false };
+      this.pausedUntilMs.blocked = until;
+      return { error: this.pauseError('blocked', until, status), retryable: false };
     }
     if (status === 404 || status === 410) {
       return this.failure('not-found', 'The deck does not exist on Moxfield (deleted or wrong id).', {
@@ -348,8 +339,8 @@ export class MoxfieldHttpClient {
       const retryAfterSeconds =
         parseRetryAfter(response.headers.get('retry-after'), this.now()) ?? DEFAULT_RATE_LIMIT_PAUSE_SECONDS;
       const until = this.now() + Math.min(retryAfterSeconds * 1000, this.blockBackoffMs);
-      this.rateLimitedUntilMs = Math.max(this.rateLimitedUntilMs ?? 0, until);
-      return { error: this.rateLimitedError(until, status), retryable: false };
+      this.pausedUntilMs['rate-limited'] = Math.max(this.pausedUntilMs['rate-limited'] ?? 0, until);
+      return { error: this.pauseError('rate-limited', until, status), retryable: false };
     }
     const retryAfterSeconds = parseRetryAfter(response.headers.get('retry-after'), this.now());
     const retryable =

@@ -53,7 +53,7 @@ export function requestOrigin(
  */
 export function publicAppUrl(headers: HeaderSource): string | null {
   const configured = getConfig().PUBLIC_APP_URL;
-  if (configured !== undefined) return configured.replace(/\/+$/, '');
+  if (configured !== undefined) return configured;
   return requestOrigin(headers);
 }
 

@@ -11,6 +11,12 @@
  */
 import type { Route } from 'next';
 
+import {
+  CAPTURE_MODE_PARAM,
+  CAPTURE_PAGE_PATH,
+  CAPTURE_PASTE_MODE,
+  type CaptureFormError,
+} from '@/integrations/moxfield/capture-protocol';
 import type { VersionRef } from '@/server/services/contract';
 
 const enc = encodeURIComponent;
@@ -40,7 +46,8 @@ export const WELCOME_REASONS: readonly WelcomeReason[] = ['invite', 'claimed', '
 export const routes = {
   home: (): Route => '/',
   setup: (query: { welcome?: WelcomeReason } = {}): Route => withQuery('/setup', { welcome: query.welcome }),
-  capturePaste: (): Route => '/capture?mode=paste',
+  capturePaste: (query: { error?: CaptureFormError } = {}): Route =>
+    withQuery(CAPTURE_PAGE_PATH, { [CAPTURE_MODE_PARAM]: CAPTURE_PASTE_MODE, error: query.error }),
 
   // Account pages. The server prints the same paths (`src/server/auth/paths.ts`); a test
   // keeps the two in step.

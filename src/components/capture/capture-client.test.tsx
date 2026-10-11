@@ -158,21 +158,18 @@ describe('CaptureClient bookmarklet hand-over', () => {
 
   it('passes the server’s answer to a payload it refused on to the Moxfield tab', async () => {
     fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({ error: 'The deck data is too large (limit 8000000 bytes uncompressed).' }),
-        {
-          status: 413,
-          headers: { 'content-type': 'application/json' },
-        },
-      ),
+      new Response(JSON.stringify({ error: 'The deck data is too large (limit 8.0 MB uncompressed).' }), {
+        status: 413,
+        headers: { 'content-type': 'application/json' },
+      }),
     );
     await renderCaptureClient(false);
     sendFromMoxfield({ t: PAYLOAD, n: NONCE, json: ENVELOPE, key: KEY });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('limit 8000000 bytes uncompressed');
+    expect(await screen.findByRole('alert')).toHaveTextContent('limit 8.0 MB uncompressed');
     await vi.waitFor(() => {
       expect(errorsToMoxfield()).toEqual([
-        { message: 'The deck data is too large (limit 8000000 bytes uncompressed).', origin: SITE },
+        { message: 'The deck data is too large (limit 8.0 MB uncompressed).', origin: SITE },
       ]);
     });
   });

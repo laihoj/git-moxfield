@@ -10,12 +10,24 @@ import { pathToFileURL } from 'node:url';
 
 import { z } from 'zod';
 
+import { stripTrailingSlashes } from '@/core/http-url';
+import {
+  DEFAULT_MOXFIELD_API_BASE_URL,
+  DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS,
+  DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+  DEFAULT_MOXFIELD_SITE_ORIGIN,
+  DEFAULT_MOXFIELD_TIMEOUT_MS,
+} from '@/integrations/moxfield/constants';
+
 import { invalidAllowedHosts } from './host-guard';
 import { runsOnNetlify } from './platform';
 
 const boolish = z
   .enum(['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'])
   .transform((v) => ['true', '1', 'yes', 'on'].includes(v));
+
+/** An absolute http(s) URL (a base URL of the app or of Moxfield): other schemes fail at startup. */
+const httpUrl = () => z.url({ protocol: /^https?$/ });
 
 /** URL schemes the libSQL client accepts (see `src/server/db/libsql.ts`). */
 const DATABASE_URL = /^(?:(?:libsql|https?|wss?|file):|:memory:$)/i;
@@ -42,9 +54,9 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
   /** Base URL of the Moxfield API. Overridden in tests to point at the mock server. */
-  MOXFIELD_API_BASE_URL: z.url().default('https://api2.moxfield.com'),
+  MOXFIELD_API_BASE_URL: httpUrl().default(DEFAULT_MOXFIELD_API_BASE_URL).transform(stripTrailingSlashes),
   /** Origin of the Moxfield website (deck URLs, capture origin check). */
-  MOXFIELD_SITE_ORIGIN: z.url().default('https://moxfield.com'),
+  MOXFIELD_SITE_ORIGIN: httpUrl().default(DEFAULT_MOXFIELD_SITE_ORIGIN),
   /** User-Agent issued by Moxfield for approved projects. Server-side only. */
   MOXFIELD_USER_AGENT: z.string().trim().min(1).optional(),
   /**
@@ -53,11 +65,21 @@ const schema = z.object({
    * attempt would only cost a request and a block backoff), `auto` everywhere else.
    */
   MOXFIELD_SERVER_FETCH: z.enum(['auto', 'off']).optional(),
-  MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+  MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(DEFAULT_MOXFIELD_TIMEOUT_MS),
   /** Minimum spacing between any two requests to Moxfield from this process. */
-  MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).max(60_000).default(1_000),
+  MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(60_000)
+    .default(DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS),
   /** How long to pause server fetches after a bot-protection block. */
-  MOXFIELD_BLOCK_BACKOFF_SECONDS: z.coerce.number().int().min(0).max(86_400).default(3_600),
+  MOXFIELD_BLOCK_BACKOFF_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(86_400)
+    .default(DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS),
 
   /** Minimum seconds between two refreshes of the same deck. */
   REFRESH_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(3_600).default(10),
@@ -67,7 +89,7 @@ const schema = z.object({
   /** Comma-separated origins allowed to hand captured decks to /capture. Defaults to the Moxfield site origin. */
   CAPTURE_ALLOWED_ORIGINS: z.string().optional(),
   /** Public URL of this app, baked into bookmarklets. Defaults to the request origin. */
-  PUBLIC_APP_URL: z.url().optional(),
+  PUBLIC_APP_URL: httpUrl().transform(stripTrailingSlashes).optional(),
   /**
    * Comma-separated host names (ports ignored) the app may be reached under besides IP
    * addresses, `localhost`/`*.localhost` and the host of `PUBLIC_APP_URL`, e.g. an mDNS

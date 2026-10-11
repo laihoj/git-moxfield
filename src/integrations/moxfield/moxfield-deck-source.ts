@@ -6,7 +6,6 @@ import { isRecord } from '@/core/guards';
 import type { CanonicalSnapshot, NormalizedDeck, SourceDeckMetadata } from '@/core/model';
 
 import {
-  DeckSourceError,
   isDeckSourceError,
   retryAfterSecondsUntil,
   type DeckRef,
@@ -22,41 +21,32 @@ import {
 import { parseMoxfieldCapture } from './capture';
 import {
   DEFAULT_MOXFIELD_API_BASE_URL,
+  DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS,
+  DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS,
   DEFAULT_MOXFIELD_SITE_ORIGIN,
+  DEFAULT_MOXFIELD_TIMEOUT_MS,
   MOXFIELD_PAYLOAD_MEDIA_TYPE,
   MOXFIELD_SOURCE_ID,
 } from './constants';
-import { MoxfieldHttpClient, type MoxfieldLogger } from './http-client';
+import { moxfieldError, moxfieldSchemaError } from './errors';
+import { MoxfieldHttpClient, type MoxfieldHttpClientOptions } from './http-client';
 import { normalizeMoxfieldPayload } from './normalize';
 import { moxfieldPrimerToMarkdown } from './primer-markup';
 import { moxfieldRestoreExport } from './restore-text';
 import { parseMoxfieldPayloadData, type MoxfieldPayloadData } from './schema';
 import { isValidMoxfieldPublicId, moxfieldDeckUrl, parseMoxfieldDeckInput } from './url';
 
-export interface MoxfieldDeckSourceOptions {
-  /** Defaults to `https://api2.moxfield.com`. */
-  apiBaseUrl?: string;
+/**
+ * Options of the adapter: those of its HTTP client, all optional (defaults: the
+ * `DEFAULT_MOXFIELD_*` constants and an honest `git-moxfield/<version>` User-Agent), and
+ * the two it decides itself.
+ */
+export interface MoxfieldDeckSourceOptions extends Partial<MoxfieldHttpClientOptions> {
   /** Defaults to `https://moxfield.com`. */
   siteOrigin?: string;
-  /** Moxfield-issued User-Agent; without it an honest `git-moxfield/<version>` UA is sent. */
-  userAgent?: string;
   /** `auto` (default): fetch server-side, pausing after blocks. `off`: never fetch server-side. */
   serverFetch?: 'auto' | 'off';
-  /** Per-request timeout. Default 15 000 ms. */
-  timeoutMs?: number;
-  /** Minimum spacing between Moxfield requests. Default 1 000 ms. */
-  minRequestIntervalMs?: number;
-  /** Server-fetch pause after a bot-protection block. Default 3 600 s. */
-  blockBackoffSeconds?: number;
-  fetchImpl?: typeof fetch;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  logger?: MoxfieldLogger;
 }
-
-const DEFAULT_TIMEOUT_MS = 15_000;
-const DEFAULT_MIN_REQUEST_INTERVAL_MS = 1_000;
-const DEFAULT_BLOCK_BACKOFF_SECONDS = 3_600;
 
 const DISABLED_REASON =
   'Server-side fetching from Moxfield is turned off. Use the bookmarklet or paste the deck JSON instead.';
@@ -84,9 +74,9 @@ export class MoxfieldDeckSource implements DeckSource {
     this.client = new MoxfieldHttpClient({
       apiBaseUrl: options.apiBaseUrl ?? DEFAULT_MOXFIELD_API_BASE_URL,
       userAgent: options.userAgent,
-      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      minRequestIntervalMs: options.minRequestIntervalMs ?? DEFAULT_MIN_REQUEST_INTERVAL_MS,
-      blockBackoffSeconds: options.blockBackoffSeconds ?? DEFAULT_BLOCK_BACKOFF_SECONDS,
+      timeoutMs: options.timeoutMs ?? DEFAULT_MOXFIELD_TIMEOUT_MS,
+      minRequestIntervalMs: options.minRequestIntervalMs ?? DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+      blockBackoffSeconds: options.blockBackoffSeconds ?? DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS,
       fetchImpl: options.fetchImpl,
       now: this.now,
       sleep: options.sleep,
@@ -124,21 +114,15 @@ export class MoxfieldDeckSource implements DeckSource {
    */
   async getDeck(ref: DeckRef, options: FetchOptions = {}): Promise<RawSourcePayload> {
     if (ref.source !== MOXFIELD_SOURCE_ID || !isValidMoxfieldPublicId(ref.externalId)) {
-      throw new DeckSourceError(
-        'invalid-ref',
-        `Not a Moxfield deck reference: ${ref.source}:${ref.externalId}`,
-        {
-          source: MOXFIELD_SOURCE_ID,
-        },
-      );
+      throw moxfieldError('invalid-ref', `Not a Moxfield deck reference: ${ref.source}:${ref.externalId}`);
     }
     const status = this.serverFetchStatus();
     if (status.state === 'disabled') {
-      throw new DeckSourceError('blocked', status.reason, { source: MOXFIELD_SOURCE_ID });
+      throw moxfieldError('blocked', status.reason);
     }
     if (status.state === 'blocked') {
       const retryAfterSeconds = retryAfterSecondsUntil(Date.parse(status.retryAt), this.now());
-      throw new DeckSourceError('blocked', status.reason, { source: MOXFIELD_SOURCE_ID, retryAfterSeconds });
+      throw moxfieldError('blocked', status.reason, { retryAfterSeconds });
     }
 
     const deck = await this.client.getDeckJson(ref.externalId, options.signal);
@@ -172,21 +156,13 @@ export class MoxfieldDeckSource implements DeckSource {
 
   normalizeDeck(raw: RawSourcePayload): NormalizedDeck {
     if (raw.source !== MOXFIELD_SOURCE_ID || raw.mediaType !== MOXFIELD_PAYLOAD_MEDIA_TYPE) {
-      throw new DeckSourceError(
-        'schema',
+      throw moxfieldSchemaError(
         `Unsupported payload for Moxfield: source ${JSON.stringify(raw.source)}, media type ${JSON.stringify(raw.mediaType)}.`,
-        { source: MOXFIELD_SOURCE_ID },
       );
     }
     const data = parseMoxfieldPayloadData(raw.data);
     if (!data.ok) {
-      throw new DeckSourceError(
-        'schema',
-        `The stored Moxfield payload is malformed: ${data.issues.join('; ')}`,
-        {
-          source: MOXFIELD_SOURCE_ID,
-        },
-      );
+      throw moxfieldSchemaError('The stored Moxfield payload is malformed:', data.issues);
     }
     return normalizeMoxfieldPayload(data.value, { siteOrigin: this.siteOrigin });
   }

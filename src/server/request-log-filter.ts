@@ -16,7 +16,7 @@
  * not `server-only`: `next.config.ts` imports it.
  */
 import { HANDOFF_CONFIRM_PATH, INVITE_PATH, SHARED_DECK_PATH, SIGN_IN_PATH } from './auth/paths';
-import { TOKEN_PREFIXES } from './auth/token-format';
+import { TOKEN_PREFIXES } from '../core/token-format';
 
 /** `value` as a literal in a regular expression. */
 function literal(value: string): string {

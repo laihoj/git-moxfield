@@ -104,7 +104,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
           anywhere, takes a minute.
         </p>
         <div>
-          <ButtonLink href="/capture?mode=paste" variant="secondary">
+          <ButtonLink href={routes.capturePaste()} variant="secondary">
             Paste deck JSON
           </ButtonLink>
         </div>

@@ -12,6 +12,14 @@ import {
   type DeckRoutes,
 } from './routes';
 
+describe('capture routes', () => {
+  it('builds the paste page, with the error the same-tab endpoint reports', () => {
+    expect(routes.capturePaste()).toBe('/capture?mode=paste');
+    expect(routes.capturePaste({ error: 'invalid' })).toBe('/capture?mode=paste&error=invalid');
+    expect(routes.capturePaste({ error: 'too-large' })).toBe('/capture?mode=paste&error=too-large');
+  });
+});
+
 /**
  * The server prints and redirects to the account pages (`src/server/auth/paths.ts`); the
  * UI's builders must produce exactly the same paths.

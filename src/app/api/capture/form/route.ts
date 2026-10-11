@@ -68,16 +68,9 @@ const log = createLogger('api/capture/form');
 
 const FORM_CONTENT_TYPES = /^(application\/x-www-form-urlencoded|multipart\/form-data)(\s*;|$)/i;
 
-/** Error codes understood by the `/capture` page (`?error=`); never the payload itself. */
-type FormError = 'invalid' | 'too-large' | 'failed';
-
 /** 303 to a same-origin path; a relative `Location` keeps working behind reverse proxies. */
 function seeOther(location: string): Response {
   return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
-}
-
-function pastePageWithError(error: FormError): string {
-  return `${routes.capturePaste()}&error=${error}`;
 }
 
 /**
@@ -110,16 +103,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
   }
   if (declaredTooLarge(request.headers, CAPTURE_FORM_BODY_LIMIT))
-    return seeOther(pastePageWithError('too-large'));
+    return seeOther(routes.capturePaste({ error: 'too-large' }));
   const body = await readBodyLimited(request, CAPTURE_FORM_BODY_LIMIT);
-  if (!body.ok) return seeOther(pastePageWithError(body.reason === 'too-large' ? 'too-large' : 'invalid'));
+  if (!body.ok)
+    return seeOther(routes.capturePaste({ error: body.reason === 'too-large' ? 'too-large' : 'invalid' }));
 
   let form: FormData;
   try {
     // Parse the already size-checked bytes with the platform's form parser.
     form = await new Response(body.bytes, { headers: { 'content-type': contentType } }).formData();
   } catch {
-    return seeOther(pastePageWithError('invalid'));
+    return seeOther(routes.capturePaste({ error: 'invalid' }));
   }
 
   const key = form.get(CAPTURE_FORM_TOKEN_FIELD);
@@ -137,7 +131,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const payload = form.get(CAPTURE_FORM_FIELD);
   if (typeof payload !== 'string' || payload.trim() === '') {
-    return handOff(request, started, pastePageWithError('invalid'));
+    return handOff(request, started, routes.capturePaste({ error: 'invalid' }));
   }
 
   try {
@@ -150,11 +144,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (outcome.status === 'ingested') {
       return handOff(request, started, routes.deck(outcome.deckId, { captured: true }));
     }
-    return handOff(request, started, pastePageWithError('failed'));
+    return handOff(request, started, routes.capturePaste({ error: 'failed' }));
   } catch (error) {
     const rejected = classifyRejectedCapture(error);
-    if (rejected !== null) return handOff(request, started, pastePageWithError(rejected.formError));
+    if (rejected !== null)
+      return handOff(request, started, routes.capturePaste({ error: rejected.formError }));
     log.error('Same-tab capture failed', { error, userId: started.user.id });
-    return handOff(request, started, pastePageWithError('failed'));
+    return handOff(request, started, routes.capturePaste({ error: 'failed' }));
   }
 }

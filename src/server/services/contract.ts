@@ -13,7 +13,7 @@
  * - {@link SharedDeckServices}: the viewer scope, bound to the one deck a share link
  *   grants (`sharedDeckServices(token)`); read-only by type.
  */
-import type { IngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
+import type { CapturedIngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
 
 import type {
   CaptureOutcome,
@@ -141,7 +141,7 @@ export interface DeckServices {
    */
   ingestCapture(input: {
     data: unknown;
-    method: Exclude<IngestMethod, 'server'>;
+    method: CapturedIngestMethod;
     track: boolean;
     relinkDeckId?: string;
   }): Promise<CaptureOutcome>;

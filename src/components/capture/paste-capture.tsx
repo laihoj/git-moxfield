@@ -7,6 +7,15 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/field';
+import {
+  MOXFIELD_DECK_PATH_PREFIX,
+  MOXFIELD_PRIMER_PATH_PREFIX,
+  MOXFIELD_PRIMER_PATH_SUFFIX,
+  moxfieldDeckApiPath,
+  moxfieldPrimerApiPath,
+} from '@/integrations/moxfield/constants';
+import type { CaptureFormError } from '@/integrations/moxfield/capture-protocol';
+import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 
 import { CaptureStatus } from './capture-status';
 import { PasteZone, type PastedContent } from './paste-zone';
@@ -19,21 +28,6 @@ export interface PasteCaptureProps {
   siteOrigin: string;
   /** A notice above the form (e.g. why the bookmarklet flow fell back to pasting). */
   notice?: ReactNode;
-}
-
-/** Deck id from a pasted Moxfield deck URL or a bare id; `null` when it is neither. */
-export function deckIdFromInput(input: string, siteOrigin: string): string | null {
-  const value = input.trim();
-  if (/^[A-Za-z0-9_-]{4,64}$/.test(value)) return value;
-  try {
-    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
-    const site = new URL(siteOrigin);
-    if (url.host.replace(/^www\./, '') !== site.host.replace(/^www\./, '')) return null;
-    const match = /^\/decks\/([A-Za-z0-9_-]{4,64})(?:\/|$)/.exec(url.pathname);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -63,7 +57,7 @@ function deckProblem(value: PastedContent | null): string | null {
 function primerProblem(value: PastedContent | null): string | null {
   if (value === null) return null;
   if (value.kind === 'invalid') return notJson('primer');
-  if (value.kind === 'deck' || value.kind === 'envelope')
+  if (value.kind === 'deck' || value.kind === 'envelope' || value.kind === 'wrapper')
     return 'This is the deck JSON; paste it in the field above.';
   return null;
 }
@@ -81,12 +75,15 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
   const [primer, setPrimer] = useState<PastedContent | null>(null);
   const submission = useCaptureSubmission();
 
-  const publicId = deckIdFromInput(deckInput, siteOrigin) ?? deck?.publicId ?? null;
-  const deckDataUrl = `${apiBaseUrl}/v3/decks/all/${publicId ?? '<deck id>'}`;
+  const typed = parseMoxfieldDeckInput(deckInput, siteOrigin);
+  const publicId = (typed.ok ? typed.ref.externalId : null) ?? deck?.publicId ?? null;
+  const deckDataUrl =
+    apiBaseUrl +
+    (publicId === null ? `${MOXFIELD_DECK_PATH_PREFIX}<deck id>` : moxfieldDeckApiPath(publicId));
   const internalId = deck?.internalId;
-  const primerDataUrl =
-    internalId === undefined ? null : `${apiBaseUrl}/v1/decks/${encodeURIComponent(internalId)}/primer`;
-  const isEnvelope = deck?.kind === 'envelope';
+  const primerDataUrl = internalId === undefined ? null : apiBaseUrl + moxfieldPrimerApiPath(internalId);
+  // A bookmarklet capture or a { deck, primer } pair already holds everything: no primer step.
+  const isComplete = deck?.kind === 'envelope' || deck?.kind === 'wrapper';
   const deckError = deckProblem(deck);
   const primerError = primerProblem(primer);
   const busy =
@@ -100,8 +97,8 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
     // One JSON text either way, which the submission compresses: the deck (or capture)
     // alone, or deck and primer as JSON strings in `{ deck, primer }`.
     const text =
-      primer === null || isEnvelope ? deck.text : JSON.stringify({ deck: deck.text, primer: primer.text });
-    void submission.submit(text, isEnvelope ? 'browser-capture' : 'manual-paste');
+      primer === null || isComplete ? deck.text : JSON.stringify({ deck: deck.text, primer: primer.text });
+    void submission.submit(text, deck.kind === 'envelope' ? 'browser-capture' : 'manual-paste');
   }
 
   return (
@@ -158,11 +155,14 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
           />
         </Step>
 
-        {!isEnvelope && (
+        {!isComplete && (
           <Step number={4} title="Optional: the primer">
             <DataLink
               href={primerDataUrl}
-              label={primerDataUrl ?? `${apiBaseUrl}/v1/decks/<internal id>/primer`}
+              label={
+                primerDataUrl ??
+                `${apiBaseUrl}${MOXFIELD_PRIMER_PATH_PREFIX}<internal id>${MOXFIELD_PRIMER_PATH_SUFFIX}`
+              }
               disabledHint="The link appears once the deck JSON is pasted (it needs the deck's internal id)."
             />
             <PasteZone
@@ -178,16 +178,7 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
           </Step>
         )}
 
-        <CaptureStatus
-          phase={submission.phase}
-          onTrack={() => {
-            void submission.track();
-          }}
-          onRelink={(deckId) => {
-            void submission.relink(deckId);
-          }}
-          onCancel={submission.reset}
-        />
+        <CaptureStatus submission={submission} />
 
         {submission.phase.kind !== 'untracked' && submission.phase.kind !== 'done' && (
           <Button
@@ -256,16 +247,16 @@ function DataLink({
   );
 }
 
+const FORM_ERROR_TITLES: Record<CaptureFormError, string> = {
+  'too-large': 'The deck sent from Moxfield was too large to import.',
+  invalid: 'The deck sent from Moxfield could not be read.',
+  failed: 'Importing the deck sent from Moxfield failed.',
+};
+
 /** Notice for `?error=` codes set by the same-tab capture endpoint. */
-export function FormErrorNotice({ code }: { code: string }) {
-  const message =
-    code === 'too-large'
-      ? 'The deck sent from Moxfield was too large to import.'
-      : code === 'invalid'
-        ? 'The deck sent from Moxfield could not be read.'
-        : 'Importing the deck sent from Moxfield failed.';
+export function FormErrorNotice({ code }: { code: CaptureFormError }) {
   return (
-    <Alert tone="error" title={message}>
+    <Alert tone="error" title={FORM_ERROR_TITLES[code]}>
       You can paste the deck below instead.
     </Alert>
   );

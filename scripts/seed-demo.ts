@@ -26,6 +26,7 @@
  */
 import { parseArgs } from 'node:util';
 
+import type { CapturedIngestMethod } from '@/integrations/deck-source';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
 import { createLogger, type Logger } from '@/server/logger';
@@ -338,7 +339,7 @@ class DemoDeck {
 interface DemoVersion {
   day: number;
   message: string;
-  method?: 'browser-capture' | 'manual-paste';
+  method?: CapturedIngestMethod;
   tags?: string[];
   note?: string;
   edit?: (deck: DemoDeck) => void;
@@ -494,7 +495,7 @@ async function capture(
   services: DeckServices,
   deck: DemoDeck,
   clock: DemoClock,
-  method: 'browser-capture' | 'manual-paste',
+  method: CapturedIngestMethod,
 ): Promise<string> {
   // Edited on Moxfield 25 minutes before it was sent to git-moxfield.
   const spec = deck.spec(new Date(clock.now().getTime() - 25 * MINUTE_MS));

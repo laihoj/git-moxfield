@@ -16,6 +16,7 @@ import {
   MAX_PLAIN_CAPTURE_BYTES,
 } from '@/integrations/moxfield/capture-codec-protocol';
 
+import { formatBytes } from '@/core/text';
 import type * as AccessModule from '@/server/access';
 import type * as AuthModule from '@/server/auth';
 import type { SessionUser, SignIn } from '@/server/auth/types';
@@ -266,7 +267,7 @@ describe('POST /api/capture with compressed payloads', () => {
     const response = await capture({ payload: bomb, method: 'browser-capture', track: true, key });
     expect(response.status).toBe(413);
     expect(await response.json()).toEqual({
-      error: `The deck data is too large (limit ${MAX_DECODED_CAPTURE_BYTES} bytes uncompressed).`,
+      error: `The deck data is too large (limit ${formatBytes(MAX_DECODED_CAPTURE_BYTES)} uncompressed).`,
     });
     expect(setCookies(response).has('__Host-gm_session')).toBe(true);
     expect(await decksOf(owner.user)).toEqual([]);

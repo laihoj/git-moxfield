@@ -453,7 +453,7 @@ Design and rationale: [ADR 0006](./adr/0006-accounts-with-bookmarklet-keys.md). 
 - **Tokens** are a type prefix plus 32 random bytes in base64url: `gmk_` keys, `gms_`
   sessions, `gmi_` invites, `gml_` device and recovery links, `gmv_` share links. Only
   their SHA-256 is stored, and they are looked up by it; the format is checked before any
-  lookup (`token-format.ts`). Plaintext leaves the auth service once, to whoever it is
+  lookup (`src/core/token-format.ts`). Plaintext leaves the auth service once, to whoever it is
   for: a cookie, a link shown to its creator, a new bookmarklet.
 - **Sessions** are an `HttpOnly`, `SameSite=Lax` cookie: `__Host-gm_session` with `Secure`
   over https and on the loopback host, `gm_session` over plain http to a LAN address

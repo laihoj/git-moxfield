@@ -8,7 +8,7 @@
 import { stableStringify } from '@/core/canonical';
 import { isRecord } from '@/core/guards';
 import type { IngestWarning, SourceDeckMetadata } from '@/core/model';
-import type { IngestMethod } from '@/integrations/deck-source';
+import { isIngestMethod, type IngestMethod } from '@/integrations/deck-source';
 
 import { assertStorableSize } from './context';
 import { RepositoryError } from './errors';
@@ -44,16 +44,6 @@ function isStringArray(value: unknown): value is string[] {
 
 export function corruptData(what: string, problem: string): RepositoryError {
   return new RepositoryError('corrupt-data', `${what}: ${problem}`);
-}
-
-const INGEST_METHODS: Record<IngestMethod, true> = {
-  server: true,
-  'browser-capture': true,
-  'manual-paste': true,
-};
-
-export function isIngestMethod(value: string): value is IngestMethod {
-  return Object.hasOwn(INGEST_METHODS, value);
 }
 
 export function decodeIngestMethod(value: string, what: string): IngestMethod {

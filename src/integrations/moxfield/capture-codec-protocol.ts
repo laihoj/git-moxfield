@@ -117,6 +117,23 @@ export function isEncodedCapturePayload(payload: string): boolean {
 }
 
 /**
+ * Whether `text` takes more than `maxBytes` bytes as UTF-8, counted without encoding it:
+ * the UTF-16 length is a lower bound (every code unit takes at least a byte), so the exact
+ * count only runs for text that might fit. A lone surrogate counts as the 3 bytes of U+FFFD,
+ * as encoders write it.
+ */
+export function exceedsUtf8Bytes(text: string, maxBytes: number): boolean {
+  if (text.length > maxBytes) return true;
+  let bytes = 0;
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    bytes += codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+    if (bytes > maxBytes) return true;
+  }
+  return false;
+}
+
+/**
  * Cheap client-side pre-check, so that the capture page can show its own message instead
  * of sending a request that is bound to fail. The server's decoder stays authoritative:
  * plain payloads are measured in UTF-16 code units here, a lower bound of their UTF-8 size.

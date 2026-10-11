@@ -54,3 +54,10 @@ export function truncateWithEllipsis(text: string, max: number): string {
   if (lastKept >= 0xd800 && lastKept <= 0xdbff) end -= 1;
   return `${text.slice(0, end).trimEnd()}…`;
 }
+
+/** Bytes as `512 B`, `12.3 KB`, `1.4 MB` (decimal units, as browsers show downloads). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}

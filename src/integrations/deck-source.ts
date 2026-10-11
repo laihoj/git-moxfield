@@ -34,32 +34,47 @@ export interface RawSourcePayload {
   data: unknown;
 }
 
-/** How a payload reached git-moxfield. */
-export type IngestMethod =
-  /** The git-moxfield server fetched it from the source API. */
-  | 'server'
-  /** The user's browser fetched it on the source site (bookmarklet) and handed it over. */
-  | 'browser-capture'
-  /** The user pasted raw JSON manually. */
-  | 'manual-paste';
+/**
+ * How a payload reached git-moxfield: `server` (the git-moxfield server fetched it from the
+ * source API), `browser-capture` (the user's browser fetched it on the source site, via the
+ * bookmarklet, and handed it over) or `manual-paste` (the user pasted raw JSON).
+ */
+export const INGEST_METHODS = ['server', 'browser-capture', 'manual-paste'] as const;
 
-export type DeckSourceErrorCode =
-  /** The URL/id is not a valid deck reference. */
-  | 'invalid-ref'
-  /** The deck does not exist (deleted, or never existed). */
-  | 'not-found'
-  /** The deck exists but is private / not accessible anonymously. */
-  | 'forbidden'
-  /** Requests are blocked by the source's bot protection (e.g. Cloudflare WAF). */
-  | 'blocked'
-  /** HTTP 429 or equivalent. */
-  | 'rate-limited'
-  /** Source returned 5xx or is otherwise unavailable. */
-  | 'unavailable'
-  | 'timeout'
-  | 'network'
-  /** The response could not be understood (schema changed, not JSON, ...). */
-  | 'schema';
+export type IngestMethod = (typeof INGEST_METHODS)[number];
+
+/** The ways a deck is handed to the server by the user's browser (everything but `server`). */
+export type CapturedIngestMethod = Exclude<IngestMethod, 'server'>;
+
+export function isIngestMethod(value: string): value is IngestMethod {
+  return (INGEST_METHODS as readonly string[]).includes(value);
+}
+
+/**
+ * Why a source could not deliver a deck: `invalid-ref` (the URL/id is not a valid deck
+ * reference), `not-found` (deleted, or never existed), `forbidden` (private / not
+ * accessible anonymously), `blocked` (the source's bot protection, e.g. a Cloudflare WAF),
+ * `rate-limited` (HTTP 429 or equivalent), `unavailable` (5xx or otherwise down),
+ * `timeout`, `network` and `schema` (the response could not be understood: schema
+ * changed, not JSON, ...).
+ */
+export const DECK_SOURCE_ERROR_CODES = [
+  'invalid-ref',
+  'not-found',
+  'forbidden',
+  'blocked',
+  'rate-limited',
+  'unavailable',
+  'timeout',
+  'network',
+  'schema',
+] as const;
+
+export type DeckSourceErrorCode = (typeof DECK_SOURCE_ERROR_CODES)[number];
+
+export function isDeckSourceErrorCode(value: string): value is DeckSourceErrorCode {
+  return (DECK_SOURCE_ERROR_CODES as readonly string[]).includes(value);
+}
 
 /**
  * Brand for {@link isDeckSourceError}. A registered symbol, so errors thrown by a
@@ -115,13 +130,13 @@ export function retryAfterSecondsUntil(untilMs: number, nowMs: number): number {
   return Math.max(0, Math.ceil((untilMs - nowMs) / 1000));
 }
 
+/** Whether `value` carries the registered-symbol `brand` that marks errors across module graphs. */
+export function hasBrand(value: unknown, brand: symbol): boolean {
+  return typeof value === 'object' && value !== null && (value as Record<symbol, unknown>)[brand] === true;
+}
+
 export function isDeckSourceError(value: unknown): value is DeckSourceError {
-  if (value instanceof DeckSourceError) return true;
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Partial<Record<typeof DECK_SOURCE_ERROR_BRAND, unknown>>)[DECK_SOURCE_ERROR_BRAND] === true
-  );
+  return value instanceof DeckSourceError || hasBrand(value, DECK_SOURCE_ERROR_BRAND);
 }
 
 /**

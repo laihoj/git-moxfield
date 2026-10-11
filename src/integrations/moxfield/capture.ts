@@ -8,10 +8,10 @@
  * (`decodeCapturePayload` in `./capture-codec`, which the capture endpoints call).
  */
 import { isRecord } from '@/core/guards';
+import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
+import { formatBytes } from '@/core/text';
 
-import { DeckSourceError } from '../deck-source';
-
-import { ENCODE_CAPTURE_PAYLOAD_SOURCE } from './capture-codec-protocol';
+import { ENCODE_CAPTURE_PAYLOAD_SOURCE, exceedsUtf8Bytes } from './capture-codec-protocol';
 import {
   BOOKMARKLET_KEY_PATTERN,
   CAPTURE_ENVELOPE_KIND,
@@ -22,36 +22,39 @@ import {
   CAPTURE_PASTE_QUERY,
   CAPTURE_PROTOCOL_VERSION,
   CAPTURE_TIMEOUT_MS,
+  classifyCaptureJson,
   DONE,
   ERROR,
   MAX_CAPTURE_BYTES,
+  NEW_BOOKMARKLET_HINT,
   PAYLOAD,
   READY,
 } from './capture-protocol';
-import { DEFAULT_MOXFIELD_API_BASE_URL, DEFAULT_MOXFIELD_SITE_ORIGIN, MOXFIELD_SOURCE_ID } from './constants';
+import {
+  DEFAULT_MOXFIELD_API_BASE_URL,
+  DEFAULT_MOXFIELD_SITE_ORIGIN,
+  MOXFIELD_DECK_PATH_PREFIX,
+  MOXFIELD_PRIMER_PATH_PREFIX,
+  MOXFIELD_PRIMER_PATH_SUFFIX,
+  MOXFIELD_PUBLIC_ID_PATTERN_SOURCE,
+  MOXFIELD_SOURCE_ID,
+} from './constants';
+import { moxfieldSchemaError } from './errors';
 import { parseMoxfieldDeck, type MoxfieldPayloadData, type PlainObject } from './schema';
 
-const DECK_JSON_HINT = 'Expected the JSON of https://api2.moxfield.com/v3/decks/all/{deck id}.';
-const PRIMER_JSON_HINT = 'Expected the JSON of https://api2.moxfield.com/v1/decks/{internal deck id}/primer.';
-
-function schemaError(message: string): DeckSourceError {
-  return new DeckSourceError('schema', message, { source: MOXFIELD_SOURCE_ID });
-}
-
-function utf8Length(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
-}
+const DECK_JSON_HINT = `Expected the JSON of ${DEFAULT_MOXFIELD_API_BASE_URL}${MOXFIELD_DECK_PATH_PREFIX}{deck id}.`;
+const PRIMER_JSON_HINT = `Expected the JSON of ${DEFAULT_MOXFIELD_API_BASE_URL}${MOXFIELD_PRIMER_PATH_PREFIX}{internal deck id}${MOXFIELD_PRIMER_PATH_SUFFIX}.`;
 
 /** Parses a JSON string (bounded by {@link MAX_CAPTURE_BYTES}); other values pass through. */
 function parseJsonValue(value: unknown, what: string, hint: string): unknown {
   if (typeof value !== 'string') return value;
-  if (value.length > MAX_CAPTURE_BYTES || utf8Length(value) > MAX_CAPTURE_BYTES) {
-    throw schemaError(`The ${what} is too large (limit ${MAX_CAPTURE_BYTES} bytes).`);
+  if (exceedsUtf8Bytes(value, MAX_CAPTURE_BYTES)) {
+    throw moxfieldSchemaError(`The ${what} is too large (limit ${formatBytes(MAX_CAPTURE_BYTES)}).`);
   }
   try {
     return JSON.parse(value) as unknown;
   } catch {
-    throw schemaError(`The ${what} is not valid JSON. ${hint}`);
+    throw moxfieldSchemaError(`The ${what} is not valid JSON. ${hint}`);
   }
 }
 
@@ -72,19 +75,14 @@ function readPrimer(value: unknown): { primer: unknown; primerError?: string } {
   return { primer: value };
 }
 
-function looksLikePrimer(value: PlainObject): boolean {
-  return (
-    typeof value.content === 'string' && !Object.hasOwn(value, 'publicId') && !Object.hasOwn(value, 'boards')
-  );
-}
-
 function fromEnvelope(envelope: PlainObject): MoxfieldPayloadData {
   if (envelope.version !== CAPTURE_PROTOCOL_VERSION) {
-    throw schemaError(
-      `This capture uses an unsupported protocol version (expected ${CAPTURE_PROTOCOL_VERSION}): the bookmarklet is out of date. Create a new one on git-moxfield's Connect Moxfield page.`,
+    throw moxfieldSchemaError(
+      `This capture uses an unsupported protocol version (expected ${CAPTURE_PROTOCOL_VERSION}): the bookmarklet is out of date. ${NEW_BOOKMARKLET_HINT}`,
     );
   }
-  if (envelope.source !== MOXFIELD_SOURCE_ID) throw schemaError('The capture does not come from Moxfield.');
+  if (envelope.source !== MOXFIELD_SOURCE_ID)
+    throw moxfieldSchemaError('The capture does not come from Moxfield.');
   const primerError = typeof envelope.primerError === 'string' ? envelope.primerError : undefined;
   const primer = primerError === undefined ? readPrimer(envelope.primer) : { primer: null, primerError };
   return { deck: envelope.deck, ...primer };
@@ -117,20 +115,24 @@ function fromWrapper(wrapper: PlainObject): MoxfieldPayloadData {
  */
 export function parseMoxfieldCapture(data: unknown, separatePrimer?: unknown): MoxfieldPayloadData {
   if (typeof data === 'string' && data.trim().length === 0) {
-    throw schemaError(`Nothing was pasted. ${DECK_JSON_HINT}`);
+    throw moxfieldSchemaError(`Nothing was pasted. ${DECK_JSON_HINT}`);
   }
   const value = parseJsonValue(data, 'pasted data', DECK_JSON_HINT);
-  if (!isRecord(value)) throw schemaError(`The data is not a Moxfield deck. ${DECK_JSON_HINT}`);
+  if (!isRecord(value)) throw moxfieldSchemaError(`The data is not a Moxfield deck. ${DECK_JSON_HINT}`);
 
   let payload: MoxfieldPayloadData;
-  if (value.kind === CAPTURE_ENVELOPE_KIND) {
-    payload = fromEnvelope(value);
-  } else if (Object.hasOwn(value, 'deck') && !Object.hasOwn(value, 'publicId')) {
-    payload = fromWrapper(value);
-  } else if (looksLikePrimer(value)) {
-    throw schemaError(`This looks like the primer JSON, not the deck. ${DECK_JSON_HINT}`);
-  } else {
-    payload = { deck: value, primer: null };
+  switch (classifyCaptureJson(value)) {
+    case 'envelope':
+      payload = fromEnvelope(value);
+      break;
+    case 'wrapper':
+      payload = fromWrapper(value);
+      break;
+    case 'primer':
+      throw moxfieldSchemaError(`This looks like the primer JSON, not the deck. ${DECK_JSON_HINT}`);
+    case 'other':
+      payload = { deck: value, primer: null };
+      break;
   }
 
   if (separatePrimer !== undefined && !(typeof separatePrimer === 'string' && separatePrimer.trim() === '')) {
@@ -139,7 +141,7 @@ export function parseMoxfieldCapture(data: unknown, separatePrimer?: unknown): M
 
   const deck = parseMoxfieldDeck(payload.deck);
   if (!deck.ok) {
-    throw schemaError(
+    throw moxfieldSchemaError(
       `The data is not a usable Moxfield deck (${deck.issues.slice(0, 10).join('; ')}). ${DECK_JSON_HINT}`,
     );
   }
@@ -170,23 +172,16 @@ export interface BookmarkletOptions {
 
 /** Absolute http(s) URL without trailing slash, query or fragment. */
 function baseUrl(value: string, option: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new TypeError(`buildBookmarklet: ${option} must be an absolute URL, got ${JSON.stringify(value)}`);
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new TypeError(`buildBookmarklet: ${option} must use http or https`);
+  const url = parseHttpUrl(value);
+  if (url === null) {
+    throw new TypeError(
+      `buildBookmarklet: ${option} must be an absolute http(s) URL, got ${JSON.stringify(value)}`,
+    );
   }
   url.search = '';
   url.hash = '';
-  url.pathname = url.pathname.replace(/\/+$/, '');
+  url.pathname = stripTrailingSlashes(url.pathname);
   return url;
-}
-
-function withoutTrailingSlash(url: URL): string {
-  return url.href.replace(/\/+$/, '');
 }
 
 /**
@@ -227,12 +222,12 @@ const get = async (path) => {
   return r.json();
 };
 const capture = async (id) => {
-  const deck = await get('/v3/decks/all/' + encodeURIComponent(id));
+  const deck = await get(C.deckPath + encodeURIComponent(id));
   let primer = null;
   let primerError = null;
   try {
     if (!deck || typeof deck.id !== 'string') throw new Error('the deck has no internal id');
-    primer = await get('/v1/decks/' + encodeURIComponent(deck.id) + '/primer');
+    primer = await get(C.primerPrefix + encodeURIComponent(deck.id) + C.primerSuffix);
   } catch (e) {
     primerError = 'Primer not captured: ' + why(e);
   }
@@ -243,7 +238,7 @@ const capture = async (id) => {
     return json;
   }
 };
-const m = /^\/decks\/([A-Za-z0-9_-]{4,64})(?:\/|$)/.exec(location.pathname);
+const m = new RegExp('^/decks/(' + C.idPattern + ')(?:/|$)').exec(location.pathname);
 if (location.origin !== C.site || !m) {
   alert('git-moxfield: open a deck on ' + C.site + ' first, then run this bookmarklet again.');
   return;
@@ -341,6 +336,15 @@ capture(m[1]).then((j) => {
 });
 `;
 
+/** Source text with every line trimmed and empty lines dropped: what the builder puts in the URL. */
+export function compactBookmarkletSource(source: string): string {
+  return source
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
+
 /**
  * Builds the "Send to git-moxfield" bookmarklet as a `javascript:` URL.
  *
@@ -369,9 +373,13 @@ export function buildBookmarklet(options: BookmarkletOptions): string {
     throw new TypeError('buildBookmarklet: key must be a well-formed bookmarklet key');
   }
   const common = {
-    app: withoutTrailingSlash(app),
-    api: withoutTrailingSlash(api),
+    app: stripTrailingSlashes(app.href),
+    api: stripTrailingSlashes(api.href),
     site: site.origin,
+    idPattern: MOXFIELD_PUBLIC_ID_PATTERN_SOURCE,
+    deckPath: MOXFIELD_DECK_PATH_PREFIX,
+    primerPrefix: MOXFIELD_PRIMER_PATH_PREFIX,
+    primerSuffix: MOXFIELD_PRIMER_PATH_SUFFIX,
     kind: CAPTURE_ENVELOPE_KIND,
     version: CAPTURE_PROTOCOL_VERSION,
     key: options.key,
@@ -411,10 +419,5 @@ export function buildBookmarklet(options: BookmarkletOptions): string {
     '}',
     '})();',
   ].join('\n');
-  const compact = body
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .join('\n');
-  return `javascript:${encodeURIComponent(compact)}`;
+  return `javascript:${encodeURIComponent(compactBookmarkletSource(body))}`;
 }

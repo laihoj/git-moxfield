@@ -8,16 +8,18 @@ import {
   DONE,
   ERROR,
   isCaptureMessage,
+  NEW_BOOKMARKLET_HINT,
   PAYLOAD,
   READY,
   readCaptureNonce,
+  type CaptureFormError,
   type CaptureMessage,
 } from '@/integrations/moxfield/capture-protocol';
 import { Alert } from '@/components/ui/alert';
-import { Button, ButtonLink } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { routes } from '@/lib/routes';
 
+import { CaptureRemedyAction } from './capture-remedy';
 import { CaptureStatus, WaitingPanel } from './capture-status';
 import { FormErrorNotice, PasteCapture } from './paste-capture';
 import { useCaptureSubmission } from './use-capture-submission';
@@ -68,8 +70,7 @@ type ReceiverPhase =
   /** The deck came without a bookmarklet key: a bookmarklet made before accounts. */
   | { kind: 'outdated' };
 
-const OUTDATED_MESSAGE =
-  'This bookmarklet is out of date: it was made before git-moxfield had accounts. Make a new one on git-moxfield’s Connect Moxfield page.';
+const OUTDATED_MESSAGE = `This bookmarklet is out of date: it was made before git-moxfield had accounts. ${NEW_BOOKMARKLET_HINT}`;
 
 export interface CaptureClientProps {
   /** Origins allowed to send captures (Moxfield's site origin by default). */
@@ -79,7 +80,7 @@ export interface CaptureClientProps {
   /** `paste` skips the bookmarklet hand-over (`/capture?mode=paste`). */
   initialMode: 'auto' | 'paste';
   /** Error code from the same-tab capture endpoint (`?error=`). */
-  formError: string | null;
+  formError: CaptureFormError | null;
   /**
    * Whether this browser was signed in when the page was rendered. The bookmarklet
    * hand-over works without it (its key signs the browser in); pasting a deck does not.
@@ -209,11 +210,7 @@ export function CaptureClient({
         <Alert
           tone="info"
           title="Sign in to paste a deck"
-          actions={
-            <ButtonLink href={routes.signIn(routes.capturePaste())} variant="primary" size="sm">
-              Sign in
-            </ButtonLink>
-          }
+          actions={<CaptureRemedyAction remedy="sign-in" variant="primary" />}
         >
           This page receives decks from the “Send to git-moxfield” bookmarklet on a Moxfield deck page, which
           also signs you in. To paste deck data instead, sign in first.
@@ -273,24 +270,14 @@ export function CaptureClient({
             tone="warn"
             role="alert"
             title="This bookmarklet is out of date"
-            actions={
-              <ButtonLink href={routes.setup()} variant="secondary" size="sm">
-                Make a new bookmarklet
-              </ButtonLink>
-            }
+            actions={<CaptureRemedyAction remedy="new-bookmarklet" />}
           >
             It was made before git-moxfield had accounts. Bookmarklets now carry a personal key: make a new
             one, and delete the old bookmark.
           </Alert>
         )}
         <CaptureStatus
-          phase={submission.phase}
-          onTrack={() => {
-            void submission.track();
-          }}
-          onRelink={(deckId) => {
-            void submission.relink(deckId);
-          }}
+          submission={submission}
           onCancel={() => {
             window.close();
             submission.reset();

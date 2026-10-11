@@ -6,14 +6,17 @@ import {
   BOOKMARKLET_KEY_PATTERN,
   CAPTURE_API_PATH,
   CAPTURE_ENVELOPE_KIND,
+  CAPTURE_FORM_ERRORS,
   CAPTURE_FORM_TOKEN_FIELD,
   CAPTURE_MESSAGE_TYPES,
   CAPTURE_PROTOCOL_VERSION,
+  classifyCaptureJson,
   DONE,
   ERROR,
   isCaptureEnvelope,
   isCaptureMessage,
   NONCE_PATTERN,
+  parseCaptureFormError,
   PAYLOAD,
   READY,
   readCaptureNonce,
@@ -41,7 +44,12 @@ describe('capture protocol', () => {
 
   it('stays dependency-free so client components can import it', () => {
     const source = readFileSync(new URL('./capture-protocol.ts', import.meta.url), 'utf8');
-    expect(source).not.toMatch(/^\s*import\s/m);
+    // Type-only imports are erased at build time, and a few leaves of src/core have no
+    // dependencies of their own: nothing else may be imported at runtime.
+    const runtimeImports = [...source.matchAll(/^\s*import\s+(?!type\b)[^;]*?from\s+'([^']+)'/gms)].map(
+      (match) => match[1],
+    );
+    expect(runtimeImports.sort()).toEqual(['@/core/guards', '@/core/token-format']);
     expect(source).not.toMatch(/\brequire\(/);
   });
 
@@ -79,6 +87,30 @@ describe('capture protocol', () => {
     expect(isCaptureEnvelope({ ...envelope, version: 1 })).toBe(false);
     expect(isCaptureEnvelope({ ...envelope, deck: 'x' })).toBe(false);
     expect(isCaptureEnvelope({ ...envelope, source: 'other' })).toBe(false);
+  });
+
+  it('parses the ?error= codes of the capture page, and nothing else', () => {
+    for (const code of CAPTURE_FORM_ERRORS) expect(parseCaptureFormError(code)).toBe(code);
+    for (const other of ['', 'unknown', 'INVALID', null, undefined, 5, ['invalid']]) {
+      expect(parseCaptureFormError(other)).toBeNull();
+    }
+  });
+
+  it.each([
+    [{ kind: CAPTURE_ENVELOPE_KIND, version: 1, deck: {} }, 'envelope'],
+    [{ kind: CAPTURE_ENVELOPE_KIND, deck: 'x', publicId: 'abc' }, 'envelope'],
+    [{ deck: {}, primer: {} }, 'wrapper'],
+    [{ deck: '{}', primer: '{}' }, 'wrapper'],
+    [{ deck: {}, publicId: 'abcd' }, 'other'],
+    [{ content: 'markup' }, 'primer'],
+    [{ content: 'markup', mainboard: {} }, 'primer'],
+    [{ content: 'markup', boards: {} }, 'other'],
+    [{ content: 'markup', publicId: 'abcd' }, 'other'],
+    [{ content: 5 }, 'other'],
+    [{ boards: {}, publicId: 'abcd' }, 'other'],
+    [{}, 'other'],
+  ])('classifies %j as %s', (value, kind) => {
+    expect(classifyCaptureJson(value)).toBe(kind);
   });
 
   it.each([

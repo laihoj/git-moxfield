@@ -32,7 +32,12 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
-import type { CaptureErrorBody } from '@/integrations/moxfield/capture-protocol';
+import {
+  CAPTURE_REQUEST_METHODS,
+  NEW_BOOKMARKLET_HINT,
+  type CaptureErrorBody,
+  type CaptureRequestBody,
+} from '@/integrations/moxfield/capture-protocol';
 import { servicesFor } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { establishSessionOnResponse, readRequestSessionToken } from '@/server/auth/cookies';
@@ -53,12 +58,12 @@ const log = createLogger('api/capture');
 
 const bodySchema = z.object({
   payload: z.union([z.string().min(1), z.record(z.string(), z.unknown())]),
-  method: z.enum(['browser-capture', 'manual-paste']),
+  method: z.enum(CAPTURE_REQUEST_METHODS),
   track: z.boolean(),
   relinkDeckId: z.string().trim().min(1).max(128).optional(),
   /** Bounded so that junk is rejected by shape; the auth service checks the exact format. */
   key: z.string().max(256).optional(),
-});
+}) satisfies z.ZodType<CaptureRequestBody>;
 
 function errorResponse(status: number, error: string, code?: CaptureErrorBody['code']): Response {
   const body: CaptureErrorBody = code === undefined ? { error } : { error, code };
@@ -106,7 +111,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       });
       return errorResponse(
         401,
-        'This bookmarklet is no longer valid (it was revoked or belongs to another git-moxfield). Create a new one on the Connect Moxfield page.',
+        `This bookmarklet is no longer valid (it was revoked or belongs to another git-moxfield). ${NEW_BOOKMARKLET_HINT}`,
         'invalid-key',
       );
     }

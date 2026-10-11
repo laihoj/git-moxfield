@@ -24,6 +24,35 @@ describe('parseConfig — ALLOWED_HOSTS', () => {
   });
 });
 
+describe('parseConfig — base URLs', () => {
+  it('strips trailing slashes once, from the app URL and the Moxfield API base URL', () => {
+    const config = parseConfig({
+      PUBLIC_APP_URL: 'https://tools.example/git-moxfield//',
+      MOXFIELD_API_BASE_URL: 'http://localhost:4010/api/',
+    });
+    expect(config.PUBLIC_APP_URL).toBe('https://tools.example/git-moxfield');
+    expect(config.MOXFIELD_API_BASE_URL).toBe('http://localhost:4010/api');
+    expect(parseConfig({}).PUBLIC_APP_URL).toBeUndefined();
+    expect(parseConfig({}).MOXFIELD_API_BASE_URL).toBe('https://api2.moxfield.com');
+  });
+
+  it.each(['http://localhost:3000', 'http://192.168.1.5:3000', 'https://tools.example'])(
+    'accepts %s as the app URL',
+    (url) => {
+      expect(parseConfig({ PUBLIC_APP_URL: url }).PUBLIC_APP_URL).toBe(url);
+    },
+  );
+
+  it.each([
+    ['PUBLIC_APP_URL', 'ftp://tools.example'],
+    ['PUBLIC_APP_URL', 'javascript:alert(1)'],
+    ['MOXFIELD_API_BASE_URL', 'file:///tmp/moxfield'],
+    ['MOXFIELD_SITE_ORIGIN', 'ftp://moxfield.com'],
+  ])('fails at startup for %s=%s, which is not an http(s) URL', (name, value) => {
+    expect(() => parseConfig({ [name]: value })).toThrow(new RegExp(name));
+  });
+});
+
 describe('parseConfig — GIT_MOXFIELD_E2E', () => {
   it.each(['development', 'test', undefined])('allows the test-only endpoints with NODE_ENV=%s', (env) => {
     expect(parseConfig({ GIT_MOXFIELD_E2E: 'true', NODE_ENV: env }).GIT_MOXFIELD_E2E).toBe(true);

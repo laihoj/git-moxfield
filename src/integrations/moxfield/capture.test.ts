@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DeckSourceError } from '../deck-source';
 
-import { buildBookmarklet, parseMoxfieldCapture, type BookmarkletOptions } from './capture';
+import {
+  buildBookmarklet,
+  compactBookmarkletSource,
+  parseMoxfieldCapture,
+  type BookmarkletOptions,
+} from './capture';
 import { decodeCapturePayload } from './capture-codec';
 import {
   CAPTURE_GZIP_TAG,
@@ -366,11 +371,7 @@ describe('buildBookmarklet', () => {
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- parsing (not running) our own bookmarklet
     expect(() => new Function(body)).not.toThrow();
     // The payload encoder, as the builder compacts it (lines trimmed).
-    expect(body).toContain(
-      `const encode = ${ENCODE_CAPTURE_PAYLOAD_SOURCE.split('\n')
-        .map((line) => line.trim())
-        .join('\n')};`,
-    );
+    expect(body).toContain(`const encode = ${compactBookmarkletSource(ENCODE_CAPTURE_PAYLOAD_SOURCE)};`);
     expect(body).toContain('"app":"http://localhost:3000"');
     expect(body).toContain('"site":"https://moxfield.com"');
     expect(body).toContain('"api":"https://api2.moxfield.com"');

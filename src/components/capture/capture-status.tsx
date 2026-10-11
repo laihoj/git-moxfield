@@ -5,21 +5,19 @@ import { useId, useState, type ReactNode } from 'react';
 
 import { foldInlineText } from '@/core/text';
 import { Alert } from '@/components/ui/alert';
-import { Button, ButtonLink } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
 import { pluralize } from '@/lib/format';
-import { routes } from '@/lib/routes';
 import type { RelinkCandidateDTO } from '@/server/services/types';
 
-import type { SubmissionPhase } from './use-capture-submission';
+import { CaptureRemedyAction } from './capture-remedy';
+import type { CaptureSubmission } from './use-capture-submission';
 
 export interface CaptureStatusProps {
-  phase: SubmissionPhase;
-  onTrack: () => void;
-  /** Continues the history of the user's deck `deckId` with the untracked deck. */
-  onRelink: (deckId: string) => void;
-  onCancel: () => void;
+  submission: Pick<CaptureSubmission, 'phase' | 'track' | 'relink' | 'reset'>;
+  /** Called by Cancel (of the tracking question); by default the submission is reset. */
+  onCancel?: () => void;
 }
 
 /**
@@ -27,7 +25,14 @@ export interface CaptureStatusProps {
  * continuing one of the user's decks with it instead), success ("Updated from Moxfield",
  * then the deck page opens) and failures.
  */
-export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureStatusProps) {
+export function CaptureStatus({ submission, onCancel = submission.reset }: CaptureStatusProps) {
+  const { phase } = submission;
+  const onTrack = (): void => {
+    void submission.track();
+  };
+  const onRelink = (deckId: string): void => {
+    void submission.relink(deckId);
+  };
   switch (phase.kind) {
     case 'idle':
       return null;
@@ -94,13 +99,9 @@ export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureSta
           }
           actions={
             phase.code === 'invalid-key' ? (
-              <ButtonLink href={routes.setup()} variant="secondary" size="sm">
-                Make a new bookmarklet
-              </ButtonLink>
+              <CaptureRemedyAction remedy="new-bookmarklet" />
             ) : phase.code === 'unauthenticated' ? (
-              <ButtonLink href={routes.signIn(routes.capturePaste())} variant="secondary" size="sm">
-                Sign in
-              </ButtonLink>
+              <CaptureRemedyAction remedy="sign-in" />
             ) : undefined
           }
         >

@@ -1,7 +1,8 @@
 /**
- * The format of the account system's tokens (see `./tokens`): a type prefix plus 32
- * random bytes, base64url without padding (43 characters). Dependency-free, so code
- * that must not import server-only modules (the proxy) can recognize a token's shape.
+ * The format of the account system's tokens (see `src/server/auth/tokens.ts`): a type
+ * prefix plus 32 random bytes, base64url without padding (43 characters). Dependency-free,
+ * so code that must not import server-only modules (the proxy, the capture protocol the
+ * browser shares) can recognize a token's shape.
  */
 
 /** Type prefixes. `share` (`gmv_`, read-only share links) is used by ADR 0007's viewer scope. */
@@ -16,7 +17,13 @@ export const TOKEN_PREFIXES = {
 export type TokenKind = keyof typeof TOKEN_PREFIXES;
 
 /** base64url of 32 bytes, unpadded. */
-const TOKEN_BODY = /^[A-Za-z0-9_-]{43}$/;
+const TOKEN_BODY_PATTERN = '[A-Za-z0-9_-]{43}';
+const TOKEN_BODY = new RegExp(`^${TOKEN_BODY_PATTERN}$`);
+
+/** The whole-token pattern of `kind`: its prefix and a body (`/^gmk_[A-Za-z0-9_-]{43}$/` for a key). */
+export function tokenPattern(kind: TokenKind): RegExp {
+  return new RegExp(`^${TOKEN_PREFIXES[kind]}${TOKEN_BODY_PATTERN}$`);
+}
 
 /**
  * `value` when it is a well-formed token of `kind`, otherwise `null`. Accepts any input

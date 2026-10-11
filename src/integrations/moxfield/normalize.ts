@@ -33,9 +33,8 @@ import { SNAPSHOT_SCHEMA_VERSION } from '@/core/model';
 import { upperFirst } from '@/core/text';
 import { compareZones, isKnownZone, zoneEntries, zoneLabel, type ZoneId } from '@/core/zones';
 
-import { DeckSourceError } from '../deck-source';
-
 import { DEFAULT_MOXFIELD_SITE_ORIGIN, MOXFIELD_SOURCE_ID, zoneForBoard } from './constants';
+import { moxfieldSchemaError } from './errors';
 import {
   LEGACY_BOARD_NAMES,
   parseMoxfieldBoard,
@@ -137,11 +136,6 @@ function normalizeTimestamp(value: string | undefined): string | undefined {
   return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
 }
 
-function schemaError(message: string, issues: readonly string[]): DeckSourceError {
-  const detail = issues.length > 0 ? ` ${issues.slice(0, 20).join('; ')}` : '';
-  return new DeckSourceError('schema', `${message}${detail}`, { source: MOXFIELD_SOURCE_ID });
-}
-
 class WarningCollector {
   readonly list: IngestWarning[] = [];
 
@@ -211,7 +205,7 @@ function collectBoards(rawDeck: PlainObject, deck: MoxfieldDeck, warnings: Warni
         : 'boards.mainboard: Invalid input: expected a board',
     );
   }
-  if (issues.length > 0) throw schemaError('The Moxfield deck has an unrecognized shape.', issues);
+  if (issues.length > 0) throw moxfieldSchemaError('The Moxfield deck has an unrecognized shape.', issues);
   return boards.sort((a, b) => compareZones(a.zone, b.zone) || compareStrings(a.name, b.name));
 }
 
@@ -385,10 +379,7 @@ function canonicalize(input: CanonicalSnapshot): CanonicalSnapshot {
     return canonicalizeSnapshot(input);
   } catch (error) {
     if (!(error instanceof CanonicalizationError)) throw error;
-    throw new DeckSourceError('schema', `The Moxfield deck could not be normalized: ${error.message}`, {
-      source: MOXFIELD_SOURCE_ID,
-      cause: error,
-    });
+    throw moxfieldSchemaError(`The Moxfield deck could not be normalized: ${error.message}`, [], error);
   }
 }
 
@@ -421,7 +412,7 @@ export function normalizeMoxfieldPayload(
   options: NormalizeMoxfieldOptions = {},
 ): NormalizedDeck {
   const parsedDeck = parseMoxfieldDeck(data.deck);
-  if (!parsedDeck.ok) throw schemaError('The Moxfield deck data is not usable.', parsedDeck.issues);
+  if (!parsedDeck.ok) throw moxfieldSchemaError('The Moxfield deck data is not usable.', parsedDeck.issues);
   const deck = parsedDeck.value;
   const rawDeck = isRecord(data.deck) ? data.deck : {};
   const warnings = new WarningCollector();

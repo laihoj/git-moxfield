@@ -15,6 +15,8 @@
  */
 import 'server-only';
 
+import { parseHttpUrl } from '@/core/http-url';
+
 import { sharedDeckPath } from '@/server/auth/paths';
 import { generateToken, hashToken } from '@/server/auth/tokens';
 import type { SessionUser } from '@/server/auth/types';
@@ -145,14 +147,7 @@ export function toShareLinkDTO(record: ShareLinkRecord): ShareLinkDTO {
  * @throws {TypeError} when `appUrl` is not an absolute http(s) URL.
  */
 function shareUrl(appUrl: string, token: string): string {
-  let base: URL;
-  try {
-    base = new URL(appUrl);
-  } catch {
-    throw new TypeError('createShareLink: appUrl must be an absolute URL');
-  }
-  if (base.protocol !== 'http:' && base.protocol !== 'https:') {
-    throw new TypeError('createShareLink: appUrl must use http or https');
-  }
+  const base = parseHttpUrl(appUrl);
+  if (base === null) throw new TypeError('createShareLink: appUrl must be an absolute http(s) URL');
   return new URL(sharedDeckPath(token), base).href;
 }

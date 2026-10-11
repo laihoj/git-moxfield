@@ -24,7 +24,7 @@ import {
   type CookieSpec,
 } from './cookie-spec';
 import { HANDOFF_PATH } from './paths';
-import { parseToken } from './token-format';
+import { parseToken } from '@/core/token-format';
 
 export { SESSION_MAX_AGE_S } from './cookie-spec';
 

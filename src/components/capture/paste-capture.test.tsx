@@ -148,6 +148,63 @@ describe('PasteCapture', () => {
   });
 });
 
+describe('PasteCapture deck data link', () => {
+  async function typeDeck(text: string): Promise<HTMLElement> {
+    const user = userEvent.setup();
+    renderPasteCapture();
+    await user.type(screen.getByLabelText('Moxfield deck URL'), text);
+    return step(/Open the deck data and copy all of it/);
+  }
+
+  it.each([
+    ['https://moxfield.com/decks/AbCdEf123456', 'AbCdEf123456'],
+    ['moxfield.com/decks/AbCdEf123456/primer?x=1', 'AbCdEf123456'],
+    ['AbCdEf123456', 'AbCdEf123456'],
+  ])('links the data page of the deck in %s', async (typed, id) => {
+    const copyStep = await typeDeck(typed);
+    expect(within(copyStep).getByRole('link')).toHaveAttribute(
+      'href',
+      `https://api2.moxfield.com/v3/decks/all/${id}`,
+    );
+  });
+
+  it.each([
+    'https://moxfield.com/decks/personal',
+    'https://moxfield.com/decks/new',
+    'https://user:secret@moxfield.com/decks/AbCdEf123456',
+    'https://example.com/decks/AbCdEf123456',
+    'javascript:alert(1)',
+  ])('does not recognize %s as a deck, as the server parser does not', async (typed) => {
+    const copyStep = await typeDeck(typed);
+    expect(within(copyStep).queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText('That does not look like a Moxfield deck URL.')).toBeInTheDocument();
+  });
+});
+
+describe('PasteCapture pasted JSON kinds', () => {
+  async function pasteDeckField(json: string): Promise<HTMLElement> {
+    const user = userEvent.setup();
+    renderPasteCapture();
+    await user.click(screen.getByLabelText('Deck JSON'));
+    await user.paste(json);
+    return step(/Paste it here/);
+  }
+
+  it('takes a { deck, primer } pair as a complete capture, as the server does: no primer step', async () => {
+    const pasteStep = await pasteDeckField(JSON.stringify({ deck: DECK_JSON, primer: PRIMER_JSON }));
+    expect(within(pasteStep).queryByRole('alert')).not.toBeInTheDocument();
+    expect(pasteStep).toHaveTextContent('Fixture Blue Farm');
+    expect(pasteStep).toHaveTextContent('Deck and primer');
+    expect(screen.queryByRole('heading', { name: /Optional: the primer/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /import/i })).toBeEnabled();
+  });
+
+  it('calls primer JSON the primer, also when it carries a board key, as the server does', async () => {
+    const pasteStep = await pasteDeckField(JSON.stringify({ content: '# Primer', mainboard: {} }));
+    expect(within(pasteStep).getByRole('alert')).toHaveTextContent('This is the primer JSON.');
+  });
+});
+
 describe('PasteCapture sending', () => {
   async function pasteInto(label: string, text: string): Promise<void> {
     const user = userEvent.setup();

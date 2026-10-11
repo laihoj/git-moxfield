@@ -44,6 +44,7 @@ import {
   DeckSourceError,
   isDeckSourceError,
   retryAfterSecondsUntil,
+  type CapturedIngestMethod,
   type DeckRef,
   type DeckSource,
   type IngestMethod,
@@ -363,7 +364,7 @@ class DefaultDeckServices implements DeckServices {
 
   async ingestCapture(input: {
     data: unknown;
-    method: Exclude<IngestMethod, 'server'>;
+    method: CapturedIngestMethod;
     track: boolean;
     relinkDeckId?: string;
   }): Promise<CaptureOutcome> {
@@ -421,7 +422,7 @@ class DefaultDeckServices implements DeckServices {
     deckId: string,
     source: DeckSource,
     raw: RawSourcePayload,
-    method: Exclude<IngestMethod, 'server'>,
+    method: CapturedIngestMethod,
     options: { normalized: NormalizedDeck; relink: IngestRelink },
   ): Promise<CaptureOutcome> {
     const { externalId } = options.relink;

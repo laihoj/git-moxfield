@@ -10,6 +10,8 @@
  */
 import 'server-only';
 
+import type { Logger } from '@/core/logger';
+
 import { classifySqlError } from './db/sql-errors';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
@@ -95,12 +97,7 @@ function write(level: Level, scope: string, message: string, context?: Record<st
   else console.log(line);
 }
 
-export interface Logger {
-  debug(message: string, context?: Record<string, unknown>): void;
-  info(message: string, context?: Record<string, unknown>): void;
-  warn(message: string, context?: Record<string, unknown>): void;
-  error(message: string, context?: Record<string, unknown>): void;
-}
+export type { Logger };
 
 export function createLogger(scope: string): Logger {
   return {

@@ -8,7 +8,7 @@
 
 import { pluralize } from '@/core/text';
 
-export { joinList, MINUS_SIGN, pluralize } from '@/core/text';
+export { formatBytes, joinList, MINUS_SIGN, pluralize } from '@/core/text';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -154,11 +154,4 @@ export function versionLabel(sequence: number): string {
 /** Inclusive version range: `v19`, or `v19–v24`. */
 export function versionRangeLabel(first: number, last: number): string {
   return first === last ? versionLabel(first) : `${versionLabel(first)}–${versionLabel(last)}`;
-}
-
-/** Bytes as `512 B`, `12.3 KB`, `1.4 MB` (decimal units, as browsers show downloads). */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1000) return `${bytes} B`;
-  if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} KB`;
-  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }

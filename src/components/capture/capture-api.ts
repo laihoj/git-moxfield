@@ -5,47 +5,42 @@
 import { isRecord } from '@/core/guards';
 import {
   CAPTURE_API_PATH,
-  type CaptureErrorBody,
+  CAPTURE_FAILURE_CODES,
+  type CaptureFailureCode,
   type CaptureRequestBody,
 } from '@/integrations/moxfield/capture-protocol';
 import type { CaptureOutcome, RelinkCandidateDTO } from '@/server/services/types';
 
 export type CaptureMethod = CaptureRequestBody['method'];
 
-/** What to do with the deck, and who sends it (see {@link postCapture}). */
-export interface CaptureRequestOptions {
-  /** `false`: an untracked deck is answered with `status: 'untracked'` instead of being tracked. */
-  track: boolean;
-  /** "Continue an existing deck's history": the user's deck the captured deck continues. */
-  relinkDeckId?: string;
-  /**
-   * The bookmarklet key that came with the deck (popup mode): it authenticates the capture
-   * and signs this browser in. Without it the browser's session is used.
-   */
-  key?: string;
-}
-
 /**
- * Why the capture was refused, when the server says: `unauthenticated` (no bookmarklet
- * key and no signed-in session: sign in) or `invalid-key` (the bookmarklet's key is
- * unknown or revoked, or the bookmarklet predates accounts: make a new one).
+ * What to do with the deck, and who sends it (see {@link postCapture}): `track`,
+ * `relinkDeckId` and the bookmarklet `key` of the request body, whose documentation they
+ * share. Without a `key` the browser's session is used.
  */
-export type CaptureFailureCode = NonNullable<CaptureErrorBody['code']>;
+export type CaptureRequestOptions = Pick<CaptureRequestBody, 'track' | 'relinkDeckId' | 'key'>;
+
+export type { CaptureFailureCode };
 
 export type CaptureResponse =
   { ok: true; outcome: CaptureOutcome } | { ok: false; message: string; code?: CaptureFailureCode };
 
 const NETWORK_ERROR = 'Could not reach git-moxfield. Check that it is still running and try again.';
 
+/** The type of every field of a relink candidate; the `satisfies` makes a new DTO field a compile error here. */
+const RELINK_CANDIDATE_FIELDS = {
+  id: 'string',
+  name: 'string',
+  externalId: 'string',
+  format: 'string',
+  versionCount: 'number',
+  updatedAt: 'string',
+} as const satisfies Record<keyof RelinkCandidateDTO, 'string' | 'number'>;
+
 function isRelinkCandidate(value: unknown): value is RelinkCandidateDTO {
   return (
     isRecord(value) &&
-    typeof value.id === 'string' &&
-    typeof value.name === 'string' &&
-    typeof value.externalId === 'string' &&
-    typeof value.format === 'string' &&
-    typeof value.versionCount === 'number' &&
-    typeof value.updatedAt === 'string'
+    Object.entries(RELINK_CANDIDATE_FIELDS).every(([field, type]) => typeof value[field] === type)
   );
 }
 
@@ -84,7 +79,7 @@ function errorMessage(value: unknown, status: number): string {
 function errorCode(value: unknown): CaptureFailureCode | undefined {
   if (!isRecord(value)) return undefined;
   const { code } = value;
-  return code === 'unauthenticated' || code === 'invalid-key' ? code : undefined;
+  return CAPTURE_FAILURE_CODES.find((known) => known === code);
 }
 
 /**

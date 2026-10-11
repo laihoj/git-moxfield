@@ -10,14 +10,18 @@ import 'server-only';
 import { promisify } from 'node:util';
 import { gunzip } from 'node:zlib';
 
-import { DeckSourceError } from '../deck-source';
+import { formatBytes } from '@/core/text';
+
+import { DeckSourceError, hasBrand } from '../deck-source';
 
 import {
   CAPTURE_GZIP_TAG,
   CAPTURE_TAG_NAMESPACE,
   DEFAULT_CAPTURE_CODEC_LIMITS,
+  exceedsUtf8Bytes,
   type CaptureCodecLimits,
 } from './capture-codec-protocol';
+import { NEW_BOOKMARKLET_HINT } from './capture-protocol';
 import { MOXFIELD_SOURCE_ID } from './constants';
 
 const gunzipAsync = promisify(gunzip);
@@ -57,13 +61,7 @@ export class CapturePayloadError extends DeckSourceError {
 }
 
 export function isCapturePayloadError(value: unknown): value is CapturePayloadError {
-  if (value instanceof CapturePayloadError) return true;
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Partial<Record<typeof CAPTURE_PAYLOAD_ERROR_BRAND, unknown>>)[CAPTURE_PAYLOAD_ERROR_BRAND] ===
-      true
-  );
+  return value instanceof CapturePayloadError || hasBrand(value, CAPTURE_PAYLOAD_ERROR_BRAND);
 }
 
 const DAMAGED = 'The compressed deck data is damaged';
@@ -79,11 +77,10 @@ function assertLimits(limits: CaptureCodecLimits): void {
 }
 
 function decodePlain(input: string, limits: CaptureCodecLimits): string {
-  // UTF-8 never takes fewer bytes than UTF-16 code units, so the length is a cheap first check.
-  if (input.length > limits.maxPlainBytes || Buffer.byteLength(input, 'utf8') > limits.maxPlainBytes) {
+  if (exceedsUtf8Bytes(input, limits.maxPlainBytes)) {
     throw new CapturePayloadError(
       'too-large',
-      `The deck data is too large to send uncompressed (limit ${limits.maxPlainBytes} bytes). Bookmarklets compress it in current browsers: create a new one on git-moxfield's Connect Moxfield page.`,
+      `The deck data is too large to send uncompressed (limit ${formatBytes(limits.maxPlainBytes)}). Bookmarklets compress it in current browsers. ${NEW_BOOKMARKLET_HINT}`,
     );
   }
   return input;
@@ -97,7 +94,7 @@ async function inflate(compressed: Buffer, maxDecodedBytes: number): Promise<Buf
     if (code === 'ERR_BUFFER_TOO_LARGE') {
       throw new CapturePayloadError(
         'too-large',
-        `The deck data is too large (limit ${maxDecodedBytes} bytes uncompressed).`,
+        `The deck data is too large (limit ${formatBytes(maxDecodedBytes)} uncompressed).`,
       );
     }
     // zlib's own errors (Z_DATA_ERROR, Z_BUF_ERROR, ...): bad header, checksum, truncation.
@@ -143,7 +140,7 @@ export async function decodeCapturePayload(
   if (text.length > limits.maxEncodedChars) {
     throw new CapturePayloadError(
       'too-large',
-      `The deck data is too large (limit ${limits.maxEncodedChars} characters compressed).`,
+      `The deck data is too large (limit ${formatBytes(limits.maxEncodedChars)} compressed).`,
     );
   }
 

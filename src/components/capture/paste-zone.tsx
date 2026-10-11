@@ -6,14 +6,14 @@ import { useId, useRef, useState, type DragEvent } from 'react';
 
 import { isRecord } from '@/core/guards';
 import { isEncodedCapturePayload } from '@/integrations/moxfield/capture-codec-protocol';
-import { MAX_CAPTURE_BYTES } from '@/integrations/moxfield/capture-protocol';
+import { classifyCaptureJson, MAX_CAPTURE_BYTES } from '@/integrations/moxfield/capture-protocol';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { formatBytes } from '@/lib/format';
 
 import { inflateCapturePayload, type InflateFailure } from './capture-payload';
 
 /** What a pasted text looks like, detected client-side for immediate feedback. */
-export type PastedKind = 'envelope' | 'deck' | 'primer' | 'unknown' | 'invalid';
+export type PastedKind = 'envelope' | 'wrapper' | 'deck' | 'primer' | 'unknown' | 'invalid';
 
 export interface PastedContent {
   /**
@@ -39,7 +39,20 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-/** Parses pasted text just enough to tell a deck, a primer and a capture envelope apart. */
+/** A deck given as an object, or as the JSON text of one (the paste form's `{ deck, primer }`). */
+function deckObject(deck: unknown): Record<string, unknown> | undefined {
+  let value = deck;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return isRecord(value) ? value : undefined;
+}
+
+/** Parses pasted text just enough to tell a deck, a primer and a capture apart (as the server does, see `classifyCaptureJson`). */
 export function inspectPasted(
   raw: string,
   source: PastedContent['source'],
@@ -54,28 +67,24 @@ export function inspectPasted(
     return { ...base, kind: 'invalid' };
   }
   if (!isRecord(parsed)) return { ...base, kind: 'unknown' };
-  const value = parsed;
-  if (value.kind === 'git-moxfield/capture') {
-    const deck = isRecord(value.deck) ? value.deck : undefined;
-    return {
-      ...base,
-      kind: 'envelope',
-      name: text(deck?.name),
-      internalId: text(deck?.id),
-      publicId: text(deck?.publicId),
-    };
+  const named = (deck: Record<string, unknown> | undefined) => ({
+    name: text(deck?.name),
+    internalId: text(deck?.id),
+    publicId: text(deck?.publicId),
+  });
+  switch (classifyCaptureJson(parsed)) {
+    case 'envelope':
+      return { ...base, kind: 'envelope', ...named(deckObject(parsed.deck)) };
+    case 'wrapper':
+      return { ...base, kind: 'wrapper', ...named(deckObject(parsed.deck)) };
+    case 'primer':
+      return { ...base, kind: 'primer' };
+    case 'other':
+      // Anything else is taken to be a deck by the server; the preview wants a sign of one.
+      return 'boards' in parsed || 'publicId' in parsed || 'mainboard' in parsed
+        ? { ...base, kind: 'deck', ...named(parsed) }
+        : { ...base, kind: 'unknown' };
   }
-  if ('boards' in value || 'publicId' in value || 'mainboard' in value) {
-    return {
-      ...base,
-      kind: 'deck',
-      name: text(value.name),
-      internalId: text(value.id),
-      publicId: text(value.publicId),
-    };
-  }
-  if (typeof value.content === 'string') return { ...base, kind: 'primer' };
-  return { ...base, kind: 'unknown' };
 }
 
 export interface PasteZoneProps {
@@ -90,9 +99,11 @@ export interface PasteZoneProps {
 
 const SIZE_LIMIT = `limit ${formatBytes(MAX_CAPTURE_BYTES)}`;
 
+const PASTE_TOO_LARGE = `The pasted data is too large to import (${SIZE_LIMIT}).`;
+
 /** Why pasted compressed text could not be read. */
 const INFLATE_PROBLEMS: Record<Exclude<InflateFailure, 'unavailable'>, string> = {
-  'too-large': `The pasted data is too large to import (${SIZE_LIMIT}).`,
+  'too-large': PASTE_TOO_LARGE,
   malformed:
     'The pasted deck data is damaged or incomplete. Run the bookmarklet on the Moxfield deck page again, then paste again.',
   'unsupported-encoding':
@@ -118,7 +129,7 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
     const attempt = ++latest.current;
     if (!isEncodedCapturePayload(raw)) {
       if (raw.length > MAX_CAPTURE_BYTES) {
-        setReadError(`The pasted data is too large to import (${SIZE_LIMIT}).`);
+        setReadError(PASTE_TOO_LARGE);
         return;
       }
       setReadError(null);
@@ -242,6 +253,7 @@ export function PasteZone({ label, description, value, onChange, problem }: Past
 
 const KIND_LABELS: Record<PastedKind, string> = {
   envelope: 'Bookmarklet capture',
+  wrapper: 'Deck and primer',
   deck: 'Deck JSON',
   primer: 'Primer JSON',
   unknown: 'JSON',

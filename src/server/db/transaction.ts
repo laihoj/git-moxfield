@@ -55,6 +55,8 @@ import type {
 import { is } from 'drizzle-orm';
 import { SQLiteTransaction } from 'drizzle-orm/sqlite-core';
 
+import { SerialQueue } from '@/core/serial-queue';
+
 import { createLogger } from '../logger';
 import type { LibsqlDb, LibsqlExecutor, LibsqlTx } from './libsql';
 import { classifySqlError, isConstraintViolation, type SqlErrorClassification } from './sql-errors';
@@ -208,8 +210,8 @@ async function recoverFrom(state: GuardState, error: unknown): Promise<void> {
  */
 class GuardedTransaction implements Transaction {
   readonly #inner: Transaction;
-  /** Settles after the last queued operation; never rejects. */
-  #tail: Promise<unknown> = Promise.resolve();
+  /** Runs the operations one after another. */
+  readonly #queue = new SerialQueue();
   /** The failure that aborted the transaction. */
   #abort: { readonly error: unknown } | undefined;
 
@@ -279,12 +281,7 @@ class GuardedTransaction implements Transaction {
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(operation);
-    this.#tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.#queue.run(operation);
   }
 }
 
