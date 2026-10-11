@@ -232,6 +232,9 @@ export type CommitOutcome =
       message: string;
     };
 
+/** Why a commit was refused. */
+export type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
+
 export interface TagCountDTO {
   name: string;
   count: number;

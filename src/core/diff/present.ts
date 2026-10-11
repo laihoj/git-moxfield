@@ -153,6 +153,9 @@ export function summarizeDiff(diff: DeckDiff): SummaryChip[] {
 /** Target maximum length of a suggested commit message (Git's conventional subject width). */
 export const COMMIT_MESSAGE_MAX_LENGTH = 72;
 
+/** Suggested (and default) message of a deck's first version. */
+export const INITIAL_VERSION_MESSAGE = 'Initial version';
+
 /** Literal text, or a list of card names that may be shortened to `A, B +N more`. */
 type ClausePart = string | readonly string[];
 type Clause = readonly ClausePart[];

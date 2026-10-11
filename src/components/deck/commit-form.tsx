@@ -30,14 +30,16 @@ export interface CommitFormProps {
   existingTags: readonly string[];
 }
 
-/** User-facing copy per failure; the server's message is used where it is already specific. */
+/**
+ * User-facing copy per failure. The server's message is the explanation wherever it is
+ * specific (a changed deck, a primer that became available and outdated changes each say
+ * so); only the title is chosen here.
+ */
 function failureCopy(state: Extract<CommitState, { status: 'error' }>): { title: string; body?: string } {
   switch (state.reason) {
     case 'stale':
-      return {
-        title: 'Moxfield changed since you looked.',
-        body: 'Review the new changes below and commit again.',
-      };
+    case 'internal':
+      return { title: 'The version was not committed.', body: state.message };
     case 'head-moved':
       return {
         title: 'Another version was committed meanwhile.',
@@ -50,8 +52,6 @@ function failureCopy(state: Extract<CommitState, { status: 'error' }>): { title:
     case 'invalid-message':
     case 'invalid-input':
       return { title: state.message };
-    case 'internal':
-      return { title: 'The version was not committed.', body: state.message };
   }
 }
 

@@ -3,6 +3,7 @@ import { Crown } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import type { VersionListItemDTO } from '@/server/services/types';
+import { INITIAL_VERSION_MESSAGE } from '@/core/diff/present';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
@@ -102,8 +103,8 @@ export function VersionRow({
           {version.parentSequence === null ? (
             <MetaList className="text-xs text-muted tabular">
               {/* The default first commit message already says it. */}
-              {version.message.trim().toLowerCase() !== 'initial version' && (
-                <MetaItem>Initial version</MetaItem>
+              {version.message.trim().toLowerCase() !== INITIAL_VERSION_MESSAGE.toLowerCase() && (
+                <MetaItem>{INITIAL_VERSION_MESSAGE}</MetaItem>
               )}
               <MetaItem>{pluralize(version.playedCardCount, 'card')}</MetaItem>
             </MetaList>

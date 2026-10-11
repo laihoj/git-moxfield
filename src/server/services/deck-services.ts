@@ -33,7 +33,7 @@
 import 'server-only';
 
 import { commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
-import { diffSnapshots, suggestCommitMessage } from '@/core/diff';
+import { diffSnapshots, INITIAL_VERSION_MESSAGE, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
 import { commitId } from '@/core/hash';
 import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
@@ -93,6 +93,7 @@ import type {
   CardHistoryDTO,
   CardSearchResultDTO,
   CommitNoteDTO,
+  CommitFailureReason,
   CommitOutcome,
   CompareDTO,
   DeckOverviewDTO,
@@ -113,9 +114,6 @@ export const FREE_TEXT_NOTE_KIND = 'note';
 /** Number of versions in {@link DeckOverviewDTO.recentVersions}. */
 export const RECENT_VERSION_COUNT = 8;
 
-/** Suggested message for a deck's first version. */
-const INITIAL_VERSION_MESSAGE = 'Initial version';
-
 /**
  * The source that browser captures and manual pastes come from. The capture protocol
  * (bookmarklet envelope, pasted API JSON) is Moxfield's.
@@ -135,8 +133,6 @@ export interface DeckServicesDependencies {
 
 /** Why the server fetched a deck: an explicit or automatic refresh, or a commit. */
 type FetchReason = 'manual' | 'auto' | 'commit';
-
-type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
 
 interface Ingested {
   observation: ObservationRecord;

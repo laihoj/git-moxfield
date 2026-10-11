@@ -3,7 +3,7 @@
  * client components can import them without importing the actions' server code.
  */
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
-import type { CommitOutcome, ShareLinkDTO } from '@/server/services/types';
+import type { CommitFailureReason, ShareLinkDTO } from '@/server/services/types';
 
 /** State of the "Track a Moxfield deck" form (`useActionState`). */
 export type TrackDeckState = { status: 'idle' } | { status: 'error'; message: string; input: string };
@@ -12,8 +12,6 @@ export type TrackDeckState = { status: 'idle' } | { status: 'error'; message: st
 export type RefreshResult =
   | { ok: true; changed: boolean }
   | { ok: false; code: DeckSourceErrorCode | 'internal'; message: string; retryAfterSeconds: number | null };
-
-type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
 
 /** State of the commit form (`useActionState`). */
 export type CommitState =
