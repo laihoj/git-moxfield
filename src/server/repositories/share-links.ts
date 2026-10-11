@@ -20,15 +20,14 @@ import { and, desc, eq, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-o
 import { decks, shareLinks, users } from '@/server/db/schema';
 
 import {
-  batches,
   deckInWorkspace,
-  distinct,
-  isUniqueViolation,
-  referencing,
-  write,
+  insertWithUniqueHash,
+  requireDeckInWorkspace,
+  selectInBatches,
+  sumInBatches,
+  updateRows,
   type RepositoryContext,
 } from './context';
-import { RepositoryError } from './errors';
 
 export interface ShareLinkRecord {
   id: string;
@@ -151,50 +150,27 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
       .innerJoin(users, eq(users.workspaceId, decks.workspaceId))
       .where(and(condition, isNull(shareLinks.revokedAt), isNull(users.disabledAt)));
 
-  const duplicate = (cause?: unknown): RepositoryError =>
-    new RepositoryError(
-      'conflict',
-      'A share link with this token already exists',
-      cause === undefined ? undefined : { cause },
-    );
-
   return {
-    async create(input) {
-      if (input.tokenHash === '')
-        throw new RepositoryError('invalid-input', 'A share link needs a token hash');
-      const [deck, taken] = await Promise.all([
-        ctx.db
-          .select({ id: decks.id })
-          .from(decks)
-          .where(and(eq(decks.id, input.deckId), eq(decks.workspaceId, ctx.workspaceId)))
-          .get(),
-        ctx.db
-          .select({ id: shareLinks.id })
-          .from(shareLinks)
-          .where(eq(shareLinks.tokenHash, input.tokenHash))
-          .get(),
-      ]);
-      if (!deck) throw new RepositoryError('not-found', `Deck ${input.deckId} does not exist`);
-      if (taken) throw duplicate();
-      const values = {
-        id: ctx.newId(),
-        deckId: input.deckId,
-        tokenHash: input.tokenHash,
-        label: input.label,
-        includeNotes: input.includeNotes,
-        createdByUserId: input.createdByUserId,
-        credentialId: input.credentialId,
-        createdAt: ctx.now(),
-      };
-      try {
-        return await referencing(`Share link of deck ${input.deckId}`, () =>
-          write(ctx, (db) => db.insert(shareLinks).values(values).returning(recordColumns).get()),
-        );
-      } catch (error) {
-        // The same token hash stored since the check above.
-        if (isUniqueViolation(error)) throw duplicate(error);
-        throw error;
-      }
+    create(input) {
+      return insertWithUniqueHash(ctx, {
+        hashColumn: shareLinks.tokenHash,
+        hash: input.tokenHash,
+        emptyHashMessage: 'A share link needs a token hash',
+        duplicateMessage: 'A share link with this token already exists',
+        references: `Share link of deck ${input.deckId}`,
+        precheck: () => requireDeckInWorkspace(ctx, input.deckId),
+        values: () => ({
+          id: ctx.newId(),
+          deckId: input.deckId,
+          tokenHash: input.tokenHash,
+          label: input.label,
+          includeNotes: input.includeNotes,
+          createdByUserId: input.createdByUserId,
+          credentialId: input.credentialId,
+          createdAt: ctx.now(),
+        }),
+        insert: (db, values) => db.insert(shareLinks).values(values).returning(recordColumns).get(),
+      });
     },
 
     async findActive(tokenHash) {
@@ -217,92 +193,75 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
     },
 
     async revoke(deckId, id, at) {
-      const revoked = await write(ctx, (db) =>
-        db
-          .update(shareLinks)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              eq(shareLinks.id, id),
-              eq(shareLinks.deckId, deckId),
-              isNull(shareLinks.revokedAt),
-              deckInWorkspace(ctx, deckId),
-            ),
-          ),
+      const changed = await updateRows(
+        ctx,
+        shareLinks,
+        { revokedAt: at },
+        and(
+          eq(shareLinks.id, id),
+          eq(shareLinks.deckId, deckId),
+          isNull(shareLinks.revokedAt),
+          deckInWorkspace(ctx, deckId),
+        ),
       );
-      return revoked.rowsAffected > 0;
+      return changed > 0;
     },
 
     async touchViewed(id, at, since) {
-      const touched = await write(ctx, (db) =>
-        db
-          .update(shareLinks)
-          .set({ lastViewedAt: at })
-          .where(
-            and(
-              eq(shareLinks.id, id),
-              or(isNull(shareLinks.lastViewedAt), lt(shareLinks.lastViewedAt, since)),
-            ),
-          ),
+      const changed = await updateRows(
+        ctx,
+        shareLinks,
+        { lastViewedAt: at },
+        and(eq(shareLinks.id, id), or(isNull(shareLinks.lastViewedAt), lt(shareLinks.lastViewedAt, since))),
       );
-      return touched.rowsAffected > 0;
+      return changed > 0;
     },
 
     async listByCredential(userId, credentialIds) {
-      const pages = await Promise.all(
-        batches(distinct(credentialIds)).map((batch) =>
-          ctx.db
-            .select(recordColumns)
-            .from(shareLinks)
-            .where(
-              and(
-                eq(shareLinks.createdByUserId, userId),
-                inArray(shareLinks.credentialId, batch),
-                isNull(shareLinks.revokedAt),
-              ),
-            )
-            .all(),
-        ),
+      const rows = await selectInBatches(credentialIds, (batch) =>
+        ctx.db
+          .select(recordColumns)
+          .from(shareLinks)
+          .where(
+            and(
+              eq(shareLinks.createdByUserId, userId),
+              inArray(shareLinks.credentialId, batch),
+              isNull(shareLinks.revokedAt),
+            ),
+          )
+          .all(),
       );
-      return pages.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
 
     async revokeByCredential(userId, credentialIds, at) {
-      let revoked = 0;
-      for (const batch of batches(distinct(credentialIds))) {
-        const result = await write(ctx, (db) =>
-          db
-            .update(shareLinks)
-            .set({ revokedAt: at })
-            .where(
-              and(
-                eq(shareLinks.createdByUserId, userId),
-                inArray(shareLinks.credentialId, batch),
-                isNull(shareLinks.revokedAt),
-              ),
-            ),
-        );
-        revoked += result.rowsAffected;
-      }
-      return revoked;
+      return sumInBatches(credentialIds, (batch) =>
+        updateRows(
+          ctx,
+          shareLinks,
+          { revokedAt: at },
+          and(
+            eq(shareLinks.createdByUserId, userId),
+            inArray(shareLinks.credentialId, batch),
+            isNull(shareLinks.revokedAt),
+          ),
+        ),
+      );
     },
 
-    async revokeAllForWorkspace(workspaceId, at) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(shareLinks)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              isNull(shareLinks.revokedAt),
-              inArray(
-                shareLinks.deckId,
-                db.select({ id: decks.id }).from(decks).where(eq(decks.workspaceId, workspaceId)),
-              ),
-            ),
+    revokeAllForWorkspace(workspaceId, at) {
+      return updateRows(
+        ctx,
+        shareLinks,
+        { revokedAt: at },
+        and(
+          isNull(shareLinks.revokedAt),
+          inArray(
+            shareLinks.deckId,
+            ctx.db.select({ id: decks.id }).from(decks).where(eq(decks.workspaceId, workspaceId)),
           ),
+        ),
       );
-      return result.rowsAffected;
     },
   };
 }

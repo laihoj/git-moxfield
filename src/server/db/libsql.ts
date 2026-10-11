@@ -43,6 +43,12 @@ import type { LibSQLDatabase } from 'drizzle-orm/libsql/driver-core';
 import { drizzle } from 'drizzle-orm/libsql/http';
 import type { BaseSQLiteDatabase, SQLiteTransaction } from 'drizzle-orm/sqlite-core';
 
+import {
+  databaseUrlScheme,
+  isRemoteDatabaseScheme,
+  MEMORY_DATABASE_URL,
+  SUPPORTED_DATABASE_URLS_HINT,
+} from './database-location';
 import * as schema from './schema';
 import { guardClient } from './transaction';
 import { sharedWriteLock, WriteLock } from './write-lock';
@@ -120,8 +126,6 @@ interface LocalTarget {
 
 type DatabaseTarget = RemoteTarget | LocalTarget;
 
-const SCHEME = /^([a-z][a-z0-9+.-]*):/i;
-
 function parseRemote(clientUrl: string): RemoteTarget {
   let parsed: URL;
   try {
@@ -174,7 +178,7 @@ function parseFile(url: string): LocalTarget {
 
 function parseDatabaseUrl(url: string): DatabaseTarget {
   const trimmed = url.trim();
-  if (trimmed === ':memory:') {
+  if (trimmed === MEMORY_DATABASE_URL) {
     return {
       kind: 'local',
       clientUrl: trimmed,
@@ -183,24 +187,15 @@ function parseDatabaseUrl(url: string): DatabaseTarget {
       description: 'in-memory database',
     };
   }
-  const scheme = SCHEME.exec(trimmed)?.[1]?.toLowerCase();
-  switch (scheme) {
-    case 'libsql':
-    case 'https':
-    case 'http':
-      return parseRemote(trimmed);
-    case 'wss':
-    case 'ws':
-      return parseRemote(trimmed.replace(/^ws(s?):/i, (_, secure: string) => `http${secure}:`));
-    case 'file':
-      return parseFile(trimmed);
-    default:
-      // Never echo the URL: it may carry credentials.
-      throw new DatabaseConfigError(
-        `Unsupported database URL${scheme === undefined ? '' : ` scheme "${scheme}:"`}. Use libsql:, ` +
-          'https:, http:, wss:, ws: (remote), file: or :memory: (local).',
-      );
+  const scheme = databaseUrlScheme(trimmed);
+  if (scheme === 'file') return parseFile(trimmed);
+  if (isRemoteDatabaseScheme(scheme)) {
+    return parseRemote(trimmed.replace(/^ws(s?):/i, (_, secure: string) => `http${secure}:`));
   }
+  // Never echo the URL: it may carry credentials.
+  throw new DatabaseConfigError(
+    `Unsupported database URL${scheme === undefined ? '' : ` scheme "${scheme}:"`}. Use ${SUPPORTED_DATABASE_URLS_HINT}.`,
+  );
 }
 
 /** Whether `url` names a remote or a local database. @throws {DatabaseConfigError} for other URLs. */

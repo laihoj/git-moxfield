@@ -20,8 +20,8 @@ import { cardCatalog } from '@/server/db/schema';
 import { decodeStringArray, encodeJson } from './codec';
 import {
   batches,
-  distinct,
   excluded,
+  selectInBatches,
   valuesTable,
   writeAll,
   type LibsqlExecutor,
@@ -73,26 +73,22 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
     async getMany(keys) {
       const result = new Map<CardKey, CardFacts>();
       // One row read per card (a version page asks for every card of the deck).
-      const pages = await Promise.all(
-        batches(distinct(keys)).map((batch) =>
-          ctx.db.all<CatalogRow>(catalogLookupQuery(ctx.workspaceId, batch)),
-        ),
+      const rows = await selectInBatches(keys, (batch) =>
+        ctx.db.all<CatalogRow>(catalogLookupQuery(ctx.workspaceId, batch)),
       );
-      for (const rows of pages) {
-        for (const row of rows) {
-          const facts: CardFacts = {
-            key: row.key,
-            name: row.name,
-            typeLine: row.typeLine,
-            primaryType: row.primaryType,
-            manaCost: row.manaCost,
-            cmc: row.cmc,
-            colorIdentity: decodeStringArray(row.colorIdentityJson, `Color identity of ${row.key}`),
-            layout: row.layout,
-          };
-          if (row.scryfallId !== null) facts.scryfallId = row.scryfallId;
-          result.set(row.key, facts);
-        }
+      for (const row of rows) {
+        const facts: CardFacts = {
+          key: row.key,
+          name: row.name,
+          typeLine: row.typeLine,
+          primaryType: row.primaryType,
+          manaCost: row.manaCost,
+          cmc: row.cmc,
+          colorIdentity: decodeStringArray(row.colorIdentityJson, `Color identity of ${row.key}`),
+          layout: row.layout,
+        };
+        if (row.scryfallId !== null) facts.scryfallId = row.scryfallId;
+        result.set(row.key, facts);
       }
       return result;
     },

@@ -14,16 +14,9 @@ import { and, desc, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from
 
 import { credentials, loginLinks, users } from '@/server/db/schema';
 
-import {
-  isUniqueViolation,
-  referencing,
-  withTransaction,
-  write,
-  type LibsqlExecutor,
-  type RepositoryContext,
-} from './context';
+import { allOf, insertWithUniqueHash, updateRows, withTransaction, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
-import type { UserRecord } from './users';
+import { activeAdminIds, isActiveAdmin, type UserRecord } from './users';
 
 export type LoginLinkPurpose = (typeof loginLinks.$inferSelect)['purpose'];
 
@@ -118,54 +111,32 @@ const recordColumns = {
   revokedAt: loginLinks.revokedAt,
 };
 
-/** `id IN (active admins)`: admins who are not disabled. */
-function activeAdminIds(db: LibsqlExecutor) {
-  return db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.role, 'admin'), isNull(users.disabledAt)));
-}
-
 /** A link that is neither used nor revoked and has not expired at `now`. */
-function isPending(now: string): SQL | undefined {
-  return and(isNull(loginLinks.usedAt), isNull(loginLinks.revokedAt), gt(loginLinks.expiresAt, now));
+function isPending(now: string): SQL {
+  return allOf(isNull(loginLinks.usedAt), isNull(loginLinks.revokedAt), gt(loginLinks.expiresAt, now));
 }
 
 export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepository {
-  const duplicate = (cause?: unknown): RepositoryError =>
-    new RepositoryError(
-      'conflict',
-      'A login link with this token already exists',
-      cause === undefined ? undefined : { cause },
-    );
-
   return {
-    async create(input) {
-      const taken = await ctx.db
-        .select({ id: loginLinks.id })
-        .from(loginLinks)
-        .where(eq(loginLinks.tokenHash, input.tokenHash))
-        .get();
-      if (taken) throw duplicate();
-      const values = {
-        id: ctx.newId(),
-        tokenHash: input.tokenHash,
-        userId: input.userId,
-        purpose: input.purpose,
-        createdByUserId: input.createdByUserId,
-        credentialId: input.credentialId ?? null,
-        createdAt: ctx.now(),
-        expiresAt: input.expiresAt,
-      };
-      try {
-        return await referencing(`Login link of user ${input.userId}`, () =>
-          write(ctx, (db) => db.insert(loginLinks).values(values).returning(recordColumns).get()),
-        );
-      } catch (error) {
-        // The same token hash stored since the check above.
-        if (isUniqueViolation(error)) throw duplicate(error);
-        throw error;
-      }
+    create(input) {
+      return insertWithUniqueHash(ctx, {
+        hashColumn: loginLinks.tokenHash,
+        hash: input.tokenHash,
+        emptyHashMessage: 'A login link needs a token hash',
+        duplicateMessage: 'A login link with this token already exists',
+        references: `Login link of user ${input.userId}`,
+        values: () => ({
+          id: ctx.newId(),
+          tokenHash: input.tokenHash,
+          userId: input.userId,
+          purpose: input.purpose,
+          createdByUserId: input.createdByUserId,
+          credentialId: input.credentialId ?? null,
+          createdAt: ctx.now(),
+          expiresAt: input.expiresAt,
+        }),
+        insert: (db, values) => db.insert(loginLinks).values(values).returning(recordColumns).get(),
+      });
     },
 
     async getByTokenHash(tokenHash) {
@@ -217,28 +188,21 @@ export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepo
 
     async hasActiveCreator(link) {
       if (link.purpose !== 'recovery' || link.createdByUserId === null) return true;
-      const creator = await ctx.db
-        .select({ id: users.id })
-        .from(users)
-        .where(and(eq(users.id, link.createdByUserId), eq(users.role, 'admin'), isNull(users.disabledAt)))
-        .get();
-      return creator !== undefined;
+      return isActiveAdmin(ctx.db, link.createdByUserId);
     },
 
     async revoke(id, at, options = {}) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(loginLinks)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              eq(loginLinks.id, id),
-              isPending(at),
-              options.purpose === undefined ? undefined : eq(loginLinks.purpose, options.purpose),
-            ),
-          ),
+      const changed = await updateRows(
+        ctx,
+        loginLinks,
+        { revokedAt: at },
+        and(
+          eq(loginLinks.id, id),
+          isPending(at),
+          options.purpose === undefined ? undefined : eq(loginLinks.purpose, options.purpose),
+        ),
       );
-      return result.rowsAffected > 0;
+      return changed > 0;
     },
 
     async revokeUnused(filter, at) {
@@ -249,25 +213,20 @@ export function createLoginLinkRepository(ctx: RepositoryContext): LoginLinkRepo
       ) {
         throw new RepositoryError('invalid-input', 'Name the user or key whose links to revoke');
       }
-      const result = await write(ctx, (db) =>
-        db
-          .update(loginLinks)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              isPending(at),
-              filter.userId === undefined ? undefined : eq(loginLinks.userId, filter.userId),
-              filter.createdByUserId === undefined
-                ? undefined
-                : eq(loginLinks.createdByUserId, filter.createdByUserId),
-              filter.credentialId === undefined
-                ? undefined
-                : eq(loginLinks.credentialId, filter.credentialId),
-              filter.purpose === undefined ? undefined : eq(loginLinks.purpose, filter.purpose),
-            ),
-          ),
+      return updateRows(
+        ctx,
+        loginLinks,
+        { revokedAt: at },
+        and(
+          isPending(at),
+          filter.userId === undefined ? undefined : eq(loginLinks.userId, filter.userId),
+          filter.createdByUserId === undefined
+            ? undefined
+            : eq(loginLinks.createdByUserId, filter.createdByUserId),
+          filter.credentialId === undefined ? undefined : eq(loginLinks.credentialId, filter.credentialId),
+          filter.purpose === undefined ? undefined : eq(loginLinks.purpose, filter.purpose),
+        ),
       );
-      return result.rowsAffected;
     },
 
     listPending(purpose, now) {

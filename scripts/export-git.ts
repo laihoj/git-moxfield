@@ -17,6 +17,7 @@ import { relative } from 'node:path';
 import { pluralize } from '@/core/text';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { getConfig, type AppConfig } from '@/server/config';
+import { openConfiguredDatabase } from '@/server/db/client';
 import {
   defaultExportDirectory,
   exportDeckToGit,
@@ -25,12 +26,7 @@ import {
 } from '@/server/git-export';
 import { createRepositories, type DeckLocation, type Repositories } from '@/server/repositories';
 
-import {
-  describeConfiguredDatabase,
-  describeFailure,
-  isMissingDatabaseFile,
-  openConfiguredDatabase,
-} from './database';
+import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
 import { runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 

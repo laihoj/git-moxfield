@@ -12,13 +12,12 @@
  * {@link SessionRepository.findPendingHandoffByTokenHash}, until the browser completes
  * the hand-off ({@link SessionRepository.promoteHandoff}) or it is revoked or expires.
  */
-import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, ne, sql, type SQL } from 'drizzle-orm';
 
 import { credentials, sessions, users } from '@/server/db/schema';
 
-import { isUniqueViolation, referencing, write, type RepositoryContext } from './context';
+import { allOf, insertWithUniqueHash, updateRows, type RepositoryContext } from './context';
 import { credentialRecordColumns, type CredentialRecord } from './credentials';
-import { RepositoryError } from './errors';
 import type { UserRecord } from './users';
 
 /** How a session started: which credential or one-time link signed the browser in. */
@@ -131,53 +130,41 @@ const recordColumns = {
   revokedAt: sessions.revokedAt,
 };
 
+/** A session (or pending hand-off, with `pendingHandoff`) that is not revoked and has not expired at `now`. */
+function liveSession(now: string, pendingHandoff: boolean): SQL {
+  return allOf(
+    isNull(sessions.revokedAt),
+    gt(sessions.expiresAt, now),
+    eq(sessions.pendingHandoff, pendingHandoff),
+  );
+}
+
 export function createSessionRepository(ctx: RepositoryContext): SessionRepository {
-  const duplicate = (cause?: unknown): RepositoryError =>
-    new RepositoryError(
-      'conflict',
-      'A session with this token already exists',
-      cause === undefined ? undefined : { cause },
-    );
-
-  /** Runs a conditional `UPDATE` of sessions; returns how many rows it changed. */
-  const update = async (
-    set: Partial<typeof sessions.$inferInsert>,
-    where: ReturnType<typeof and>,
-  ): Promise<number> => {
-    const result = await write(ctx, (db) => db.update(sessions).set(set).where(where));
-    return result.rowsAffected;
-  };
-
   return {
-    async create(input) {
-      const taken = await ctx.db
-        .select({ id: sessions.id })
-        .from(sessions)
-        .where(eq(sessions.tokenHash, input.tokenHash))
-        .get();
-      if (taken) throw duplicate();
-      const now = ctx.now();
-      const values = {
-        id: ctx.newId(),
-        userId: input.userId,
-        tokenHash: input.tokenHash,
-        createdVia: input.createdVia,
-        credentialId: input.credentialId ?? null,
-        pendingHandoff: input.pendingHandoff ?? false,
-        userAgent: input.userAgent ?? null,
-        createdAt: now,
-        lastSeenAt: now,
-        expiresAt: input.expiresAt,
-      };
-      try {
-        return await referencing(`Session of user ${input.userId}`, () =>
-          write(ctx, (db) => db.insert(sessions).values(values).returning(recordColumns).get()),
-        );
-      } catch (error) {
-        // The same token hash stored since the check above.
-        if (isUniqueViolation(error)) throw duplicate(error);
-        throw error;
-      }
+    create(input) {
+      return insertWithUniqueHash(ctx, {
+        hashColumn: sessions.tokenHash,
+        hash: input.tokenHash,
+        emptyHashMessage: 'A session needs a token hash',
+        duplicateMessage: 'A session with this token already exists',
+        references: `Session of user ${input.userId}`,
+        values: () => {
+          const now = ctx.now();
+          return {
+            id: ctx.newId(),
+            userId: input.userId,
+            tokenHash: input.tokenHash,
+            createdVia: input.createdVia,
+            credentialId: input.credentialId ?? null,
+            pendingHandoff: input.pendingHandoff ?? false,
+            userAgent: input.userAgent ?? null,
+            createdAt: now,
+            lastSeenAt: now,
+            expiresAt: input.expiresAt,
+          };
+        },
+        insert: (db, values) => db.insert(sessions).values(values).returning(recordColumns).get(),
+      });
     },
 
     async findActiveByTokenHash(tokenHash, now) {
@@ -185,15 +172,7 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
         .select({ session: recordColumns, user: users })
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
-        .where(
-          and(
-            eq(sessions.tokenHash, tokenHash),
-            isNull(sessions.revokedAt),
-            gt(sessions.expiresAt, now),
-            eq(sessions.pendingHandoff, false),
-            isNull(users.disabledAt),
-          ),
-        )
+        .where(and(eq(sessions.tokenHash, tokenHash), liveSession(now, false), isNull(users.disabledAt)))
         .get();
       return row ?? null;
     },
@@ -207,9 +186,7 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
           and(
             eq(sessions.id, sessionId),
             eq(sessions.userId, userId),
-            isNull(sessions.revokedAt),
-            gt(sessions.expiresAt, now),
-            eq(sessions.pendingHandoff, false),
+            liveSession(now, false),
             isNull(users.disabledAt),
           ),
         )
@@ -233,9 +210,7 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
         .where(
           and(
             eq(sessions.tokenHash, tokenHash),
-            eq(sessions.pendingHandoff, true),
-            isNull(sessions.revokedAt),
-            gt(sessions.expiresAt, now),
+            liveSession(now, true),
             isNull(users.disabledAt),
             isNull(credentials.revokedAt),
           ),
@@ -245,20 +220,19 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
     },
 
     async promoteHandoff(id, now, expiresAt) {
-      const changed = await update(
+      const changed = await updateRows(
+        ctx,
+        sessions,
         { pendingHandoff: false, expiresAt, lastSeenAt: now },
-        and(
-          eq(sessions.id, id),
-          eq(sessions.pendingHandoff, true),
-          isNull(sessions.revokedAt),
-          gt(sessions.expiresAt, now),
-        ),
+        and(eq(sessions.id, id), liveSession(now, true)),
       );
       return changed > 0;
     },
 
     async revokePendingHandoff(tokenHash, at) {
-      const changed = await update(
+      const changed = await updateRows(
+        ctx,
+        sessions,
         { revokedAt: at },
         and(eq(sessions.tokenHash, tokenHash), eq(sessions.pendingHandoff, true), isNull(sessions.revokedAt)),
       );
@@ -266,7 +240,9 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
     },
 
     async touch(id, change) {
-      await update(
+      await updateRows(
+        ctx,
+        sessions,
         change.expiresAt === undefined
           ? { lastSeenAt: change.lastSeenAt }
           : { lastSeenAt: change.lastSeenAt, expiresAt: change.expiresAt },
@@ -278,20 +254,15 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
       return ctx.db
         .select(recordColumns)
         .from(sessions)
-        .where(
-          and(
-            eq(sessions.userId, userId),
-            isNull(sessions.revokedAt),
-            gt(sessions.expiresAt, now),
-            eq(sessions.pendingHandoff, false),
-          ),
-        )
+        .where(and(eq(sessions.userId, userId), liveSession(now, false)))
         .orderBy(desc(sessions.lastSeenAt), desc(sessions.createdAt), desc(sql`${sessions}.rowid`))
         .all();
     },
 
     async revoke(userId, sessionId, at) {
-      const changed = await update(
+      const changed = await updateRows(
+        ctx,
+        sessions,
         { revokedAt: at },
         and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)),
       );
@@ -299,7 +270,9 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
     },
 
     async revokeByTokenHash(tokenHash, at) {
-      const changed = await update(
+      const changed = await updateRows(
+        ctx,
+        sessions,
         { revokedAt: at },
         and(eq(sessions.tokenHash, tokenHash), isNull(sessions.revokedAt)),
       );
@@ -307,7 +280,9 @@ export function createSessionRepository(ctx: RepositoryContext): SessionReposito
     },
 
     revokeAllForUser(userId, at, options = {}) {
-      return update(
+      return updateRows(
+        ctx,
+        sessions,
         { revokedAt: at },
         and(
           eq(sessions.userId, userId),

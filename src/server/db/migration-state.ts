@@ -162,15 +162,11 @@ export async function checkMigrationState(
   return { status, applied: rows.length, expected: journal.length, pending, unknown };
 }
 
-/**
- * Resolves when the database has exactly the migrations this build ships.
- *
- * @throws {MigrationStateError} otherwise, with a message that says what to do.
- */
-export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<MigrationState> {
-  const state = await checkMigrationState(db);
-  if (state.status !== 'up-to-date') throw new MigrationStateError(state);
-  return state;
+export interface AssertMigrationsOptions {
+  /** The migrations the database must have. Default: the ones this build ships. */
+  journal?: readonly MigrationJournalEntry[];
+  /** Accept a database a newer build migrated, when nothing is pending. Default: true. */
+  allowAhead?: boolean;
 }
 
 /**
@@ -179,7 +175,8 @@ export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<Migr
  * applied, with the state. That is `up-to-date`, or `ahead` with nothing pending: a newer
  * build added migrations, which are backward compatible with the deploy that was live when
  * they were applied (ADR 0008: expand, then contract). The caller should log an `ahead`
- * state.
+ * state. With `allowAhead: false` the database must have exactly the migrations of
+ * `journal`: `ahead` fails too.
  *
  * Tolerating `ahead` keeps the live deploy working while a new deploy is published (its
  * migrations run before the publish, and stay applied if the publish fails), and after an
@@ -192,10 +189,11 @@ export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<Migr
  */
 export async function assertMigrationsApplied(
   db: LibsqlExecutor,
-  journal: readonly MigrationJournalEntry[] = bundledMigrations(),
+  { journal = bundledMigrations(), allowAhead = true }: AssertMigrationsOptions = {},
 ): Promise<MigrationState> {
   const state = await checkMigrationState(db, journal);
-  const servable = state.status === 'up-to-date' || (state.status === 'ahead' && state.pending.length === 0);
+  const servable =
+    state.status === 'up-to-date' || (allowAhead && state.status === 'ahead' && state.pending.length === 0);
   if (!servable) throw new MigrationStateError(state);
   return state;
 }

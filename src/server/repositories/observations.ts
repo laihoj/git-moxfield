@@ -18,20 +18,20 @@ import { and, desc, eq, notInArray, sql } from 'drizzle-orm';
 
 import type { CanonicalSnapshot, IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
-import { decks, observations, snapshots } from '@/server/db/schema';
+import { observations, snapshots } from '@/server/db/schema';
 
-import { corruptData, decodeIngestMethod, decodeSourceMetadata, decodeWarnings, encodeJson } from './codec';
+import { decodeIngestMethod, decodeSourceMetadata, decodeWarnings, encodeJson } from './codec';
+import { collectContentGarbage } from './content-gc';
 import {
   deckInWorkspace,
   referencing,
+  requireDeckInWorkspace,
   withTransaction,
   write,
   type LibsqlExecutor,
   type RepositoryContext,
 } from './context';
-import { RepositoryError } from './errors';
-import { deleteUnreferencedRawBlobs } from './raw-blobs';
-import { decodeSnapshot, deleteUnreferencedSnapshots } from './snapshots';
+import { requireJoinedSnapshot } from './snapshots';
 
 export interface ObservationRecord {
   id: string;
@@ -89,12 +89,7 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
 
   return {
     async insert(input) {
-      const deck = await ctx.db
-        .select({ id: decks.id })
-        .from(decks)
-        .where(and(eq(decks.id, input.deckId), eq(decks.workspaceId, ctx.workspaceId)))
-        .get();
-      if (!deck) throw new RepositoryError('not-found', `Deck ${input.deckId} does not exist`);
+      await requireDeckInWorkspace(ctx, input.deckId);
       const record: ObservationRecord = { id: ctx.newId(), ...input };
       const values = {
         id: record.id,
@@ -148,14 +143,7 @@ export function createObservationRepository(ctx: RepositoryContext): Observation
           .all();
         if (references.length === 0) return 0;
         const deleted = await db.delete(observations).where(superseded);
-        await deleteUnreferencedSnapshots(
-          db,
-          references.map((reference) => reference.snapshotHash),
-        );
-        await deleteUnreferencedRawBlobs(
-          db,
-          references.map((reference) => reference.rawBlobHash),
-        );
+        await collectContentGarbage(db, references);
         return deleted.rowsAffected;
       });
     },
@@ -195,12 +183,10 @@ function toObservationWithSnapshot(row: {
   snapshot: typeof snapshots.$inferSelect | null;
 }): ObservationWithSnapshot {
   const observation = toObservationRecord(row.observation);
-  // The foreign key keeps the snapshot while the observation exists, and one statement
-  // reads both from the same state of the database: a missing one is damage.
-  if (row.snapshot === null) {
-    throw corruptData(`Observation ${observation.id}`, `its snapshot ${observation.snapshotHash} is missing`);
-  }
-  return { observation, snapshot: decodeSnapshot(row.snapshot) };
+  return {
+    observation,
+    snapshot: requireJoinedSnapshot(`Observation ${observation.id}`, observation.snapshotHash, row.snapshot),
+  };
 }
 
 function toObservationRecord(row: typeof observations.$inferSelect): ObservationRecord {

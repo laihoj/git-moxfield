@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { USER_ROLES } from '@/core/roles';
 import { getAuthService, SYSTEM_ACTOR } from '@/server/auth';
 import { cookieNames } from '@/server/auth/cookie-spec';
 import { establishSessionOnResponse, requestCookieSecurity } from '@/server/auth/cookies';
@@ -41,7 +42,7 @@ export const dynamic = 'force-dynamic';
 
 const bodySchema = z.object({
   displayName: z.string().optional(),
-  role: z.enum(['admin', 'member']).optional(),
+  role: z.enum(USER_ROLES).optional(),
   bookmarkletLabel: z.string().optional(),
 });
 

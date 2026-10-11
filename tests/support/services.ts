@@ -9,6 +9,7 @@
  * their own and services bound to it, and {@link ServiceHarness.auth} is the auth service
  * on the same database and clock.
  */
+import type { LogLevel } from '@/core/logger';
 import { createAuthService, type AuthService } from '@/server/auth/service';
 import { LOCAL_WORKSPACE_ID, type Db } from '@/server/db/client';
 import { parseConfig, type AppConfig } from '@/server/config';
@@ -49,7 +50,7 @@ export class ManualClock {
 }
 
 export interface LogEntry {
-  level: 'debug' | 'info' | 'warn' | 'error';
+  level: LogLevel;
   message: string;
   context: Record<string, unknown> | undefined;
 }

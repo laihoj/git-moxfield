@@ -8,15 +8,17 @@
  * admin withdraws their pending invites, and acceptance re-checks the creator, so a
  * disabled admin's invite can never bring them back.
  */
-import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 
-import { invites, users } from '@/server/db/schema';
+import { invites } from '@/server/db/schema';
 
-import { isUniqueViolation, referencing, withTransaction, write, type RepositoryContext } from './context';
-import { RepositoryError } from './errors';
+import { allOf, insertWithUniqueHash, updateRows, withTransaction, type RepositoryContext } from './context';
 import {
+  activeAdminIds,
   insertUserAdoptingWorkspace,
   insertUserWithWorkspace,
+  isActiveAdmin,
+  requireDisplayName,
   type UserRecord,
   type UserRole,
 } from './users';
@@ -98,40 +100,31 @@ const recordColumns = {
   revokedAt: invites.revokedAt,
 };
 
-export function createInviteRepository(ctx: RepositoryContext): InviteRepository {
-  const duplicate = (cause?: unknown): RepositoryError =>
-    new RepositoryError(
-      'conflict',
-      'An invite with this token already exists',
-      cause === undefined ? undefined : { cause },
-    );
+/** An invite that is neither used nor revoked and has not expired at `now`. */
+function pendingInvite(now: string): SQL {
+  return allOf(isNull(invites.usedAt), isNull(invites.revokedAt), gt(invites.expiresAt, now));
+}
 
+export function createInviteRepository(ctx: RepositoryContext): InviteRepository {
   return {
-    async create(input) {
-      const taken = await ctx.db
-        .select({ id: invites.id })
-        .from(invites)
-        .where(eq(invites.tokenHash, input.tokenHash))
-        .get();
-      if (taken) throw duplicate();
-      const values = {
-        id: ctx.newId(),
-        tokenHash: input.tokenHash,
-        role: input.role,
-        note: input.note.trim(),
-        createdByUserId: input.createdByUserId,
-        createdAt: ctx.now(),
-        expiresAt: input.expiresAt,
-      };
-      try {
-        return await referencing('Invite', () =>
-          write(ctx, (db) => db.insert(invites).values(values).returning(recordColumns).get()),
-        );
-      } catch (error) {
-        // The same token hash stored since the check above.
-        if (isUniqueViolation(error)) throw duplicate(error);
-        throw error;
-      }
+    create(input) {
+      return insertWithUniqueHash(ctx, {
+        hashColumn: invites.tokenHash,
+        hash: input.tokenHash,
+        emptyHashMessage: 'An invite needs a token hash',
+        duplicateMessage: 'An invite with this token already exists',
+        references: 'Invite',
+        values: () => ({
+          id: ctx.newId(),
+          tokenHash: input.tokenHash,
+          role: input.role,
+          note: input.note.trim(),
+          createdByUserId: input.createdByUserId,
+          createdAt: ctx.now(),
+          expiresAt: input.expiresAt,
+        }),
+        insert: (db, values) => db.insert(invites).values(values).returning(recordColumns).get(),
+      });
     },
 
     async getById(id) {
@@ -157,9 +150,7 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
     },
 
     async accept(tokenHash, now, user) {
-      if (user.displayName.trim() === '') {
-        throw new RepositoryError('invalid-input', 'A user needs a display name');
-      }
+      requireDisplayName(user.displayName);
       return withTransaction(ctx, async (tx) => {
         // `undefined` when no row matched (Drizzle's type omits that case).
         const claimed = (await tx.db
@@ -168,19 +159,8 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
           .where(
             and(
               eq(invites.tokenHash, tokenHash),
-              isNull(invites.usedAt),
-              isNull(invites.revokedAt),
-              gt(invites.expiresAt, now),
-              or(
-                isNull(invites.createdByUserId),
-                inArray(
-                  invites.createdByUserId,
-                  tx.db
-                    .select({ id: users.id })
-                    .from(users)
-                    .where(and(eq(users.role, 'admin'), isNull(users.disabledAt))),
-                ),
-              ),
+              pendingInvite(now),
+              or(isNull(invites.createdByUserId), inArray(invites.createdByUserId, activeAdminIds(tx.db))),
             ),
           )
           .returning(recordColumns)
@@ -205,40 +185,26 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
     },
 
     async revoke(id, at) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(invites)
-          .set({ revokedAt: at })
-          .where(and(eq(invites.id, id), isNull(invites.usedAt), isNull(invites.revokedAt))),
+      const changed = await updateRows(
+        ctx,
+        invites,
+        { revokedAt: at },
+        and(eq(invites.id, id), isNull(invites.usedAt), isNull(invites.revokedAt)),
       );
-      return result.rowsAffected > 0;
+      return changed > 0;
     },
 
-    async revokePendingCreatedBy(userId, at) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(invites)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              eq(invites.createdByUserId, userId),
-              isNull(invites.usedAt),
-              isNull(invites.revokedAt),
-              gt(invites.expiresAt, at),
-            ),
-          ),
+    revokePendingCreatedBy(userId, at) {
+      return updateRows(
+        ctx,
+        invites,
+        { revokedAt: at },
+        and(eq(invites.createdByUserId, userId), pendingInvite(at)),
       );
-      return result.rowsAffected;
     },
 
     async hasActiveCreator(invite) {
-      if (invite.createdByUserId === null) return true;
-      const creator = await ctx.db
-        .select({ id: users.id })
-        .from(users)
-        .where(and(eq(users.id, invite.createdByUserId), eq(users.role, 'admin'), isNull(users.disabledAt)))
-        .get();
-      return creator !== undefined;
+      return invite.createdByUserId === null || (await isActiveAdmin(ctx.db, invite.createdByUserId));
     },
   };
 }

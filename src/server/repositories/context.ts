@@ -10,11 +10,16 @@
  */
 import { and, eq, exists, inArray, sql, type SQL } from 'drizzle-orm';
 import type { BatchItem, BatchResponse } from 'drizzle-orm/batch';
-import { alias, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
+import {
+  alias,
+  type SQLiteColumn,
+  type SQLiteTable,
+  type SQLiteUpdateSetSource,
+} from 'drizzle-orm/sqlite-core';
 
 import type { LibsqlDb, LibsqlExecutor } from '@/server/db/libsql';
 import * as schema from '@/server/db/schema';
-import { classifySqlError } from '@/server/db/sql-errors';
+import { isSqlErrorKind } from '@/server/db/sql-errors';
 import { isTransaction, runInTransaction, runWrite, type TransactionOptions } from '@/server/db/transaction';
 
 import { RepositoryError } from './errors';
@@ -143,6 +148,47 @@ export function inWorkspace(
   );
 }
 
+/** The conjunction of conditions that are all there (Drizzle's `and()` is `undefined` without any). */
+export function allOf(...conditions: SQL[]): SQL {
+  const combined = and(...conditions);
+  if (combined === undefined) throw new Error('allOf needs at least one condition');
+  return combined;
+}
+
+/** A deck of the context's workspace by id: `decks.id = ? AND decks.workspace_id = ?`. */
+export function ownDeck(ctx: Pick<RepositoryContext, 'workspaceId'>, deckId: string): SQL {
+  return allOf(eq(schema.decks.workspaceId, ctx.workspaceId), eq(schema.decks.id, deckId));
+}
+
+/**
+ * Throws `not-found` unless the deck exists in the context's workspace: one primary-key
+ * probe of the deck row, like {@link ownDeck}.
+ */
+export async function requireDeckInWorkspace(
+  ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
+  deckId: string,
+): Promise<void> {
+  const row = await ctx.db
+    .select({ id: schema.decks.id })
+    .from(schema.decks)
+    .where(ownDeck(ctx, deckId))
+    .get();
+  if (!row) throw new RepositoryError('not-found', `Deck ${deckId} does not exist`);
+}
+
+/** Throws `not-found` unless the commit belongs to a deck of the context's workspace (the {@link deckInWorkspace} probe). */
+export async function requireCommitInWorkspace(
+  ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
+  commitId: string,
+): Promise<void> {
+  const row = await ctx.db
+    .select({ id: schema.commits.id })
+    .from(schema.commits)
+    .where(and(eq(schema.commits.id, commitId), deckInWorkspace(ctx, schema.commits.deckId)))
+    .get();
+  if (!row) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
+}
+
 /**
  * Restricts a query to rows of decks of the context's workspace (see {@link inWorkspace}
  * for the rules): `EXISTS (SELECT 1 FROM decks AS owner_deck WHERE owner_deck.id = <deck>
@@ -186,6 +232,80 @@ export function commitInWorkspace(
 }
 
 /**
+ * Runs `UPDATE table SET ... WHERE ...` as one write and returns how many rows it changed.
+ * `where` must name a condition: Drizzle's `and()` returns `undefined` when all its
+ * arguments are `undefined`, which would update every row of the table.
+ */
+export async function updateRows<T extends SQLiteTable>(
+  ctx: RepositoryContext,
+  table: T,
+  // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Drizzle's mapped type for a generic table
+  set: SQLiteUpdateSetSource<T>,
+  where: SQL | undefined,
+): Promise<number> {
+  if (where === undefined) throw new Error('updateRows needs a condition: it would update every row');
+  const result = await write(ctx, (db) => db.update(table).set(set).where(where));
+  return result.rowsAffected;
+}
+
+export interface InsertWithUniqueHashOptions<V, T> {
+  /** The unique column holding the token or secret hash, e.g. `sessions.tokenHash`. */
+  hashColumn: SQLiteColumn;
+  /** The hash to insert. An empty hash is refused. */
+  hash: string;
+  /** Message of the `invalid-input` error for an empty hash. */
+  emptyHashMessage: string;
+  /** Message of the `conflict` error when the hash is stored already. */
+  duplicateMessage: string;
+  /** What the row references, for the `not-found` of a dangling reference (see {@link referencing}). */
+  references: string;
+  /**
+   * Another check, run in parallel with the probe of the hash; if it throws, that error is
+   * reported rather than a conflict (share links: the deck exists in the workspace).
+   */
+  precheck?: () => Promise<unknown>;
+  /** The values of the new row, built once the hash is known to be free (new ids and timestamps come from here). */
+  values: () => V;
+  /** Inserts the row and returns it; may run again after a transient failure, with the same values. */
+  insert: (db: LibsqlExecutor, values: V) => Promise<T>;
+}
+
+/**
+ * Inserts a row of a table keyed by a unique token hash: refuses an empty hash, looks for
+ * the hash first (a clear `conflict` without a failed write), and also turns a unique
+ * violation of a racing insert into the same `conflict`.
+ *
+ * @throws {RepositoryError} `invalid-input` for an empty hash; `conflict` for a stored
+ * hash; `not-found` for a dangling reference.
+ */
+export async function insertWithUniqueHash<V, T>(
+  ctx: RepositoryContext,
+  options: InsertWithUniqueHashOptions<V, T>,
+): Promise<T> {
+  const { hashColumn, hash } = options;
+  if (hash === '') throw new RepositoryError('invalid-input', options.emptyHashMessage);
+  const duplicate = (cause?: unknown): RepositoryError =>
+    new RepositoryError('conflict', options.duplicateMessage, cause === undefined ? undefined : { cause });
+  const [, taken] = await Promise.all([
+    options.precheck?.(),
+    ctx.db
+      .select({ one: sql`1` })
+      .from(hashColumn.table)
+      .where(eq(hashColumn, hash))
+      .get(),
+  ]);
+  if (taken) throw duplicate();
+  const values = options.values();
+  try {
+    return await referencing(options.references, () => write(ctx, (db) => options.insert(db, values)));
+  } catch (error) {
+    // The same hash stored since the probe above.
+    if (isUniqueViolation(error)) throw duplicate(error);
+    throw error;
+  }
+}
+
+/**
  * Runs a write whose only failure mode for valid input is a dangling reference, and
  * reports a violated foreign key as a `not-found` {@link RepositoryError}. Works for
  * every connection mode: the violation is recognized through the error's cause chain
@@ -195,7 +315,7 @@ export async function referencing<T>(what: string, operation: () => Promise<T>):
   try {
     return await operation();
   } catch (error) {
-    if (classifySqlError(error).kind === 'foreign-key') {
+    if (isSqlErrorKind(error, 'foreign-key')) {
       throw new RepositoryError('not-found', `${what} references a row that does not exist`, {
         cause: error,
       });
@@ -206,7 +326,7 @@ export async function referencing<T>(what: string, operation: () => Promise<T>):
 
 /** Whether `error` is (or wraps) a UNIQUE or PRIMARY KEY violation. */
 export function isUniqueViolation(error: unknown): boolean {
-  return classifySqlError(error).kind === 'unique';
+  return isSqlErrorKind(error, 'unique');
 }
 
 /**
@@ -220,6 +340,33 @@ export function batches<T>(items: readonly T[], size = BATCH_SIZE): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size));
   return result;
+}
+
+/**
+ * Reads rows for many keys: runs `query` for each batch of the distinct `values` (see
+ * {@link BATCH_SIZE}), in parallel, and concatenates the pages in batch order. For reads
+ * only; writes go through {@link sumInBatches}.
+ */
+export async function selectInBatches<T>(
+  values: Iterable<string>,
+  query: (batch: string[]) => PromiseLike<T[]>,
+): Promise<T[]> {
+  const pages = await Promise.all(batches(distinct(values)).map((batch) => query(batch)));
+  return pages.flat();
+}
+
+/**
+ * Runs a write for each batch of the distinct `values`, one after another (they share a
+ * transaction or the write lock), and returns the sum of the rows changed that `run`
+ * reports per batch.
+ */
+export async function sumInBatches(
+  values: Iterable<string>,
+  run: (batch: string[]) => PromiseLike<number>,
+): Promise<number> {
+  let changed = 0;
+  for (const batch of batches(distinct(values))) changed += await run(batch);
+  return changed;
 }
 
 /**

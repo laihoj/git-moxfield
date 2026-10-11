@@ -77,14 +77,7 @@ import type {
   TrackDeckOutcome,
   VersionRef,
 } from './contract';
-import {
-  deckStatus,
-  diffCardKeys,
-  toCommitNoteDTO,
-  toFetchErrorDTO,
-  toObservationDTO,
-  toVersionRefDTO,
-} from './dto';
+import { deckStatus, diffCardKeys, toCommitNoteDTO, toObservationDTO, toVersionRefDTO } from './dto';
 import { ServiceError } from './errors';
 import { DeckHistory, type ResolvedSide } from './history';
 import { unlessDeckVanished } from './invariants';
@@ -960,7 +953,7 @@ class DefaultDeckServices implements DeckServices {
         status: error.status ?? null,
         retryAfterSeconds: record.retryAfterSeconds,
       });
-      return toFetchErrorDTO(record);
+      return record;
     }
     // Aborts and unexpected failures: log the details, show a generic message.
     this.logger.error('Unexpected error while fetching the deck', { deckId: deck.id, reason, error });
@@ -1093,7 +1086,7 @@ class DefaultDeckServices implements DeckServices {
       status: deckStatus(head !== null, diff),
       head: head ? toVersionRefDTO(head) : null,
       working: working ? toObservationDTO(working) : null,
-      lastFetchError: deck.lastFetchError ? toFetchErrorDTO(deck.lastFetchError) : null,
+      lastFetchError: deck.lastFetchError,
       workingStats: head && diff ? diff.stats : null,
       versionCount: state.versionCount,
     };

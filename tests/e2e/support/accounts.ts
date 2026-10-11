@@ -16,6 +16,8 @@ import { randomBytes } from 'node:crypto';
 
 import { test, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
+import type { UserRole } from '@/core/roles';
+
 import type { Bookmarklets } from './bookmarklet';
 import { APP_URL } from './constants';
 import { expect } from './fixtures';
@@ -23,7 +25,7 @@ import { expect } from './fixtures';
 export interface E2EUser {
   id: string;
   displayName: string;
-  role: 'admin' | 'member';
+  role: UserRole;
   workspaceId: string;
 }
 
@@ -42,7 +44,7 @@ export interface SignInOptions {
   /** Default: a unique `Tester <hex>`. */
   displayName?: string;
   /** Default: `member`. */
-  role?: 'admin' | 'member';
+  role?: UserRole;
   /** Creates a bookmarklet key with this label and returns its bookmarklets. */
   bookmarkletLabel?: string;
 }

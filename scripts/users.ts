@@ -25,12 +25,12 @@ import { parseHttpUrl } from '@/core/http-url';
 import { createAuthService, SYSTEM_ACTOR, type AuthService } from '@/server/auth/service';
 import type { UserDTO } from '@/server/auth/types';
 import { getConfig, type AppConfig } from '@/server/config';
-import type { Db } from '@/server/db/client';
+import { openConfiguredDatabase, type Db } from '@/server/db/client';
 import type { LibsqlDatabase } from '@/server/db/libsql';
 import { createLogger, type Logger } from '@/server/logger';
 import { isServiceError } from '@/server/services/errors';
 
-import { describeConfiguredDatabase, describeFailure, openConfiguredDatabase } from './database';
+import { describeConfiguredDatabase, describeFailure } from './database';
 import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 

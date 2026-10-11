@@ -11,14 +11,16 @@ import { branches, commits, decks, snapshots } from '@/server/db/schema';
 
 import { corruptData, decodeIngestMethod, decodeSourceMetadata, encodeJson } from './codec';
 import {
+  allOf,
   deckInWorkspace,
   inWorkspace,
+  ownDeck,
   referencing,
   withTransaction,
   type RepositoryContext,
 } from './context';
 import { RepositoryError } from './errors';
-import { decodeSnapshot } from './snapshots';
+import { requireJoinedSnapshot } from './snapshots';
 
 export interface CommitRecord {
   /** SHA-256 of the serialized commit object (`commitId` in `@/core/hash`). */
@@ -123,7 +125,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         const deck = await db
           .select({ source: decks.source, externalId: decks.externalId })
           .from(decks)
-          .where(and(eq(decks.id, commit.deckId), eq(decks.workspaceId, ctx.workspaceId)))
+          .where(ownDeck(ctx, commit.deckId))
           .get();
         if (!deck) throw new RepositoryError('not-found', `Deck ${commit.deckId} does not exist`);
         assertContentAddressed(commit, deckReference(deck));
@@ -242,9 +244,9 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select(getTableColumns(commits))
         .from(decks)
-        .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
+        .innerJoin(branches, headBranchOfDeck)
         .innerJoin(commits, eq(commits.id, branches.headCommitId))
-        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .where(ownDeck(ctx, deckId))
         .get();
       return row ? toCommitRecord(row) : null;
     },
@@ -253,17 +255,17 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select({ commit: commits, snapshot: snapshots })
         .from(decks)
-        .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
+        .innerJoin(branches, headBranchOfDeck)
         .innerJoin(commits, eq(commits.id, branches.headCommitId))
         .leftJoin(snapshots, eq(snapshots.hash, commits.snapshotHash))
-        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .where(ownDeck(ctx, deckId))
         .get();
       if (!row) return null;
       const commit = toCommitRecord(row.commit);
-      if (row.snapshot === null) {
-        throw corruptData(`Commit ${commit.id}`, `its snapshot ${commit.snapshotHash} is missing`);
-      }
-      return { commit, snapshot: decodeSnapshot(row.snapshot) };
+      return {
+        commit,
+        snapshot: requireJoinedSnapshot(`Commit ${commit.id}`, commit.snapshotHash, row.snapshot),
+      };
     },
 
     async lineage(deckId, fromCommitId) {
@@ -346,12 +348,15 @@ function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   }
 }
 
+/** Joins a deck to its HEAD branch. */
+const headBranchOfDeck = allOf(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName));
+
 async function headCommitId(ctx: RepositoryContext, deckId: string): Promise<string | null> {
   const row = await ctx.db
     .select({ headCommitId: branches.headCommitId })
     .from(decks)
-    .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
-    .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+    .innerJoin(branches, headBranchOfDeck)
+    .where(ownDeck(ctx, deckId))
     .get();
   return row?.headCommitId ?? null;
 }

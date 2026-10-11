@@ -178,6 +178,31 @@ describe('decks repository', () => {
     await expectRepositoryError(() => repos.decks.getById(deck.id), 'corrupt-data');
   });
 
+  it('keeps content that a commit of another deck still references when a deck is deleted', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const other = await createTestDeck(repos);
+    const state = buildSnapshot(baseDeckSpec());
+    const raw = { mediaType: 'application/json', data: { shared: 'payload' } };
+
+    // The deleted deck's commit and observation and the other deck's commit hold the same
+    // snapshot and raw blob (a commit's blob is optional; an observation's is not).
+    const rawBlobHash = await repos.rawBlobs.put(raw);
+    await commitTestSnapshot(repos, deck, state, { rawBlobHash });
+    await observeTestSnapshot(repos, deck, state, { raw: raw.data });
+    const { snapshotHash } = await commitTestSnapshot(repos, other, state, { rawBlobHash });
+
+    expect(await repos.decks.delete(deck.id)).toBe(true);
+
+    expect(await repos.rawBlobs.get(rawBlobHash)).toEqual(raw);
+    expect(await repos.snapshots.get(snapshotHash)).toEqual(state);
+
+    // Once the last reference goes, both kinds of content go with it.
+    expect(await repos.decks.delete(other.id)).toBe(true);
+    expect(await repos.rawBlobs.get(rawBlobHash)).toBeNull();
+    expect(await repos.snapshots.get(snapshotHash)).toBeNull();
+  });
+
   it('deletes a deck with its entire history, bypassing commit immutability', async () => {
     const { db, repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);

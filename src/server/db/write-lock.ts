@@ -25,6 +25,9 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { CodedError } from '@/core/coded-error';
+import { processSingleton } from '../process-singleton';
+
 /** Why {@link WriteLock.run} gave up without running the task. */
 export type WriteLockErrorCode =
   /** The calling async context already holds this lock (a nested write on the root database). */
@@ -32,14 +35,8 @@ export type WriteLockErrorCode =
   /** The lock was not granted within the requested `timeoutMs`. */
   | 'timeout';
 
-export class WriteLockError extends Error {
+export class WriteLockError extends CodedError<WriteLockErrorCode> {
   override readonly name = 'WriteLockError';
-  readonly code: WriteLockErrorCode;
-
-  constructor(code: WriteLockErrorCode, message: string) {
-    super(message);
-    this.code = code;
-  }
 }
 
 export interface WriteLockRunOptions {
@@ -48,19 +45,6 @@ export interface WriteLockRunOptions {
    * Default: wait as long as it takes. Has no effect once the task runs.
    */
   timeoutMs?: number;
-}
-
-/**
- * Returns the process-wide value stored under `key` on `globalThis`, creating it on first
- * use. Keeps per-process singletons (locks, async-local storages) shared across module
- * instances, which a module-level `const` is not under HMR.
- *
- * @internal for `src/server/db`.
- */
-export function processSingleton<T>(key: symbol, create: () => T): T {
-  const store = globalThis as unknown as Record<symbol, T | undefined>;
-  store[key] ??= create();
-  return store[key];
 }
 
 /** One grant of a lock to one task. `released` flips when the task settles. */

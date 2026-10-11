@@ -16,6 +16,7 @@ import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { z } from 'zod';
 
+import { USER_ROLES } from '@/core/roles';
 import { getAuthService } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 import type { SessionUser } from '@/server/auth/types';
@@ -34,7 +35,7 @@ const NO_APP_URL =
 
 /** Sanity bound for ids from the browser; the auth service looks them up. */
 const idSchema = z.string().trim().min(1).max(128);
-const roleSchema = z.enum(['admin', 'member']);
+const roleSchema = z.enum(USER_ROLES);
 
 /** Longest form value read at all; the auth service validates the exact rules. */
 const MAX_FIELD_LENGTH = 1024;

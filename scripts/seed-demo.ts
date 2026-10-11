@@ -29,6 +29,7 @@ import { parseArgs } from 'node:util';
 import type { CapturedIngestMethod } from '@/integrations/deck-source';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
 import { getConfig, parseConfig } from '@/server/config';
+import { openConfiguredDatabase } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
 import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
@@ -42,7 +43,7 @@ import {
   type MoxDeckSpec,
 } from '@tests/support/moxfield-deck-builder';
 
-import { describeConfiguredDatabase, openConfiguredDatabase } from './database';
+import { describeConfiguredDatabase } from './database';
 import { isEntryPoint, runMain } from './cli';
 import { loadEnvFiles } from './load-env';
 

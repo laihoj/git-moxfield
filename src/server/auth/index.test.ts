@@ -31,7 +31,8 @@ vi.mock('@/server/logger', () => ({
 }));
 
 /** The process-wide flag `getAuthService` sets once it announced the setup code. */
-const processState = globalThis as { __gitMoxfieldSetupCodeAnnounced?: boolean };
+const SETUP_CODE_ANNOUNCED = Symbol.for('git-moxfield.setupCodeAnnounced');
+const processState = globalThis as unknown as Record<symbol, true | undefined>;
 
 /** A fresh copy of the module (its service cache starts empty). */
 async function load() {
@@ -40,13 +41,13 @@ async function load() {
 }
 
 beforeEach(() => {
-  delete processState.__gitMoxfieldSetupCodeAnnounced;
+  processState[SETUP_CODE_ANNOUNCED] = undefined;
   state.logs = [];
 });
 
 afterEach(() => {
   state.getDb = undefined;
-  delete processState.__gitMoxfieldSetupCodeAnnounced;
+  processState[SETUP_CODE_ANNOUNCED] = undefined;
 });
 
 function announcements(): string[] {

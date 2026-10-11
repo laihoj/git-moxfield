@@ -55,12 +55,19 @@ import type {
 import { is } from 'drizzle-orm';
 import { SQLiteTransaction } from 'drizzle-orm/sqlite-core';
 
+import { CodedError } from '@/core/coded-error';
 import { SerialQueue } from '@/core/serial-queue';
 
 import { createLogger } from '../logger';
 import type { LibsqlDb, LibsqlExecutor, LibsqlTx } from './libsql';
-import { classifySqlError, isConstraintViolation, type SqlErrorClassification } from './sql-errors';
-import { processSingleton, type WriteLock } from './write-lock';
+import {
+  classifySqlError,
+  isConstraintViolation,
+  isSqlErrorKind,
+  type SqlErrorClassification,
+} from './sql-errors';
+import { processSingleton } from '../process-singleton';
+import type { WriteLock } from './write-lock';
 
 const log = createLogger('db');
 
@@ -79,14 +86,8 @@ export type DatabaseMisuseCode =
   | 'unmanaged-database';
 
 /** A programming error in how the database is used. Never retried. */
-export class DatabaseMisuseError extends Error {
+export class DatabaseMisuseError extends CodedError<DatabaseMisuseCode> {
   override readonly name = 'DatabaseMisuseError';
-  readonly code: DatabaseMisuseCode;
-
-  constructor(code: DatabaseMisuseCode, message: string) {
-    super(message);
-    this.code = code;
-  }
 }
 
 /**
@@ -190,7 +191,7 @@ interface Reconnectable {
  * write lock, so that no other operation is using a connection.
  */
 async function recoverFrom(state: GuardState, error: unknown): Promise<void> {
-  if (!state.recycleAfterBusy || classifySqlError(error).kind !== 'busy') return;
+  if (!state.recycleAfterBusy || !isSqlErrorKind(error, 'busy')) return;
   try {
     await (state.inner as unknown as Reconnectable).reconnect();
     log.info('Reopened the local database connections after a lock conflict');

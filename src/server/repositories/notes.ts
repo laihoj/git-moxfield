@@ -6,10 +6,16 @@
  */
 import { and, asc, eq } from 'drizzle-orm';
 
-import { commitNotes, commits } from '@/server/db/schema';
+import { commitNotes } from '@/server/db/schema';
 
 import { decodeJson, encodeJson } from './codec';
-import { commitInWorkspace, deckInWorkspace, referencing, write, type RepositoryContext } from './context';
+import {
+  commitInWorkspace,
+  referencing,
+  requireCommitInWorkspace,
+  write,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 
 export interface CommitNoteRecord {
@@ -49,12 +55,7 @@ export function createCommitNoteRepository(ctx: RepositoryContext): CommitNoteRe
       if (!NOTE_KIND.test(kind)) {
         throw new RepositoryError('invalid-input', `Invalid note kind ${JSON.stringify(kind)}`);
       }
-      const commit = await ctx.db
-        .select({ id: commits.id })
-        .from(commits)
-        .where(and(eq(commits.id, commitId), deckInWorkspace(ctx, commits.deckId)))
-        .get();
-      if (!commit) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
+      await requireCommitInWorkspace(ctx, commitId);
       const dataJson = encodeJson(data, 'Note data');
       const now = ctx.now();
       const id = ctx.newId();

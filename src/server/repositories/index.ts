@@ -174,6 +174,7 @@ export type { CommitNoteRecord, CommitNoteRepository } from './notes';
 export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';
 export type { DeckLocation, WorkspaceRecord, WorkspaceRepository } from './workspaces';
+export { isActiveAdminRecord } from './users';
 export type { NewUser, UserListItem, UserRecord, UserRepository, UserRole } from './users';
 export type {
   CredentialKind,
@@ -194,6 +195,8 @@ export type { ActiveShareLink, NewShareLink, ShareLinkRecord, ShareLinkRepositor
 export {
   assertCommitsContentAddressed,
   deckReferences,
+  historyRowIds,
+  TRANSFER_ID_KINDS,
   type BranchRow,
   type CardCatalogRow,
   type CommitLocation,

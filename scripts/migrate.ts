@@ -86,7 +86,7 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
   const created = isMissingDatabaseFile(config);
   let handle: LibsqlDatabase;
   try {
-    handle = await createLibsqlDatabase({ url: config.database.url, authToken: config.database.authToken });
+    handle = await createLibsqlDatabase(config.database.connection());
   } catch (error) {
     io.err(`Could not open the ${description}: ${describeFailure(error, config)}`);
     return 1;

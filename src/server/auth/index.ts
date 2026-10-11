@@ -16,6 +16,7 @@ import 'server-only';
 import { getConfig } from '@/server/config';
 import { getDb, type Db } from '@/server/db/client';
 import { createLogger } from '@/server/logger';
+import { firstTimeInProcess } from '@/server/process-singleton';
 
 import { createAuthService, type AuthService } from './service';
 
@@ -40,7 +41,7 @@ export {
   MAX_SHARE_LINK_LABEL_LENGTH,
 } from './validation';
 
-const globalForAuth = globalThis as unknown as { __gitMoxfieldSetupCodeAnnounced?: boolean };
+const SETUP_CODE_ANNOUNCED = Symbol.for('git-moxfield.setupCodeAnnounced');
 
 /** The service of the database it was built for: {@link getDb} may reopen the database. */
 let current: { db: Db; service: AuthService } | undefined;
@@ -60,8 +61,7 @@ export async function getAuthService(): Promise<AuthService> {
   if (current?.db !== db) {
     const logger = createLogger('auth');
     current = { db, service: createAuthService({ db, config: getConfig(), logger }) };
-    if (globalForAuth.__gitMoxfieldSetupCodeAnnounced !== true) {
-      globalForAuth.__gitMoxfieldSetupCodeAnnounced = true;
+    if (firstTimeInProcess(SETUP_CODE_ANNOUNCED)) {
       // Awaited: on a serverless platform, work left running after the response may never
       // finish. A failure is logged and never fails the request that happened to come first.
       await current.service.claimStatus().catch((error: unknown) => {

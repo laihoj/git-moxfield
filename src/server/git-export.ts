@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { devNull } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { CodedError } from '@/core/coded-error';
 import { snapshotToFileTree, type FileTree } from '@/core/file-tree';
 import { deckReference } from '@/core/hash';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
@@ -80,14 +81,8 @@ export type GitExportErrorCode =
   /** The stored history is inconsistent (missing snapshot, invalid timestamp). */
   | 'corrupt-history';
 
-export class GitExportError extends Error {
+export class GitExportError extends CodedError<GitExportErrorCode> {
   override readonly name = 'GitExportError';
-  readonly code: GitExportErrorCode;
-
-  constructor(code: GitExportErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.code = code;
-  }
 }
 
 export interface ExportedVersion {

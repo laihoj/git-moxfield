@@ -19,7 +19,7 @@ import 'server-only';
 
 import { eq } from 'drizzle-orm';
 
-import { getConfig, type DatabaseLocation } from '../config';
+import { getConfig, type AppConfig, type DatabaseLocation } from '../config';
 import { createLogger } from '../logger';
 import { runsOnNetlify } from '../platform';
 import {
@@ -49,6 +49,11 @@ export interface OpenDatabaseOptions extends LibsqlDatabaseOptions {
    * against the migrations this build ships.
    */
   migrationsFolder?: string;
+  /**
+   * Only check that the database is migrated, as for a remote one, whatever its kind:
+   * never migrate it and never write to it (a dry run). Default: false.
+   */
+  verifyOnly?: boolean;
 }
 
 /**
@@ -85,10 +90,10 @@ export async function ensureLocalWorkspace(db: LibsqlDb): Promise<void> {
  *   or leaves dangling references.
  */
 export async function openDatabase(options: OpenDatabaseOptions): Promise<LibsqlDatabase> {
-  const { migrationsFolder, ...connection } = options;
+  const { migrationsFolder, verifyOnly = false, ...connection } = options;
   const handle = await createLibsqlDatabase(connection);
   try {
-    if (handle.kind === 'local') {
+    if (handle.kind === 'local' && !verifyOnly) {
       await applyMigrations(handle.db, migrationsFolder === undefined ? {} : { migrationsFolder });
     } else {
       const state = await assertMigrationsApplied(handle.db);
@@ -101,7 +106,7 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<Libsql
         );
       }
     }
-    await ensureLocalWorkspace(handle.db);
+    if (!verifyOnly) await ensureLocalWorkspace(handle.db);
     return handle;
   } catch (error) {
     handle.close();
@@ -124,11 +129,19 @@ function assertDurableLocation(location: DatabaseLocation): void {
   }
 }
 
-/** Opens the database the configuration names (see the module documentation). */
-async function openConfiguredDatabase(): Promise<LibsqlDatabase> {
-  const { database } = getConfig();
-  assertDurableLocation(database);
-  return openDatabase({ url: database.url, authToken: database.authToken });
+/**
+ * Opens the database the configuration names (see the module documentation), as
+ * {@link openDatabase} does; the caller closes the handle. Default: the app's configuration.
+ *
+ * @throws {DatabaseConfigError} on Netlify without `TURSO_DATABASE_URL`, and as
+ *   {@link openDatabase} does.
+ */
+export async function openConfiguredDatabase(
+  config: AppConfig = getConfig(),
+  options: Pick<OpenDatabaseOptions, 'verifyOnly'> = {},
+): Promise<LibsqlDatabase> {
+  assertDurableLocation(config.database);
+  return openDatabase({ ...config.database.connection(), ...options });
 }
 
 const globalForDb = globalThis as unknown as { __gitMoxfieldDatabase?: Promise<LibsqlDatabase> };

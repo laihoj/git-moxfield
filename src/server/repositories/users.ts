@@ -6,28 +6,25 @@
  * Installation-wide (not scoped to the context's workspace). Display names are validated
  * by the auth service; this layer only rejects empty ones.
  */
-import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
+import type { UserRole } from '@/core/roles';
 import { users, workspaces } from '@/server/db/schema';
 
-import { withTransaction, write, writeAll, type LibsqlExecutor, type RepositoryContext } from './context';
+import {
+  allOf,
+  withTransaction,
+  write,
+  writeAll,
+  type LibsqlExecutor,
+  type RepositoryContext,
+} from './context';
 import { RepositoryError } from './errors';
 import { newWorkspaceRow } from './workspaces';
 
-export type UserRole = (typeof users.$inferSelect)['role'];
+export type { UserRole };
 
-export interface UserRecord {
-  id: string;
-  workspaceId: string;
-  displayName: string;
-  role: UserRole;
-  createdAt: string;
-  updatedAt: string;
-  /** Last request made with one of the user's sessions (recorded at most hourly). */
-  lastSeenAt: string | null;
-  /** When an admin disabled the user; disabled users cannot sign in. */
-  disabledAt: string | null;
-}
+export type UserRecord = typeof users.$inferSelect;
 
 /** A user as listed for admins. */
 export interface UserListItem extends UserRecord {
@@ -40,6 +37,29 @@ export interface UserListItem extends UserRecord {
 export interface NewUser {
   displayName: string;
   role: UserRole;
+}
+
+/** `role = 'admin' AND disabled_at IS NULL`: an admin who is not disabled. */
+export const activeAdmin: SQL = allOf(eq(users.role, 'admin'), isNull(users.disabledAt));
+
+/** `SELECT id FROM users WHERE <active admin>`, for `id IN (...)`. */
+export function activeAdminIds(db: LibsqlExecutor) {
+  return db.select({ id: users.id }).from(users).where(activeAdmin);
+}
+
+/** Whether the user with this id exists and is an admin who is not disabled. */
+export async function isActiveAdmin(db: LibsqlExecutor, userId: string): Promise<boolean> {
+  const row = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, userId), activeAdmin))
+    .get();
+  return row !== undefined;
+}
+
+/** Whether the record is an admin who is not disabled (the in-memory twin of {@link activeAdmin}). */
+export function isActiveAdminRecord(user: Pick<UserRecord, 'role' | 'disabledAt'>): boolean {
+  return user.role === 'admin' && user.disabledAt === null;
 }
 
 export interface UserRepository {
@@ -86,12 +106,12 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
 
   return {
     async create(input) {
-      requireName(input.displayName);
+      requireDisplayName(input.displayName);
       return insertUserWithWorkspace(ctx, input);
     },
 
     async createForWorkspace(input) {
-      requireName(input.displayName);
+      requireDisplayName(input.displayName);
       return withTransaction(ctx, (tx) => insertUserAdoptingWorkspace(tx, input));
     },
 
@@ -122,11 +142,7 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
     },
 
     async countActiveAdmins() {
-      const row = await ctx.db
-        .select({ n: count() })
-        .from(users)
-        .where(and(eq(users.role, 'admin'), isNull(users.disabledAt)))
-        .get();
+      const row = await ctx.db.select({ n: count() }).from(users).where(activeAdmin).get();
       return row?.n ?? 0;
     },
 
@@ -150,7 +166,7 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
     },
 
     async rename(id, displayName) {
-      const name = requireName(displayName);
+      const name = requireDisplayName(displayName);
       return withTransaction(ctx, async ({ db }) => {
         await requireUser(db, id);
         return db
@@ -188,7 +204,7 @@ export function createUserRepository(ctx: RepositoryContext): UserRepository {
  * user in the same transaction that uses up the invite.
  */
 export async function insertUserWithWorkspace(ctx: RepositoryContext, input: NewUser): Promise<UserRecord> {
-  const displayName = requireName(input.displayName);
+  const displayName = requireDisplayName(input.displayName);
   const workspace = newWorkspaceRow(ctx, displayName);
   const user = newUserRow(ctx, { ...input, displayName, workspaceId: workspace.id });
   const [, inserted] = await writeAll(ctx, (db) => [
@@ -209,7 +225,7 @@ export async function insertUserAdoptingWorkspace(
   tx: RepositoryContext,
   input: NewUser & { workspaceId: string },
 ): Promise<UserRecord> {
-  const displayName = requireName(input.displayName);
+  const displayName = requireDisplayName(input.displayName);
   const workspace = await tx.db
     .select({ id: workspaces.id })
     .from(workspaces)
@@ -245,7 +261,11 @@ function newUserRow(
   };
 }
 
-function requireName(displayName: string): string {
+/**
+ * The display name trimmed.
+ * @throws {RepositoryError} `invalid-input` for an empty one.
+ */
+export function requireDisplayName(displayName: string): string {
   const name = displayName.trim();
   if (name === '') throw new RepositoryError('invalid-input', 'A user needs a display name');
   return name;

@@ -12,7 +12,6 @@ import {
   classifySqlError,
   connectionFailureOf,
   isConstraintViolation,
-  isRetryableSqlError,
   isSqlErrorKind,
   type SqlErrorKind,
 } from './sql-errors';
@@ -264,8 +263,8 @@ describe('classifySqlError', () => {
     const fk = localError('SQLITE_CONSTRAINT_FOREIGNKEY', 787, 'FOREIGN KEY constraint failed');
     expect(isSqlErrorKind(fk, 'foreign-key')).toBe(true);
     expect(isSqlErrorKind(fk, 'unique')).toBe(false);
-    expect(isRetryableSqlError(fk)).toBe(false);
-    expect(isRetryableSqlError(remoteError('STREAM_EXPIRED', 'The stream has expired'))).toBe(true);
+    expect(classifySqlError(fk).retryable).toBe(false);
+    expect(classifySqlError(remoteError('STREAM_EXPIRED', 'The stream has expired')).retryable).toBe(true);
     expect(
       ['foreign-key', 'unique', 'not-null', 'check', 'trigger'].every((kind) =>
         isConstraintViolation(kind as SqlErrorKind),

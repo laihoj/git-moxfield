@@ -6,12 +6,8 @@ import type { DeckDiff, DiffStats, PrimerChange } from '@/core/diff/types';
 import type { CardHistory, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey, IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { PrimerDiff } from '@/core/primer/types';
-import type {
-  DeckSourceErrorCode,
-  IngestMethod,
-  RestoreExport,
-  ServerFetchStatus,
-} from '@/integrations/deck-source';
+import type { IngestMethod, RestoreExport, ServerFetchStatus } from '@/integrations/deck-source';
+import type { FetchErrorRecord } from '@/server/repositories';
 
 export type DeckStatus =
   /** Tracked, but Moxfield state has never been fetched/captured. */
@@ -25,12 +21,8 @@ export type DeckStatus =
   /** Current Moxfield state matches the latest version. */
   | 'clean';
 
-export interface FetchErrorDTO {
-  code: DeckSourceErrorCode;
-  message: string;
-  at: string;
-  retryAfterSeconds: number | null;
-}
+/** The most recent failed fetch of a deck: the stored record, as it is. */
+export type FetchErrorDTO = FetchErrorRecord;
 
 export interface VersionRefDTO {
   commitId: string;

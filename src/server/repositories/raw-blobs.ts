@@ -6,20 +6,13 @@
 import { promisify } from 'node:util';
 import { constants, gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
-import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { sha256Hex } from '@/core/hash';
-import { commits, observations, rawBlobs } from '@/server/db/schema';
+import { rawBlobs } from '@/server/db/schema';
 
 import { corruptData, decodeJson } from './codec';
-import {
-  assertStorableSize,
-  batches,
-  distinct,
-  write,
-  type LibsqlExecutor,
-  type RepositoryContext,
-} from './context';
+import { assertStorableSize, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 /** The only encoding written today. */
@@ -86,7 +79,7 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
         .get();
       if (known) return hash;
       const compressed = await gzip(bytes, { level: constants.Z_BEST_COMPRESSION });
-      assertStorableSize(`Raw payload ${hash} (compressed)`, compressed.byteLength);
+      assertRawBlobStorable(hash, compressed);
       const values = {
         hash,
         mediaType,
@@ -147,6 +140,14 @@ export async function inflateRawBlob(row: typeof rawBlobs.$inferSelect): Promise
 }
 
 /** `JSON.stringify` typed honestly: it returns `undefined` for `undefined`, functions and symbols. */
+/**
+ * @throws {RepositoryError} `invalid-input` when the compressed payload stored under
+ * `hash` is too large to store (see `MAX_STORED_VALUE_BYTES`).
+ */
+export function assertRawBlobStorable(hash: string, compressed: Uint8Array): void {
+  assertStorableSize(`Raw payload ${hash} (compressed)`, compressed.byteLength);
+}
+
 const stringify: (value: unknown) => string | undefined = JSON.stringify;
 
 function serialize(data: unknown): string {
@@ -159,36 +160,4 @@ function serialize(data: unknown): string {
   if (json === undefined)
     throw new RepositoryError('invalid-input', 'Raw blob data is not JSON-serializable');
   return json;
-}
-
-/**
- * Deletes those of `hashes` that no commit or observation references any more.
- * Returns the number of blobs deleted.
- */
-export async function deleteUnreferencedRawBlobs(
-  db: LibsqlExecutor,
-  hashes: readonly string[],
-): Promise<number> {
-  let deleted = 0;
-  for (const batch of batches(distinct(hashes))) {
-    const result = await db.delete(rawBlobs).where(
-      and(
-        inArray(rawBlobs.hash, batch),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(commits)
-            .where(eq(commits.rawBlobHash, rawBlobs.hash)),
-        ),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(observations)
-            .where(eq(observations.rawBlobHash, rawBlobs.hash)),
-        ),
-      ),
-    );
-    deleted += result.rowsAffected;
-  }
-  return deleted;
 }

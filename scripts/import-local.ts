@@ -33,9 +33,8 @@ import { pluralize } from '@/core/text';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { formatBytes } from '@/lib/format';
 import { getConfig, type AppConfig } from '@/server/config';
-import type { Db } from '@/server/db/client';
-import { createLibsqlDatabase, databaseFileOf, type LibsqlDatabase } from '@/server/db/libsql';
-import { assertMigrationsApplied } from '@/server/db/migration-state';
+import { openConfiguredDatabase, type Db } from '@/server/db/client';
+import { databaseFileOf, type LibsqlDatabase } from '@/server/db/libsql';
 import {
   chooseSourceWorkspace,
   describeSourceWorkspace,
@@ -54,12 +53,7 @@ import {
 import { createRepositories, isRepositoryError } from '@/server/repositories';
 
 import { isEntryPoint, runMain } from './cli';
-import {
-  describeConfiguredDatabase,
-  describeFailure,
-  isMissingDatabaseFile,
-  openConfiguredDatabase,
-} from './database';
+import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
 import { loadEnvFiles } from './load-env';
 
 export const USAGE = `Usage: pnpm import:local -- --from <sqlite file> --to-user <user id | display name> [options]
@@ -178,26 +172,6 @@ function sameFile(a: string, b: string): boolean {
     return realpathSync(a) === realpathSync(b);
   } catch {
     return false;
-  }
-}
-
-/**
- * The configured target database, opened as the app opens it: a local one is migrated, a
- * remote one must have every migration of this build. A dry run writes nothing, so it only
- * checks what the app checks of a remote database, for local ones too.
- */
-async function openTarget(config: AppConfig, dryRun: boolean): Promise<LibsqlDatabase> {
-  if (!dryRun) return openConfiguredDatabase(config);
-  const handle = await createLibsqlDatabase({
-    url: config.database.url,
-    authToken: config.database.authToken,
-  });
-  try {
-    await assertMigrationsApplied(handle.db);
-    return handle;
-  } catch (error) {
-    handle.close();
-    throw error;
   }
 }
 
@@ -334,7 +308,7 @@ export async function runImportCommand(
         return 1;
       }
       try {
-        ownTarget = await openTarget(config, args.dryRun);
+        ownTarget = await openConfiguredDatabase(config, { verifyOnly: args.dryRun });
       } catch (error) {
         io.err(`Could not open the ${describeConfiguredDatabase(config)}: ${describeFailure(error, config)}`);
         return 1;

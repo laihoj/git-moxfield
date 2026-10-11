@@ -10,7 +10,7 @@ import { openDatabase } from '@/server/db/client';
 import type { LibsqlDatabase } from '@/server/db/libsql';
 import {
   applyMigrations,
-  assertMigrationsUpToDate,
+  assertMigrationsApplied,
   bundledMigrations,
   checkMigrationState,
   MIGRATIONS_TABLE,
@@ -49,7 +49,9 @@ describe('migrations on a remote database', () => {
     const second = await applyMigrations(db);
     expect(second.applied).toEqual([]);
     expect(ranIntegrityCheck()).toBe(false);
-    await expect(assertMigrationsUpToDate(db)).resolves.toMatchObject({ status: 'up-to-date' });
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).resolves.toMatchObject({
+      status: 'up-to-date',
+    });
   });
 
   it('store the triggers intact, and they fire', async () => {

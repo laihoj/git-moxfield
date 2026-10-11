@@ -10,6 +10,7 @@ import { OneTimeLink } from '@/components/account/one-time-link';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
+import type { UserRole } from '@/core/roles';
 
 export interface InviteFormProps {
   maxNoteLength: number;
@@ -113,7 +114,7 @@ function RoleOption({
   title,
   children,
 }: {
-  value: 'member' | 'admin';
+  value: UserRole;
   defaultChecked: boolean;
   title: string;
   children: ReactNode;

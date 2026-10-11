@@ -6,8 +6,7 @@
 import { existsSync } from 'node:fs';
 
 import type { AppConfig } from '@/server/config';
-import { openDatabase } from '@/server/db/client';
-import { databaseFileOf, databaseKindOf, describeDatabaseUrl, type LibsqlDatabase } from '@/server/db/libsql';
+import { databaseFileOf, databaseKindOf, describeDatabaseUrl } from '@/server/db/libsql';
 import { classifySqlError, connectionFailureOf } from '@/server/db/sql-errors';
 
 /** What the configured database is, safe to print (never a credential). */
@@ -22,15 +21,6 @@ export function describeConfiguredDatabase(config: AppConfig): string {
 export function isMissingDatabaseFile(config: AppConfig): boolean {
   const file = databaseFileOf(config.database.url);
   return file !== undefined && !existsSync(file);
-}
-
-/**
- * Opens the configured database as the app does: a local one is created if needed and
- * migrated, a remote one must be migrated already (`pnpm db:migrate`). The caller closes
- * the handle.
- */
-export function openConfiguredDatabase(config: AppConfig): Promise<LibsqlDatabase> {
-  return openDatabase({ url: config.database.url, authToken: config.database.authToken });
 }
 
 /**

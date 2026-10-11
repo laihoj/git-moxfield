@@ -28,7 +28,7 @@ import type { CardKey } from '@/core/model';
 import { compareZones, isZoneId } from '@/core/zones';
 
 import { corruptData } from './codec';
-import { batches, type RepositoryContext } from './context';
+import { selectInBatches, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 /** Where one card was in one version. */
@@ -214,12 +214,11 @@ function byRankThenKey(a: { rank: number; key: CardKey }, b: { rank: number; key
 export function createCardIndexRepository(ctx: RepositoryContext): CardIndexRepository {
   /** Occurrence rows of `keys` in the deck's versions, in version order. */
   async function occurrences(deckId: string, keys: readonly string[]): Promise<CardOccurrenceRow[]> {
-    const pages = await Promise.all(
-      batches(keys).map((batch) =>
-        ctx.db.all<CardOccurrenceRow>(cardOccurrencesQuery(ctx.workspaceId, deckId, batch)),
-      ),
+    const rows = await selectInBatches(keys, (batch) =>
+      ctx.db.all<CardOccurrenceRow>(cardOccurrencesQuery(ctx.workspaceId, deckId, batch)),
     );
-    return pages.length === 1 ? (pages[0] ?? []) : pages.flat().sort((a, b) => a.sequence - b.sequence);
+    // Each batch is in version order already; merging several needs a (stable) sort.
+    return rows.sort((a, b) => a.sequence - b.sequence);
   }
 
   return {

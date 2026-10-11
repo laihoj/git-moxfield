@@ -2,6 +2,7 @@
  * Result types of the server actions in `./actions.ts`. Kept in a plain module so
  * client components can import them without importing the actions' server code.
  */
+import type { UserRole } from '@/core/roles';
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
 import type { CommitFailureReason, ShareLinkDTO } from '@/server/services/types';
 
@@ -103,7 +104,7 @@ export type IssuedLinkState =
 /** State of the admin's "Invite someone" form. `url` contains the invite's secret token. */
 export type CreateInviteState =
   | { status: 'idle' }
-  | { status: 'created'; url: string; expiresAt: string; note: string; role: 'admin' | 'member' }
+  | { status: 'created'; url: string; expiresAt: string; note: string; role: UserRole }
   | { status: 'error'; message: string; values: { note: string; role: string } };
 
 // ---------------------------------------------------------------------------

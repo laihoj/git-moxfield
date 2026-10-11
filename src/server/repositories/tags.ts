@@ -10,11 +10,12 @@ import { commits, versionTags } from '@/server/db/schema';
 
 import { toCommitRecord, type CommitRecord } from './commits';
 import {
-  batches,
   commitInWorkspace,
   deckInWorkspace,
   distinct,
   referencing,
+  requireCommitInWorkspace,
+  selectInBatches,
   write,
   type RepositoryContext,
 } from './context';
@@ -54,12 +55,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) throw new RepositoryError('invalid-input', validation.reason);
       const { name } = validation;
-      const owned = await ctx.db
-        .select({ id: commits.id })
-        .from(commits)
-        .where(and(eq(commits.id, commitId), deckInWorkspace(ctx, commits.deckId)))
-        .get();
-      if (!owned) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
+      await requireCommitInWorkspace(ctx, commitId);
       const createdAt = ctx.now();
       await referencing(`Tag ${name}`, () =>
         write(ctx, (db) =>
@@ -98,16 +94,14 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
     async listForCommits(commitIds) {
       const ids = distinct(commitIds);
       const result = new Map<string, string[]>(ids.map((id) => [id, []]));
-      const pages = await Promise.all(
-        batches(ids).map((batch) =>
-          ctx.db
-            .select({ commitId: versionTags.commitId, name: versionTags.name })
-            .from(versionTags)
-            .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
-            .all(),
-        ),
+      const rows = await selectInBatches(ids, (batch) =>
+        ctx.db
+          .select({ commitId: versionTags.commitId, name: versionTags.name })
+          .from(versionTags)
+          .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
+          .all(),
       );
-      for (const row of pages.flat()) result.get(row.commitId)?.push(row.name);
+      for (const row of rows) result.get(row.commitId)?.push(row.name);
       for (const names of result.values()) names.sort(compareStrings);
       return result;
     },

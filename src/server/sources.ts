@@ -13,6 +13,7 @@ import { MoxfieldDeckSource } from '@/integrations/moxfield/moxfield-deck-source
 
 import { getConfig, type AppConfig } from './config';
 import { createLogger, type Logger } from './logger';
+import { processSingleton } from './process-singleton';
 
 export interface DeckSourceRegistry {
   /** The source with this id, or `undefined` when none is registered. */
@@ -84,13 +85,12 @@ export function createStaticDeckSourceRegistry(sources: readonly DeckSource[]): 
   };
 }
 
-const globalForSources = globalThis as unknown as { __gitMoxfieldDeckSources?: DeckSourceRegistry };
-
 /**
  * The process-wide registry built from {@link getConfig}. Cached on `globalThis`, so the
  * block backoff and request throttle survive dev-server hot reloads.
  */
 export function getDeckSourceRegistry(): DeckSourceRegistry {
-  globalForSources.__gitMoxfieldDeckSources ??= createDeckSourceRegistry(getConfig());
-  return globalForSources.__gitMoxfieldDeckSources;
+  return processSingleton(Symbol.for('git-moxfield.deckSources'), () =>
+    createDeckSourceRegistry(getConfig()),
+  );
 }

@@ -16,7 +16,6 @@ import type { LibsqlDatabase } from './libsql';
 import {
   applyMigrations,
   assertMigrationsApplied,
-  assertMigrationsUpToDate,
   bundledMigrations,
   checkMigrationState,
   DEFAULT_MIGRATIONS_FOLDER,
@@ -125,7 +124,9 @@ describe.each([
     expect(second.applied).toEqual([]);
     expect(second.state.status).toBe('up-to-date');
     expect(ranIntegrityCheck()).toBe(false);
-    await expect(assertMigrationsUpToDate(handle.db)).resolves.toMatchObject({ status: 'up-to-date' });
+    await expect(assertMigrationsApplied(handle.db, { allowAhead: false })).resolves.toMatchObject({
+      status: 'up-to-date',
+    });
   });
 
   it('applies the hand-written trigger migration unchanged; triggers fire and cascades work', async () => {
@@ -208,7 +209,9 @@ describe('checkMigrationState', () => {
     expect(describeMigrationState(state)).toContain(
       `2 migrations behind (${tags(all.slice(-2)).join(', ')})`,
     );
-    await expect(assertMigrationsUpToDate(db)).rejects.toBeInstanceOf(MigrationStateError);
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toBeInstanceOf(
+      MigrationStateError,
+    );
 
     const rest = await applyMigrations(db);
     expect(rest.applied).toEqual(tags(all.slice(-2)));
@@ -260,7 +263,9 @@ describe('checkMigrationState', () => {
       unknown: 1,
     });
     // The exact check still refuses it, and so does migrating it with this build.
-    await expect(assertMigrationsUpToDate(db)).rejects.toMatchObject({ state: { status: 'ahead' } });
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toMatchObject({
+      state: { status: 'ahead' },
+    });
     await expect(applyMigrations(db)).rejects.toBeInstanceOf(MigrationStateError);
 
     // Behind, and ahead along another line of migrations (this build's last one is missing).
@@ -281,7 +286,7 @@ describe('checkMigrationState', () => {
       sql`CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)`,
     );
     await expect(checkMigrationState(db)).resolves.toMatchObject({ status: 'missing', applied: 0 });
-    await expect(assertMigrationsUpToDate(db)).rejects.toThrow(/not been migrated yet/);
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toThrow(/not been migrated yet/);
   });
 });
 

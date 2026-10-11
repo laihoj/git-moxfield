@@ -11,12 +11,13 @@ import { pluralize } from '@/core/text';
 import {
   assertCommitsContentAddressed,
   deckReferences,
+  historyRowIds,
   isRepositoryError,
   MAX_STORED_VALUE_BYTES,
+  TRANSFER_ID_KINDS,
   type DeckHistoryRows,
   type DeckRecord,
   type Repositories,
-  type TransferIdKind,
 } from '@/server/repositories';
 
 import { HistoryImportError } from './errors';
@@ -181,14 +182,10 @@ async function withFreeIds(
   rows: DeckHistoryRows,
   newId: () => string,
 ): Promise<{ rows: DeckHistoryRows; replaced: number }> {
-  const kinds: [TransferIdKind, string[]][] = [
-    ['deck', [rows.deck.id]],
-    ['branch', rows.branches.map((row) => row.id)],
-    ['observation', rows.observations.map((row) => row.id)],
-    ['note', rows.commitNotes.map((row) => row.id)],
-    ['relink', rows.relinks.map((row) => row.id)],
-  ];
-  const taken = await Promise.all(kinds.map(([kind, ids]) => target.historyTransfer.takenIds(kind, ids)));
+  const rowIds = historyRowIds(rows);
+  const taken = await Promise.all(
+    TRANSFER_ID_KINDS.map((kind) => target.historyTransfer.takenIds(kind, rowIds[kind])),
+  );
   const replacements = new Map<string, string>();
   taken.forEach((ids) => {
     for (const id of ids) replacements.set(id, newId());

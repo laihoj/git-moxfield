@@ -10,16 +10,14 @@
  */
 import 'server-only';
 
-import type { Logger } from '@/core/logger';
+import { LOG_LEVELS, type Logger, type LogLevel } from '@/core/logger';
 
 import { classifySqlError } from './db/sql-errors';
 
-type Level = 'debug' | 'info' | 'warn' | 'error';
+const ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-const ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-
-function isLevel(value: string | undefined): value is Level {
-  return value !== undefined && value in ORDER;
+function isLevel(value: string | undefined): value is LogLevel {
+  return value !== undefined && (LOG_LEVELS as readonly string[]).includes(value);
 }
 
 function threshold(): number {
@@ -84,7 +82,7 @@ function serializeError(error: unknown, seen = new Set<unknown>()): unknown {
   };
 }
 
-function write(level: Level, scope: string, message: string, context?: Record<string, unknown>): void {
+function write(level: LogLevel, scope: string, message: string, context?: Record<string, unknown>): void {
   if (ORDER[level] < threshold()) return;
   const entry: Record<string, unknown> = { time: new Date().toISOString(), level, scope, message };
   if (context) {

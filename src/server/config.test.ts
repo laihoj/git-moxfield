@@ -102,7 +102,7 @@ describe('parseConfig — database location', () => {
 
   it('rejects other URLs without echoing them', () => {
     expect(() => parseConfig({ TURSO_DATABASE_URL: 'postgres://user:hunter2@db/app' })).toThrow(
-      'TURSO_DATABASE_URL: expected a libsql:, https:, http:, wss:, ws: or file: URL',
+      'TURSO_DATABASE_URL: expected a URL using libsql:, https:, http:, wss:, ws: (remote), file: or :memory: (local)',
     );
     expect(() => parseConfig({ TURSO_DATABASE_URL: 'postgres://user:hunter2@db/app' })).not.toThrow(
       /hunter2/,

@@ -49,6 +49,21 @@ describe('openDatabase', () => {
     expect(recorded).toEqual([{ n: bundledMigrations().length }]);
   });
 
+  it('only checks a local database when asked to verify, never migrating or seeding it', async () => {
+    const url = scratchFileUrl('verify.db');
+    const first = await openTestDatabaseHandle({ url });
+    await first.db.delete(workspaces).where(eq(workspaces.id, LOCAL_WORKSPACE_ID));
+    first.close();
+
+    const verified = await openTestDatabaseHandle({ url, verifyOnly: true });
+    expect(await localWorkspaces(verified)).toEqual([]);
+    verified.close();
+
+    // A database that was never migrated is refused instead of migrated.
+    const fresh = openDatabase({ url: scratchFileUrl('fresh.db'), verifyOnly: true });
+    await expect(fresh).rejects.toBeInstanceOf(MigrationStateError);
+  });
+
   it('never migrates a remote database: it refuses one that is not up to date', async () => {
     // A server whose database has no tables yet.
     const stub = await startHranaStub({ empty: /sqlite_master|__drizzle_migrations/ });

@@ -36,12 +36,14 @@
 import 'server-only';
 
 import { groupInto } from '@/core/collections';
+import { USER_ROLES } from '@/core/roles';
 import { buildBookmarklet } from '@/integrations/moxfield/capture';
 import type { AppConfig } from '@/server/config';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
 import {
   createRepositories,
+  isActiveAdminRecord,
   type CredentialRecord,
   type InviteRecord,
   type LibsqlExecutor,
@@ -103,8 +105,6 @@ export const HANDOFF_LIFETIME_MS = 5 * MINUTE_MS;
 export const DEVICE_LINK_LIFETIME_MS = 15 * MINUTE_MS;
 export const RECOVERY_LINK_LIFETIME_MS = DAY_MS;
 export const INVITE_LIFETIME_MS = 7 * DAY_MS;
-
-const USER_ROLES: readonly string[] = ['admin', 'member'] satisfies UserRole[];
 
 /** Settings key of the setup code of an unclaimed installation. */
 export const SETUP_CODE_SETTING = 'setup-code';
@@ -837,7 +837,7 @@ class DefaultAuthService implements AuthService {
 
   async createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite> {
     // Checked at runtime too: callers may pass a role straight from a form.
-    if (!USER_ROLES.includes(input.role)) {
+    if (!(USER_ROLES as readonly string[]).includes(input.role)) {
       throw new ServiceError('invalid-input', 'An invite is for a member or an admin.');
     }
     const note = validateInviteNote(input.note ?? '');
@@ -919,9 +919,7 @@ class DefaultAuthService implements AuthService {
     await this.requireAdmin(this.repos, actor);
     const [people, invites] = await Promise.all([this.repos.users.list(), this.repos.invites.list()]);
     const names = new Map(people.map((person) => [person.id, person.displayName]));
-    const activeAdmins = new Set(
-      people.filter((person) => person.role === 'admin' && person.disabledAt === null).map((p) => p.id),
-    );
+    const activeAdmins = new Set(people.filter(isActiveAdminRecord).map((person) => person.id));
     return invites.map((invite) =>
       this.toInviteDTO(
         invite,
@@ -958,11 +956,7 @@ class DefaultAuthService implements AuthService {
         }
         const target = await tx.users.getById(userId);
         if (!target) return { outcome: userNotFound() };
-        if (
-          target.role === 'admin' &&
-          target.disabledAt === null &&
-          (await tx.users.countActiveAdmins()) <= 1
-        ) {
+        if (isActiveAdminRecord(target) && (await tx.users.countActiveAdmins()) <= 1) {
           return {
             outcome: { ok: false, reason: 'last-admin', message: 'The last admin cannot be disabled.' },
           };
@@ -1222,7 +1216,7 @@ class DefaultAuthService implements AuthService {
   private async requireAdmin(repos: Repositories, actor: Actor): Promise<string | null> {
     if (actor === SYSTEM_ACTOR) return null;
     const current = await repos.users.getById(actor.id);
-    if (current?.role !== 'admin' || current.disabledAt !== null) {
+    if (current === null || !isActiveAdminRecord(current)) {
       throw new ServiceError('forbidden', 'Only admins can manage users and invites.');
     }
     return current.id;

@@ -8,21 +8,18 @@
  * never with `drizzle-kit migrate` or `push`: the script also verifies referential
  * integrity and refuses a throwaway database on Netlify.
  */
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 import { defineConfig } from 'drizzle-kit';
 
-const remoteUrl = process.env.TURSO_DATABASE_URL?.trim();
+// Relative, not '@/…': drizzle-kit loads this file without the app's path aliases.
+import { databaseLocationFromEnv } from './src/server/db/database-location';
+
+const { url, authToken } = databaseLocationFromEnv(process.env);
 
 export default defineConfig({
   dialect: 'turso',
   schema: './src/server/db/schema.ts',
   out: './drizzle',
-  dbCredentials:
-    remoteUrl === undefined || remoteUrl === ''
-      ? { url: pathToFileURL(resolve(process.env.DATABASE_PATH ?? 'data/git-moxfield.db')).href }
-      : { url: remoteUrl, authToken: process.env.TURSO_AUTH_TOKEN },
+  dbCredentials: authToken === undefined ? { url } : { url, authToken },
   strict: true,
   verbose: true,
 });
