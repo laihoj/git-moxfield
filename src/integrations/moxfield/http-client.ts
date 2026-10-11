@@ -7,6 +7,8 @@
  * Cloudflare block pauses all further requests for `blockBackoffSeconds`, and a 429
  * pauses them for its `Retry-After` (at most `blockBackoffSeconds`).
  */
+import { readStreamLimited } from '@/core/streams';
+
 import { DeckSourceError, type DeckSourceErrorCode } from '../deck-source';
 
 import { DEFAULT_MOXFIELD_USER_AGENT, MOXFIELD_INTERNAL_ID_PATTERN, MOXFIELD_SOURCE_ID } from './constants';
@@ -306,12 +308,16 @@ export class MoxfieldHttpClient {
         await discardBody(response);
         return this.failure('schema', 'The Moxfield response is too large.', { status });
       }
-      const text = await response.text();
-      if (text.length > MAX_RESPONSE_BYTES) {
+      // Counted while reading: a chunked or understated response is not buffered whole.
+      const bytes =
+        response.body === null
+          ? new Uint8Array()
+          : await readStreamLimited(response.body, MAX_RESPONSE_BYTES);
+      if (bytes === null) {
         return this.failure('schema', 'The Moxfield response is too large.', { status });
       }
       try {
-        return { body: JSON.parse(text) as unknown };
+        return { body: JSON.parse(new TextDecoder().decode(bytes)) as unknown };
       } catch (cause) {
         return this.failure('schema', 'Moxfield answered with invalid JSON.', { status, cause });
       }

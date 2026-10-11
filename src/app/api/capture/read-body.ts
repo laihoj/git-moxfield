@@ -5,6 +5,7 @@
  */
 import 'server-only';
 
+import { readStreamLimited } from '@/core/streams';
 import {
   MAX_ENCODED_CAPTURE_CHARS,
   MAX_PLAIN_CAPTURE_BYTES,
@@ -66,28 +67,11 @@ export function declaredTooLarge(headers: Headers, limit: number): boolean {
 /** Reads the whole body as bytes, counting while reading; gives up past `limit` bytes. */
 export async function readBodyLimited(request: Request, limit: number): Promise<BodyReadResult> {
   if (request.body === null) return { ok: true, bytes: new Uint8Array() };
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
+  let bytes: Uint8Array<ArrayBuffer> | null;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limit) {
-        await reader.cancel();
-        return { ok: false, reason: 'too-large' };
-      }
-      chunks.push(value);
-    }
+    bytes = await readStreamLimited(request.body, limit);
   } catch {
     return { ok: false, reason: 'unreadable' };
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { ok: true, bytes };
+  return bytes === null ? { ok: false, reason: 'too-large' } : { ok: true, bytes };
 }

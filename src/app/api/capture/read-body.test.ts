@@ -95,6 +95,37 @@ describe('readBodyLimited', () => {
   it('gives up as soon as the body exceeds the limit', async () => {
     expect(await readBodyLimited(streamedRequest([4, 4]), 7)).toEqual({ ok: false, reason: 'too-large' });
   });
+
+  it('still reports a too-large body when cancelling its stream fails', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel() {
+        return Promise.reject(new Error('The connection is gone.'));
+      },
+    });
+    const request = new Request('http://localhost/', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    expect(await readBodyLimited(request, 7)).toEqual({ ok: false, reason: 'too-large' });
+  });
+
+  it('reports a body that fails while it is read as unreadable', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(2));
+        controller.error(new Error('The connection broke.'));
+      },
+    });
+    const request = new Request('http://localhost/', { method: 'POST', body, duplex: 'half' } as RequestInit);
+    expect(await readBodyLimited(request, 7)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('reads an empty request as no bytes', async () => {
+    expect(await readBodyLimited(new Request('http://localhost/'), 7)).toEqual({
+      ok: true,
+      bytes: new Uint8Array(),
+    });
+  });
 });
 
 describe('declaredTooLarge', () => {

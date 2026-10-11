@@ -8,6 +8,7 @@
  * the user (early, specific messages, previews); the server's decoder stays authoritative.
  * Browser-safe: Web APIs only.
  */
+import { readStreamLimited } from '@/core/streams';
 import {
   CAPTURE_GZIP_TAG,
   encodeCapturePayload,
@@ -109,26 +110,7 @@ async function gunzip(
       controller.close();
     },
   });
-  const reader = input.pipeThrough(decompression).getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  const output = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return output;
+  return readStreamLimited(input.pipeThrough(decompression), maxBytes);
 }
 
 /**
