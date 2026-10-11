@@ -25,6 +25,7 @@
  * newer git-moxfield.
  */
 
+import { pluralize } from '@/core/text';
 import { getConfig, type AppConfig } from '@/server/config';
 import { ensureLocalWorkspace } from '@/server/db/client';
 import { createLibsqlDatabase, databaseKindOf, type LibsqlDatabase } from '@/server/db/libsql';
@@ -47,10 +48,6 @@ export interface MigrateCommandDependencies {
   io: MigrateCommandIO;
   /** Folder with the migrations and their journal. Default: `drizzle/` in the working directory. */
   migrationsFolder?: string;
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -102,13 +99,13 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
     );
     await ensureLocalWorkspace(handle.db);
     if (applied.length === 0) {
-      io.out(`Already up to date (${plural(state.expected, 'migration')} applied).`);
+      io.out(`Already up to date (${pluralize(state.expected, 'migration')} applied).`);
       return 0;
     }
-    io.out(`Applied ${plural(applied.length, 'migration')}:`);
+    io.out(`Applied ${pluralize(applied.length, 'migration')}:`);
     for (const tag of applied) io.out(`  ${tag}`);
     io.out('Referential integrity verified (PRAGMA foreign_key_check).');
-    io.out(`Up to date: all ${plural(state.expected, 'migration')} applied.`);
+    io.out(`Up to date: all ${pluralize(state.expected, 'migration')} applied.`);
     return 0;
   } catch (error) {
     io.err(`Migrating the ${description} failed: ${describeFailure(error, config)}`);

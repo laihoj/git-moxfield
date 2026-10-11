@@ -67,7 +67,7 @@ describe('deck services: tags', () => {
       ok: false,
       reason: expect.any(String) as unknown,
     });
-    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, reason: 'Tag must not be empty.' });
+    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, reason: 'Enter a tag.' });
     expect(await services.addTag(deckId, 1, 'x'.repeat(41))).toMatchObject({ ok: false });
     expect(await services.addTag(deckId, 9, 'stable')).toEqual({
       ok: false,

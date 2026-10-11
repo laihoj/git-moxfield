@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { ArrowUpRight, Bookmark, ClipboardPaste } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { upperFirst } from '@/core/text';
 import type { ServerFetchStatus } from '@/integrations/deck-source';
 import type { DeckOverviewDTO, FetchErrorDTO, ObservationDTO } from '@/server/services/types';
 import { Alert } from '@/components/ui/alert';
@@ -40,10 +41,6 @@ function observedVerb(method: ObservationDTO['method']): string {
     case 'manual-paste':
       return 'pasted';
   }
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** A fetch error is current when it happened after the latest successful observation. */
@@ -87,7 +84,7 @@ export function StatusPanel({ deck, children }: StatusPanelProps) {
                 )}
                 <MetaItem>
                   {working.sourceUpdatedAt === null
-                    ? capitalize(observedVerb(working.method))
+                    ? upperFirst(observedVerb(working.method))
                     : observedVerb(working.method)}{' '}
                   <RelativeTime value={working.fetchedAt} />
                 </MetaItem>

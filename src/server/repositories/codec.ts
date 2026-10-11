@@ -6,6 +6,7 @@
  * `corrupt-data` {@link RepositoryError} instead of an `undefined` deep inside the UI.
  */
 import { stableStringify } from '@/core/canonical';
+import { isRecord } from '@/core/guards';
 import type { IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
 
@@ -35,10 +36,6 @@ export function decodeJson(text: string, what: string): unknown {
   } catch (cause) {
     throw new RepositoryError('corrupt-data', `${what} is not valid JSON`, { cause });
   }
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {

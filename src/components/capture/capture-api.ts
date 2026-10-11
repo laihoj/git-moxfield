@@ -2,6 +2,7 @@
  * Client-side call to `POST /api/capture` (same-origin JSON, `CaptureRequestBody` in
  * `capture-protocol.ts`), shared by the bookmarklet receiver and the manual paste form.
  */
+import { isRecord } from '@/core/guards';
 import {
   CAPTURE_API_PATH,
   type CaptureErrorBody,
@@ -35,10 +36,6 @@ export type CaptureResponse =
   { ok: true; outcome: CaptureOutcome } | { ok: false; message: string; code?: CaptureFailureCode };
 
 const NETWORK_ERROR = 'Could not reach git-moxfield. Check that it is still running and try again.';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isRelinkCandidate(value: unknown): value is RelinkCandidateDTO {
   return (
@@ -78,17 +75,14 @@ function toCaptureOutcome(value: unknown): CaptureOutcome | null {
 }
 
 function errorMessage(value: unknown, status: number): string {
-  if (typeof value === 'object' && value !== null && 'error' in value) {
-    const { error } = value;
-    if (typeof error === 'string' && error !== '') return error;
-  }
+  if (isRecord(value) && typeof value.error === 'string' && value.error !== '') return value.error;
   return status === 413
     ? 'The deck data is too large.'
     : `git-moxfield could not import the deck (HTTP ${status}).`;
 }
 
 function errorCode(value: unknown): CaptureFailureCode | undefined {
-  if (typeof value !== 'object' || value === null || !('code' in value)) return undefined;
+  if (!isRecord(value)) return undefined;
   const { code } = value;
   return code === 'unauthenticated' || code === 'invalid-key' ? code : undefined;
 }

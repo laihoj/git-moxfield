@@ -4,7 +4,7 @@ import { Plus, Tag, X } from 'lucide-react';
 import { useId, useState, type KeyboardEvent } from 'react';
 
 import { fieldDescriptionIds } from '@/components/ui/field';
-import { normalizeTagInput, tagProblem } from '@/lib/tags';
+import { normalizeTagInput, tagProblem } from '@/core/tags';
 
 export interface TagInputProps {
   /** Form field name; one hidden input per tag is submitted under this name. */

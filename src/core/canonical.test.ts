@@ -2,6 +2,9 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import {
+  allCards,
+  cardName,
+  cardNames,
   CanonicalizationError,
   canonicalizeSnapshot,
   compareStrings,
@@ -888,6 +891,35 @@ describe('text helpers', () => {
     expect(printingIdentity(a)).not.toBe(printingIdentity({ ...a, finish: 'foil' }));
     expect(printingIdentity(a)).not.toBe(printingIdentity({ ...a, lang: 'ja' }));
     expect(printingIdentity({ ...a, flags: undefined })).toBe(printingIdentity({ ...a, flags: [] }));
+  });
+});
+
+describe('card names', () => {
+  // The same card in two zones under different spellings: the first zone in canonical order names it.
+  const snapshot = canonicalizeSnapshot(
+    raw({
+      zones: {
+        sideboard: [card('sol ring', 1), card('Arcane Signet', 1)],
+        mainboard: [card('Sol Ring', 1)],
+      },
+    }),
+  );
+
+  it('names a card by the first zone in canonical order that has it', () => {
+    expect(cardName(snapshot, 'sol ring')).toBe('Sol Ring');
+    expect(cardName(snapshot, 'arcane signet')).toBe('Arcane Signet');
+    expect(cardName(snapshot, 'mana vault')).toBeUndefined();
+  });
+
+  it('lists every card once, in zone order, and sorted by key in allCards', () => {
+    expect([...cardNames(snapshot)]).toEqual([
+      ['sol ring', 'Sol Ring'],
+      ['arcane signet', 'Arcane Signet'],
+    ]);
+    expect(allCards(snapshot)).toEqual([
+      { key: 'arcane signet', name: 'Arcane Signet' },
+      { key: 'sol ring', name: 'Sol Ring' },
+    ]);
   });
 });
 

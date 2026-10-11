@@ -9,7 +9,7 @@
  */
 import { readStreamLimited } from '@/core/streams';
 
-import { DeckSourceError, type DeckSourceErrorCode } from '../deck-source';
+import { DeckSourceError, retryAfterSecondsUntil, type DeckSourceErrorCode } from '../deck-source';
 
 import { DEFAULT_MOXFIELD_USER_AGENT, MOXFIELD_INTERNAL_ID_PATTERN, MOXFIELD_SOURCE_ID } from './constants';
 import { isValidMoxfieldPublicId } from './url';
@@ -73,7 +73,7 @@ export function parseRetryAfter(value: string | null, nowMs: number): number | u
   if (text === undefined || text === '') return undefined;
   if (/^\d+$/.test(text)) return Number(text);
   const at = Date.parse(text);
-  return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - nowMs) / 1000));
+  return Number.isNaN(at) ? undefined : retryAfterSecondsUntil(at, nowMs);
 }
 
 function isJsonContentType(contentType: string): boolean {
@@ -225,7 +225,7 @@ export class MoxfieldHttpClient {
   }
 
   private blockedError(until: number, status?: number): DeckSourceError {
-    const retryAfterSeconds = Math.max(0, Math.ceil((until - this.now()) / 1000));
+    const retryAfterSeconds = retryAfterSecondsUntil(until, this.now());
     return this.error(
       'blocked',
       'Moxfield is blocking server-side requests (bot protection); server fetches are paused. Use browser capture instead.',
@@ -234,7 +234,7 @@ export class MoxfieldHttpClient {
   }
 
   private rateLimitedError(until: number, status?: number): DeckSourceError {
-    const retryAfterSeconds = Math.max(0, Math.ceil((until - this.now()) / 1000));
+    const retryAfterSeconds = retryAfterSecondsUntil(until, this.now());
     return this.error(
       'rate-limited',
       'Moxfield is rate limiting requests; try again later.',

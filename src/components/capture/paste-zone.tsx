@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { FileJson, Upload, X } from 'lucide-react';
 import { useId, useRef, useState, type DragEvent } from 'react';
 
+import { isRecord } from '@/core/guards';
 import { isEncodedCapturePayload } from '@/integrations/moxfield/capture-codec-protocol';
 import { MAX_CAPTURE_BYTES } from '@/integrations/moxfield/capture-protocol';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
@@ -34,12 +35,6 @@ export interface PastedContent {
   fileName?: string;
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
@@ -58,10 +53,10 @@ export function inspectPasted(
   } catch {
     return { ...base, kind: 'invalid' };
   }
-  const value = record(parsed);
-  if (value === null) return { ...base, kind: 'unknown' };
+  if (!isRecord(parsed)) return { ...base, kind: 'unknown' };
+  const value = parsed;
   if (value.kind === 'git-moxfield/capture') {
-    const deck = record(value.deck);
+    const deck = isRecord(value.deck) ? value.deck : undefined;
     return {
       ...base,
       kind: 'envelope',

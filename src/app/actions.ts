@@ -11,7 +11,8 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
-import { MAX_COMMIT_MESSAGE_LENGTH } from '@/core/text-limits';
+import { MAX_SEQUENCE } from '@/core/sequence';
+import { MAX_COMMIT_MESSAGE_LENGTH, MAX_DECK_INPUT_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 import { createLogger } from '@/server/logger';
@@ -44,7 +45,7 @@ function failureMessage(error: unknown, what: string, context: Record<string, un
 }
 
 const deckIdSchema = z.string().trim().min(1).max(128);
-const sequenceSchema = z.coerce.number().int().min(1).max(1_000_000);
+const sequenceSchema = z.coerce.number().int().min(1).max(MAX_SEQUENCE);
 /** Sanity bound only; the service normalizes tags and reports precise validation errors. */
 const tagSchema = z.string().trim().min(1, 'Enter a tag.').max(200, 'That tag is too long.');
 
@@ -75,7 +76,7 @@ export async function trackDeckAction(
   const services = await ownerServices();
   const input = formString(formData, 'deck').trim();
   if (input === '') return { status: 'error', message: 'Paste a Moxfield deck URL.', input };
-  if (input.length > 2048)
+  if (input.length > MAX_DECK_INPUT_LENGTH)
     return { status: 'error', message: 'That is too long to be a Moxfield deck URL.', input };
 
   let deckId: string;
@@ -210,12 +211,12 @@ export async function removeTagAction(deckId: string, sequence: number, tag: str
   }
 }
 
-const NOTE_MAX_LENGTH = 20_000;
-
 const noteSchema = z.object({
   deckId: deckIdSchema,
   sequence: sequenceSchema,
-  text: z.string().max(NOTE_MAX_LENGTH, `Notes can be at most ${NOTE_MAX_LENGTH} characters long.`),
+  // A sanity bound only (UTF-16 units, line breaks as typed): the service counts code points
+  // of the normalized note and reports the exact limit.
+  text: z.string().max(MAX_NOTE_LENGTH * 2, `Notes can be at most ${MAX_NOTE_LENGTH} characters long.`),
 });
 
 /** Saves (or, with empty text, clears) the free-text note of a version. */
@@ -224,7 +225,7 @@ export async function setNoteAction(_previous: NoteState, formData: FormData): P
   const parsed = noteSchema.safeParse({
     deckId: formString(formData, 'deckId'),
     sequence: formString(formData, 'sequence'),
-    text: formString(formData, 'text').replace(/\r\n?/g, '\n'),
+    text: formString(formData, 'text'),
   });
   if (!parsed.success)
     return { status: 'error', message: parsed.error.issues[0]?.message ?? 'Invalid note.' };
@@ -257,7 +258,7 @@ export async function relinkDeckAction(
   if (!id.success) return { status: 'error', message: 'Invalid request.', input };
   const deckId = id.data;
   if (input === '') return { status: 'error', message: 'Paste the new Moxfield deck URL.', input };
-  if (input.length > 2048)
+  if (input.length > MAX_DECK_INPUT_LENGTH)
     return { status: 'error', message: 'That is too long to be a Moxfield deck URL.', input };
 
   try {

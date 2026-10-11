@@ -14,6 +14,7 @@
  */
 import { relative } from 'node:path';
 
+import { pluralize } from '@/core/text';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { getConfig, type AppConfig } from '@/server/config';
 import {
@@ -95,7 +96,7 @@ async function run(
       outDir: outDirArgument ?? defaultExportDirectory(deck),
     });
     const count = result.versions.length;
-    console.log(`Exported ${count} version${count === 1 ? '' : 's'} of "${deck.name}" to ${result.outDir}`);
+    console.log(`Exported ${pluralize(count, 'version')} of "${deck.name}" to ${result.outDir}`);
     console.log('Every version is tagged v<N>; version tags become <tag>/v<N>.');
     const labels = result.versions.flatMap((version) => version.tags.filter((tag) => tag.includes('/')));
     if (labels.length > 0) console.log(`Version tags: ${labels.join(', ')}`);

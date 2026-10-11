@@ -7,10 +7,12 @@
  * strategic change touching the commanders zone is reported once, under
  * "Commanders", and not again under zones or moves.
  */
+import { getOrCreate } from '../collections';
 import type { CardKey } from '../model';
-import { sortZones, zoneLabel, type ZoneId } from '../zones';
+import { MINUS_SIGN, pluralize, truncateWithEllipsis, upperFirst } from '../text';
+import { zoneEntries, zoneLabel, type ZoneId } from '../zones';
 import { changeTouchesZone } from './deck-diff';
-import type { CardChange, DeckDiff, DeckInfoChange } from './types';
+import { primerHasChange, type CardChange, type DeckDiff, type DeckInfoChange } from './types';
 
 export type DiffSectionKind = 'commanders' | 'zone' | 'moves' | 'printings' | 'tags' | 'renames';
 
@@ -78,12 +80,12 @@ export function groupDiffForDisplay(diff: DeckDiff): DiffSection[] {
       zone: 'commanders',
       changes: commanders,
     },
-    ...sortZones(zones.keys()).map((zone): DiffSection => ({
+    ...zoneEntries(zones).map(([zone, changes]): DiffSection => ({
       id: `zone:${zone}`,
       kind: 'zone',
       title: zoneLabel(zone),
       zone,
-      changes: zones.get(zone) ?? [],
+      changes,
     })),
     { id: 'moves', kind: 'moves', title: 'Moved', changes: moves },
     { id: 'printings', kind: 'printings', title: 'Printings', changes: printings },
@@ -101,9 +103,6 @@ export interface SummaryChip {
   tone: SummaryChipTone;
 }
 
-/** U+2212 MINUS SIGN, typographically matching `+`. */
-const MINUS = '−';
-
 /**
  * Compact summary chips for the status view, in this order: commanders, copies added
  * and removed per zone (canonical zone order, moves excluded), moves aggregated by
@@ -119,7 +118,7 @@ export function summarizeDiff(diff: DeckDiff): SummaryChip[] {
     if (stats.zone === 'commanders') continue;
     const label = zoneLabel(stats.zone);
     if (stats.added > 0) chips.push({ label: `+${stats.added} ${label}`, tone: 'add' });
-    if (stats.removed > 0) chips.push({ label: `${MINUS}${stats.removed} ${label}`, tone: 'remove' });
+    if (stats.removed > 0) chips.push({ label: `${MINUS_SIGN}${stats.removed} ${label}`, tone: 'remove' });
   }
 
   const movedTo = new Map<ZoneId, number>();
@@ -127,25 +126,25 @@ export function summarizeDiff(diff: DeckDiff): SummaryChip[] {
     if (move.from === 'commanders' || move.to === 'commanders') continue;
     movedTo.set(move.to, (movedTo.get(move.to) ?? 0) + move.quantity);
   }
-  for (const zone of sortZones(movedTo.keys())) {
-    chips.push({ label: `${movedTo.get(zone) ?? 0} moved to ${zoneLabel(zone)}`, tone: 'move' });
+  for (const [zone, quantity] of zoneEntries(movedTo)) {
+    chips.push({ label: `${quantity} moved to ${zoneLabel(zone)}`, tone: 'move' });
   }
 
   if (diff.primer.status === 'changed') {
     const { addedLines, removedLines } = diff.primer;
-    chips.push({ label: `Primer +${addedLines} / ${MINUS}${removedLines} lines`, tone: 'neutral' });
+    chips.push({ label: `Primer +${addedLines} / ${MINUS_SIGN}${removedLines} lines`, tone: 'neutral' });
   }
   if (diff.primer.status === 'captured') chips.push({ label: 'Primer captured', tone: 'neutral' });
   if (diff.deck.length > 0) chips.push({ label: 'Deck info changed', tone: 'neutral' });
 
   const renames = diff.changes.filter((change) => change.type === 'renamed').length;
-  const cosmetic: [number, string, string][] = [
-    [diff.stats.printingChanges, 'printing change', 'printing changes'],
-    [diff.stats.tagChanges, 'card tag change', 'card tag changes'],
-    [renames, 'renamed card', 'renamed cards'],
+  const cosmetic: [number, string][] = [
+    [diff.stats.printingChanges, 'printing change'],
+    [diff.stats.tagChanges, 'card tag change'],
+    [renames, 'renamed card'],
   ];
-  for (const [count, singular, plural] of cosmetic) {
-    if (count > 0) chips.push({ label: `${count} ${count === 1 ? singular : plural}`, tone: 'cosmetic' });
+  for (const [count, noun] of cosmetic) {
+    if (count > 0) chips.push({ label: pluralize(count, noun), tone: 'cosmetic' });
   }
   return chips;
 }
@@ -190,14 +189,12 @@ export function suggestCommitMessage(diff: DeckDiff): string {
       if (message.length <= COMMIT_MESSAGE_MAX_LENGTH) return message;
     }
   }
-  const message = renderMessage([first], 1);
-  return `${message.slice(0, COMMIT_MESSAGE_MAX_LENGTH - 1).trimEnd()}…`;
+  return truncateWithEllipsis(renderMessage([first], 1), COMMIT_MESSAGE_MAX_LENGTH);
 }
 
 /** Number of individual differences: card changes, deck info fields, and the primer. */
 export function diffChangeCount(diff: DeckDiff): number {
-  const primerChanged = diff.primer.status === 'changed' || diff.primer.status === 'captured';
-  return diff.changes.length + diff.deck.length + (primerChanged ? 1 : 0);
+  return diff.changes.length + diff.deck.length + (primerHasChange(diff.primer) ? 1 : 0);
 }
 
 const DECK_INFO_CLAUSES: Record<DeckInfoChange['field'], string> = {
@@ -206,12 +203,6 @@ const DECK_INFO_CLAUSES: Record<DeckInfoChange['field'], string> = {
   description: 'update description',
   tags: 'update deck tags',
 };
-
-function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
-  let value = map.get(key);
-  if (value === undefined) map.set(key, (value = create()));
-  return value;
-}
 
 /** Card names keyed by card key, in insertion order, without duplicates. */
 type NameList = Map<CardKey, string>;
@@ -266,9 +257,9 @@ function commitClauses(diff: DeckDiff): Clause[] {
     preposition: string,
     omitMainboard: boolean,
   ): void => {
-    for (const zone of sortZones(map.keys())) {
+    for (const [zone, names] of zoneEntries(map)) {
       const where = omitMainboard && zone === 'mainboard' ? '' : ` ${preposition} ${zoneLabel(zone)}`;
-      clauses.push([`${verb} `, [...zoneNames(map, zone).values()], where]);
+      clauses.push([`${verb} `, [...names.values()], where]);
     }
   };
   perZone(additions, 'add', 'to', true);
@@ -299,5 +290,5 @@ function renderMessage(clauses: readonly Clause[], limit: number): string {
       parts.map((part) => (typeof part === 'string' ? part : formatNames(part, limit))).join(''),
     )
     .join('; ');
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return upperFirst(text);
 }

@@ -32,15 +32,18 @@
  */
 import 'server-only';
 
-import { commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
+import { commanderNames, emptySnapshot, normalizeText, zoneCards } from '@/core/canonical';
 import { diffSnapshots, INITIAL_VERSION_MESSAGE, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
-import { commitId } from '@/core/hash';
+import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
+import { normalizeVersionTag } from '@/core/tags';
+import { codePointLength, pluralize } from '@/core/text';
 import { MAX_COMMIT_MESSAGE_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
 import {
   DeckSourceError,
   isDeckSourceError,
+  retryAfterSecondsUntil,
   type DeckRef,
   type DeckSource,
   type IngestMethod,
@@ -53,7 +56,6 @@ import type { Logger } from '@/server/logger';
 import {
   DEFAULT_CARD_SEARCH_LIMIT,
   isRepositoryError,
-  normalizeVersionTag,
   type BranchRecord,
   type CommitRecord,
   type DeckRecord,
@@ -471,7 +473,7 @@ class DefaultDeckServices implements DeckServices {
     const consequence =
       versionCount === 0
         ? 'it has no versions, so nothing is lost'
-        : `that deletes its ${versionCount} version${versionCount === 1 ? '' : 's'} in git-moxfield`;
+        : `that deletes its ${pluralize(versionCount, 'version')} in git-moxfield`;
     return {
       ok: false,
       reason: 'already-tracked',
@@ -676,7 +678,7 @@ class DefaultDeckServices implements DeckServices {
     const sequence = ((await tx.commits.maxSequence(deck.id)) ?? 0) + 1;
     const createdAt = this.now().toISOString();
     const id = commitId({
-      deck: `${deck.source}:${deck.externalId}`,
+      deck: deckReference(deck),
       snapshotHash: observation.snapshotHash,
       parentId,
       createdAt,
@@ -1164,12 +1166,13 @@ function unavailableError(status: ServerFetchStatus, now: Date): FetchErrorDTO |
     case 'disabled':
       return { code: 'blocked', message: status.reason, at: now.toISOString(), retryAfterSeconds: null };
     case 'blocked': {
-      const retryAfterMs = Date.parse(status.retryAt) - now.getTime();
+      // `retryAt` comes from any DeckSource: an unreadable date is no deadline.
+      const retryAfterSeconds = retryAfterSecondsUntil(Date.parse(status.retryAt), now.getTime());
       return {
         code: 'blocked',
         message: status.reason,
         at: now.toISOString(),
-        retryAfterSeconds: Number.isNaN(retryAfterMs) ? null : Math.max(0, Math.ceil(retryAfterMs / 1000)),
+        retryAfterSeconds: Number.isNaN(retryAfterSeconds) ? null : retryAfterSeconds,
       };
     }
   }
@@ -1232,11 +1235,5 @@ function versionNotFound(sequence: number): string {
 
 /** NFC, LF line endings, surrounding whitespace trimmed. */
 function normalizeMultilineText(text: string): string {
-  return text.normalize('NFC').replace(/\r\n?/g, '\n').trim();
-}
-
-function codePointLength(text: string): number {
-  let length = 0;
-  for (const _ of text) length++;
-  return length;
+  return normalizeText(text).trim();
 }

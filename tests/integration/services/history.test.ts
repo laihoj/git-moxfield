@@ -87,6 +87,29 @@ describe('deck services: history', () => {
       expect(list.map((item) => item.tags)).toEqual([['tournament'], ['testing'], [], ['tournament']]);
     });
 
+    it('flags the versions that changed the commanders, never the first one', async () => {
+      const before = await harness.services.listVersions(deckId);
+      expect(before.map((item) => item.commandersChanged)).toEqual([false, false, false, false]);
+
+      // A new commander: the working state of buildHistory, with Tymna swapped for Thrasios.
+      const swapped = {
+        ...blueFarmSpec({ version: 6 }),
+        mainboard: [...(blueFarmSpec().mainboard ?? []), 'Grim Tutor'],
+        commanders: ["Kraum, Ludevic's Opus", 'Thrasios, Triton Hero'],
+      };
+      await publishAndRefresh(harness, deckId, swapped);
+      committed(await commitReviewed(harness, deckId, 'New partner'));
+
+      const after = await harness.services.listVersions(deckId);
+      expect(after.map((item) => [item.sequence, item.commandersChanged])).toEqual([
+        [5, true],
+        [4, false],
+        [3, false],
+        [2, false],
+        [1, false],
+      ]);
+    });
+
     it('filters by normalized tag', async () => {
       const tagged = await harness.services.listVersions(deckId, { tag: ' Tournament ' });
       expect(tagged.map((item) => item.sequence)).toEqual([4, 1]);
@@ -216,6 +239,8 @@ describe('deck services: history', () => {
         firstSeenSequence: 1,
         lastSeenSequence: 4,
         currentZones: [{ zone: 'sideboard', quantity: 1 }],
+        versionCount: 4,
+        versionsPresent: 4,
         versionsInPlayedZones: 2,
         timesCut: 2,
         timesRestored: 1,
@@ -407,6 +432,8 @@ describe('deck services: card history across renames', () => {
       firstSeenSequence: 1,
       lastSeenSequence: 3,
       currentZones: [{ zone: 'sideboard', quantity: 1 }],
+      versionCount: 3,
+      versionsPresent: 3,
       versionsInPlayedZones: 3,
       timesCut: 1,
       timesRestored: 0,

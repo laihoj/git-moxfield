@@ -25,6 +25,7 @@ function version(sequence: number, message: string): VersionListItemDTO {
     stats: { zones: [], moves: [], printingChanges: 0, tagChanges: 0 },
     primer: { status: 'unchanged' },
     commanders: [],
+    commandersChanged: false,
     playedCardCount: 100,
     ingestMethod: 'server',
   };

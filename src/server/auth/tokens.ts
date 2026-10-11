@@ -17,7 +17,9 @@
  */
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+
+import { sha256Hex } from '@/core/hash';
 
 import { TOKEN_PREFIXES, type TokenKind } from './token-format';
 
@@ -33,5 +35,5 @@ export function generateToken(kind: TokenKind): string {
 
 /** SHA-256 hex digest of the full token string: the only form in which tokens are stored. */
 export function hashToken(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex');
+  return sha256Hex(token);
 }

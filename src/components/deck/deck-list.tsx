@@ -1,43 +1,23 @@
 import clsx from 'clsx';
 
 import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
+import {
+  CARD_TYPE_GROUP_PLURALS,
+  CARD_TYPE_GROUPS,
+  cardTypeGroup,
+  type CardTypeGroup,
+} from '@/core/card-types';
+import { groupInto } from '@/core/collections';
 import type { CanonicalCard, CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
-import { zoneLabel, type ZoneId } from '@/core/zones';
+import { isCommandZone, zoneLabel } from '@/core/zones';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
 import { zoneTextClass } from './zone-badge';
 
-/** Type groups in Moxfield's order. Cards whose primary type is none of these go to "Other". */
-const TYPE_ORDER = [
-  'Creature',
-  'Planeswalker',
-  'Battle',
-  'Instant',
-  'Sorcery',
-  'Artifact',
-  'Enchantment',
-  'Land',
-] as const;
-
-const TYPE_PLURALS: Record<string, string> = {
-  Creature: 'Creatures',
-  Planeswalker: 'Planeswalkers',
-  Battle: 'Battles',
-  Instant: 'Instants',
-  Sorcery: 'Sorceries',
-  Artifact: 'Artifacts',
-  Enchantment: 'Enchantments',
-  Land: 'Lands',
-  Other: 'Other',
-};
-
-/** Zones listed flat (few cards, no grouping): the command zone. */
-const FLAT_ZONES: ReadonlySet<ZoneId> = new Set(['commanders', 'companions', 'signatureSpells']);
-
 interface TypeGroup {
-  type: string;
+  type: CardTypeGroup | 'Other';
   cards: CanonicalCard[];
   count: number;
 }
@@ -47,15 +27,11 @@ export function groupByType(
   cards: readonly CanonicalCard[],
   catalog: Record<CardKey, CardFacts>,
 ): TypeGroup[] {
-  const groups = new Map<string, CanonicalCard[]>();
+  const groups = new Map<CardTypeGroup | 'Other', CanonicalCard[]>();
   for (const card of cards) {
-    const primary = catalog[card.key]?.primaryType ?? 'Other';
-    const type = (TYPE_ORDER as readonly string[]).includes(primary) ? primary : 'Other';
-    const list = groups.get(type) ?? [];
-    list.push(card);
-    groups.set(type, list);
+    groupInto(groups, cardTypeGroup(catalog[card.key]?.primaryType ?? 'Other'), card);
   }
-  return [...TYPE_ORDER, 'Other']
+  return [...CARD_TYPE_GROUPS, 'Other' as const]
     .filter((type) => groups.has(type))
     .map((type) => {
       const list = groups.get(type) ?? [];
@@ -94,14 +70,14 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
               {zoneLabel(zone)}
               <span className="font-medium text-subtle tabular">{zoneCount(snapshot, zone)}</span>
             </h3>
-            {FLAT_ZONES.has(zone) ? (
+            {isCommandZone(zone) ? (
               <CardRows cards={cards} catalog={catalog} scope={scope} />
             ) : (
               <div className="gap-x-8 md:columns-2">
                 {groupByType(cards, catalog).map((group) => (
                   <div key={group.type} className="mb-4 break-inside-avoid">
                     <h4 className="mb-0.5 flex items-baseline gap-1.5 text-xs font-semibold text-muted">
-                      {TYPE_PLURALS[group.type] ?? group.type}
+                      {CARD_TYPE_GROUP_PLURALS[group.type]}
                       <span className="font-medium text-subtle tabular">{group.count}</span>
                     </h4>
                     <CardRows cards={group.cards} catalog={catalog} scope={scope} />

@@ -92,11 +92,10 @@ export const STRATEGIC_CHANGE_TYPES: ReadonlySet<CardChangeType> = new Set([
   'quantity',
 ]);
 
-export interface DeckInfoChange {
-  field: 'name' | 'format' | 'description' | 'tags';
-  before: string | string[];
-  after: string | string[];
-}
+export type DeckInfoChange =
+  | { field: 'name' | 'format' | 'description'; before: string; after: string }
+  /** `added` and `removed` are sorted (ordinal, like card tags); `before` and `after` keep the deck's own order. */
+  | { field: 'tags'; before: string[]; after: string[]; added: string[]; removed: string[] };
 
 export type PrimerChange =
   | { status: 'unchanged' }
@@ -112,6 +111,11 @@ export type PrimerChange =
    * failed primer fetch is never a deletion), or neither side has primer text.
    */
   | { status: 'unknown' };
+
+/** Whether the primer counts as a difference: its text changed, or it was captured for the first time. */
+export function primerHasChange(primer: PrimerChange | undefined): boolean {
+  return primer?.status === 'changed' || primer?.status === 'captured';
+}
 
 export interface ZoneDiffStats {
   zone: ZoneId;

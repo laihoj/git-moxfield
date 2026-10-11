@@ -12,15 +12,6 @@ import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { DiffStatsInline } from './diff-stats';
 
-/** Whether the version changed the commanders (any strategic change in the commanders zone). */
-export function changedCommanders(version: VersionListItemDTO): boolean {
-  if (version.parentSequence === null) return false;
-  return (
-    version.stats.zones.some((zone) => zone.zone === 'commanders') ||
-    version.stats.moves.some((move) => move.from === 'commanders' || move.to === 'commanders')
-  );
-}
-
 /** `v47` in a compact pill; the latest version is highlighted. */
 export function VersionBadge({ sequence, latest = false }: { sequence: number; latest?: boolean }) {
   return (
@@ -59,7 +50,6 @@ export function VersionRow({
   compact = false,
   selected = false,
 }: VersionRowProps) {
-  const commandersChanged = changedCommanders(version);
   return (
     <li
       className={clsx(
@@ -111,7 +101,7 @@ export function VersionRow({
           ) : (
             <DiffStatsInline stats={version.stats} primer={version.primer} />
           )}
-          {commandersChanged && (
+          {version.commandersChanged && (
             <span className="inline-flex items-center gap-1 text-xs font-medium text-zone-commanders">
               <Crown aria-hidden="true" className="size-3" />
               Commanders

@@ -3,6 +3,7 @@
  * section, limitations). Shared by the owner's route (`/decks/{id}/versions/{n}/restore.txt`)
  * and the shared deck's (`/s/{token}/versions/{n}/restore.txt`), so both read the same.
  */
+import { pluralize } from '@/core/text';
 import type { RestoreExport } from '@/integrations/deck-source';
 import type { VersionRefDTO } from '@/server/services/types';
 
@@ -29,9 +30,7 @@ export function restoreText({ deck, version, export: restore }: RestoreDownload)
     '',
   ];
   for (const section of restore.sections) {
-    lines.push(
-      `=== ${section.label} (${section.cardCount} ${section.cardCount === 1 ? 'card' : 'cards'}) ===`,
-    );
+    lines.push(`=== ${section.label} (${pluralize(section.cardCount, 'card')}) ===`);
     lines.push(`Paste into: ${section.target}`);
     lines.push(section.text === '' ? '(empty: clear this tab)' : section.text.trimEnd());
     lines.push('');

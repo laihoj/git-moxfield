@@ -12,6 +12,8 @@
  */
 import { z } from 'zod';
 
+import { isRecord } from '@/core/guards';
+
 import { MOXFIELD_PUBLIC_ID_PATTERN } from './constants';
 
 /**
@@ -32,11 +34,7 @@ export type SchemaParseResult<T> = { ok: true; value: T } | { ok: false; issues:
 
 export type PlainObject = Record<string, unknown>;
 
-export function isPlainObject(value: unknown): value is PlainObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-const plainObject = z.custom<PlainObject>(isPlainObject, { message: 'Invalid input: expected object' });
+const plainObject = z.custom<PlainObject>(isRecord, { message: 'Invalid input: expected object' });
 
 /** Optional string that degrades to `undefined` when the field changes type. */
 const looseString = z.string().optional().catch(undefined);

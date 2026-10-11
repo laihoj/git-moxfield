@@ -4,10 +4,11 @@
  */
 import { and, asc, desc, eq, getTableColumns, ne, or, sql } from 'drizzle-orm';
 
+import { isRecord } from '@/core/guards';
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
 import { branches, commits, deckRelinks, decks, observations } from '@/server/db/schema';
 
-import { corruptData, decodeJson, encodeJson, isRecord } from './codec';
+import { corruptData, decodeJson, encodeJson } from './codec';
 import {
   isUniqueViolation,
   withTransaction,

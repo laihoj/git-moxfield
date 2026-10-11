@@ -7,6 +7,8 @@
  * the capture's JSON text or value, so a compressed payload must be decoded first
  * (`decodeCapturePayload` in `./capture-codec`, which the capture endpoints call).
  */
+import { isRecord } from '@/core/guards';
+
 import { DeckSourceError } from '../deck-source';
 
 import { ENCODE_CAPTURE_PAYLOAD_SOURCE } from './capture-codec-protocol';
@@ -27,7 +29,7 @@ import {
   READY,
 } from './capture-protocol';
 import { DEFAULT_MOXFIELD_API_BASE_URL, DEFAULT_MOXFIELD_SITE_ORIGIN, MOXFIELD_SOURCE_ID } from './constants';
-import { isPlainObject, parseMoxfieldDeck, type MoxfieldPayloadData, type PlainObject } from './schema';
+import { parseMoxfieldDeck, type MoxfieldPayloadData, type PlainObject } from './schema';
 
 const DECK_JSON_HINT = 'Expected the JSON of https://api2.moxfield.com/v3/decks/all/{deck id}.';
 const PRIMER_JSON_HINT = 'Expected the JSON of https://api2.moxfield.com/v1/decks/{internal deck id}/primer.';
@@ -118,7 +120,7 @@ export function parseMoxfieldCapture(data: unknown, separatePrimer?: unknown): M
     throw schemaError(`Nothing was pasted. ${DECK_JSON_HINT}`);
   }
   const value = parseJsonValue(data, 'pasted data', DECK_JSON_HINT);
-  if (!isPlainObject(value)) throw schemaError(`The data is not a Moxfield deck. ${DECK_JSON_HINT}`);
+  if (!isRecord(value)) throw schemaError(`The data is not a Moxfield deck. ${DECK_JSON_HINT}`);
 
   let payload: MoxfieldPayloadData;
   if (value.kind === CAPTURE_ENVELOPE_KIND) {

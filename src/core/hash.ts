@@ -5,7 +5,7 @@
  */
 import { createHash } from 'node:crypto';
 
-import { stableStringify } from './canonical';
+import { normalizeText, stableStringify } from './canonical';
 import type { CanonicalSnapshot } from './model';
 
 export function sha256Hex(data: string | Uint8Array): string {
@@ -58,13 +58,52 @@ export function serializeCommitObject(commit: CommitObject): string {
     }
     lines.push(singleLine('source-version', String(commit.sourceVersion)));
   }
-  const message = commit.message.normalize('NFC').replace(/\r\n?/g, '\n');
-  return `${lines.join('\n')}\n\n${message}`;
+  return `${lines.join('\n')}\n\n${normalizeText(commit.message)}`;
 }
 
 /** Content-addressed commit id: sha256 of the serialized commit object. */
 export function commitId(commit: CommitObject): string {
   return sha256Hex(serializeCommitObject(commit));
+}
+
+/** `<source>:<externalId>`: the deck reference a commit object hashes in its `deck` header. */
+export function deckReference(deck: { source: string; externalId: string }): string {
+  return `${deck.source}:${deck.externalId}`;
+}
+
+/** What a stored commit contributes to its commit object besides the deck reference (and its own id). */
+export type CommitContent = Pick<
+  CommitObject,
+  'snapshotHash' | 'parentId' | 'createdAt' | 'sourceVersion' | 'message'
+>;
+
+/** The commit object of stored commit content under the deck reference `deck`. */
+export function commitObjectOf(content: CommitContent, deck: string): CommitObject {
+  return {
+    deck,
+    snapshotHash: content.snapshotHash,
+    parentId: content.parentId,
+    createdAt: content.createdAt,
+    sourceVersion: content.sourceVersion,
+    message: content.message,
+  };
+}
+
+/**
+ * Whether `commit.id` is the hash of its content under one of the deck `references`. A
+ * commit whose content cannot be serialized as a commit object is not content addressed.
+ */
+export function isContentAddressed(
+  commit: CommitContent & { id: string },
+  references: readonly string[],
+): boolean {
+  return references.some((deck) => {
+    try {
+      return commitId(commitObjectOf(commit, deck)) === commit.id;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Abbreviated id for display, like `git log --oneline`. */

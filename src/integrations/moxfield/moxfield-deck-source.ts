@@ -2,11 +2,13 @@
  * The Moxfield {@link DeckSource}: wires URL parsing, the HTTP client, capture parsing,
  * normalization, restore export and primer conversion together.
  */
+import { isRecord } from '@/core/guards';
 import type { CanonicalSnapshot, NormalizedDeck, SourceDeckMetadata } from '@/core/model';
 
 import {
   DeckSourceError,
   isDeckSourceError,
+  retryAfterSecondsUntil,
   type DeckRef,
   type DeckSource,
   type FetchOptions,
@@ -28,7 +30,7 @@ import { MoxfieldHttpClient, type MoxfieldLogger } from './http-client';
 import { normalizeMoxfieldPayload } from './normalize';
 import { moxfieldPrimerToMarkdown } from './primer-markup';
 import { moxfieldRestoreExport } from './restore-text';
-import { isPlainObject, parseMoxfieldPayloadData, type MoxfieldPayloadData } from './schema';
+import { parseMoxfieldPayloadData, type MoxfieldPayloadData } from './schema';
 import { isValidMoxfieldPublicId, moxfieldDeckUrl, parseMoxfieldDeckInput } from './url';
 
 export interface MoxfieldDeckSourceOptions {
@@ -62,7 +64,7 @@ const BLOCKED_REASON =
   'Moxfield blocked server-side requests (bot protection), so server fetches are paused. Use the bookmarklet or paste the deck JSON instead.';
 
 function deckInternalId(deck: unknown): string | null {
-  return isPlainObject(deck) && typeof deck.id === 'string' && deck.id.length > 0 ? deck.id : null;
+  return isRecord(deck) && typeof deck.id === 'string' && deck.id.length > 0 ? deck.id : null;
 }
 
 export class MoxfieldDeckSource implements DeckSource {
@@ -135,7 +137,7 @@ export class MoxfieldDeckSource implements DeckSource {
       throw new DeckSourceError('blocked', status.reason, { source: MOXFIELD_SOURCE_ID });
     }
     if (status.state === 'blocked') {
-      const retryAfterSeconds = Math.max(0, Math.ceil((Date.parse(status.retryAt) - this.now()) / 1000));
+      const retryAfterSeconds = retryAfterSecondsUntil(Date.parse(status.retryAt), this.now());
       throw new DeckSourceError('blocked', status.reason, { source: MOXFIELD_SOURCE_ID, retryAfterSeconds });
     }
 

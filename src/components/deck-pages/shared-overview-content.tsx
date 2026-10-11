@@ -1,6 +1,6 @@
 import { History, Undo2 } from 'lucide-react';
 
-import { DiffView, diffCountLabel, initialPlayedCount } from '@/components/deck/diff-view';
+import { DiffView, diffCountLabel } from '@/components/deck/diff-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
 import { VersionBadge } from '@/components/deck/version-row';
 import { VersionTags } from '@/components/deck/version-tags';
@@ -109,7 +109,7 @@ function LatestVersion({ scope, detail }: { scope: DeckScope; detail: SharedVers
           id="changes-heading"
           title={initial ? 'Initial version' : `Changes since ${versionLabel(version.parentSequence ?? 0)}`}
           description={
-            initial ? `${pluralize(initialPlayedCount(diff), 'card')} in the deck` : diffCountLabel(diff)
+            initial ? `${pluralize(version.playedCardCount, 'card')} in the deck` : diffCountLabel(diff)
           }
           className="mb-4"
         />

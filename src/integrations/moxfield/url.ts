@@ -6,12 +6,11 @@
  * trailing `/primer`, query strings, fragments). User input is reduced to a validated
  * deck id; it is never used as a URL itself.
  */
+import { MAX_DECK_INPUT_LENGTH } from '@/core/text-limits';
+
 import type { ParseDeckUrlResult } from '../deck-source';
 
 import { DEFAULT_MOXFIELD_SITE_ORIGIN, MOXFIELD_PUBLIC_ID_PATTERN, MOXFIELD_SOURCE_ID } from './constants';
-
-/** Longest input considered at all; real deck URLs are well under 200 characters. */
-const MAX_INPUT_LENGTH = 2048;
 
 /**
  * Path segments under `/decks/` that are Moxfield pages rather than deck ids. They
@@ -86,7 +85,7 @@ export function parseMoxfieldDeckInput(
 ): ParseDeckUrlResult {
   const text = input.trim();
   if (text.length === 0) return fail('Enter a Moxfield deck URL or deck id.');
-  if (text.length > MAX_INPUT_LENGTH) return fail('That input is too long to be a Moxfield deck URL.');
+  if (text.length > MAX_DECK_INPUT_LENGTH) return fail('That input is too long to be a Moxfield deck URL.');
   if (/\s/.test(text)) return fail('A Moxfield deck URL cannot contain spaces.');
 
   const expectedHost = siteHost(siteOrigin);

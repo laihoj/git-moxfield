@@ -4,6 +4,7 @@
  */
 import 'server-only';
 
+import { pluralize } from '@/core/text';
 import { MOXFIELD_SOURCE_ID } from '@/integrations/moxfield/constants';
 import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
@@ -52,7 +53,7 @@ async function workspacesWithDecks(repos: Repositories): Promise<SourceWorkspace
 export function describeSourceWorkspace(workspace: SourceWorkspace): string {
   const owner =
     workspace.owner === null ? 'no owner' : `${workspace.owner.displayName}, ${workspace.owner.role}`;
-  return `workspace ${workspace.id} (${owner}): ${workspace.deckCount} deck${workspace.deckCount === 1 ? '' : 's'}`;
+  return `workspace ${workspace.id} (${owner}): ${pluralize(workspace.deckCount, 'deck')}`;
 }
 
 function folded(text: string): string {

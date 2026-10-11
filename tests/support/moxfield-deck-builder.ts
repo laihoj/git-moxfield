@@ -212,6 +212,22 @@ export function moxfieldInternalId(spec: MoxDeckSpec): string {
 }
 
 /** Builds a `GET /v3/decks/all/{publicId}` response body. */
+/** The boards `buildMoxfieldDeck` always emits, which a spec's `extraBoards` must not override. */
+export const BUILDER_BOARD_NAMES = [
+  'mainboard',
+  'sideboard',
+  'maybeboard',
+  'commanders',
+  'companions',
+  'signatureSpells',
+  'attractions',
+  'stickers',
+  'contraptions',
+  'planes',
+  'schemes',
+  'tokens',
+] as const;
+
 export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
   const user = { userName: 'fixture-user', displayName: 'Fixture User', badges: [] };
   const commanderBoard = board('commanders', spec.commanders);
@@ -219,7 +235,7 @@ export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
   Object.values(commanderBoard.cards).forEach((entry, index) => {
     if (index > 0) (entry as { boardType: string }).boardType = 'partners';
   });
-  const boards: Record<string, unknown> = {
+  const boards: Record<string, unknown> & Record<(typeof BUILDER_BOARD_NAMES)[number], unknown> = {
     mainboard: board('mainboard', spec.mainboard),
     sideboard: board('sideboard', spec.sideboard),
     maybeboard: board('maybeboard', spec.considering),

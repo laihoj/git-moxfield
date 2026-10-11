@@ -3,6 +3,7 @@
 import { History, Plus } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
+import { foldInlineText } from '@/core/text';
 import { Alert } from '@/components/ui/alert';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
@@ -109,11 +110,6 @@ export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureSta
   }
 }
 
-/** Folds a deck name for comparing: case, spacing and Unicode form do not matter. */
-function foldName(name: string): string {
-  return name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 /**
  * "Continue an existing deck's history": for a deck deleted on Moxfield and made again,
  * whose new copy has a new public id and so arrives as an untracked deck. The user picks
@@ -130,8 +126,8 @@ function ContinueDeck({
 }) {
   const id = useId();
   const [selected, setSelected] = useState(() => {
-    const wanted = foldName(capturedName);
-    const sameName = decks.filter((deck) => wanted !== '' && foldName(deck.name) === wanted);
+    const wanted = foldInlineText(capturedName);
+    const sameName = decks.filter((deck) => wanted !== '' && foldInlineText(deck.name) === wanted);
     return sameName.length === 1 ? (sameName[0]?.id ?? '') : '';
   });
   const deck = decks.find((candidate) => candidate.id === selected);

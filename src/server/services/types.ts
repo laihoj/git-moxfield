@@ -75,6 +75,8 @@ export interface VersionListItemDTO extends VersionRefDTO {
   stats: DiffStats;
   primer: PrimerChange;
   commanders: string[];
+  /** The version changed its commanders (never for a first version, which has no earlier commanders to change). */
+  commandersChanged: boolean;
   /** Copies in played zones (commanders, companions, signature spells, mainboard). */
   playedCardCount: number;
   ingestMethod: IngestMethod;

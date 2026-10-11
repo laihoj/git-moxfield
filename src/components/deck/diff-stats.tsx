@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import { ArrowLeftRight, FileText } from 'lucide-react';
 
-import type { DiffStats, PrimerChange } from '@/core/diff/types';
+import { primerHasChange, type DiffStats, type PrimerChange } from '@/core/diff/types';
 import { MINUS_SIGN } from '@/lib/format';
 
 export interface StatTotals {
@@ -11,7 +11,7 @@ export interface StatTotals {
   removed: number;
   /** Copies moved between zones. */
   moved: number;
-  /** Printing, card tag and rename changes. */
+  /** Printing and card tag changes. */
   cosmetic: number;
 }
 
@@ -37,7 +37,7 @@ export interface DiffStatsInlineProps {
  */
 export function DiffStatsInline({ stats, primer, className }: DiffStatsInlineProps) {
   const totals = statTotals(stats);
-  const primerChanged = primer?.status === 'changed' || primer?.status === 'captured';
+  const primerChanged = primerHasChange(primer);
   const empty = totals.added === 0 && totals.removed === 0 && totals.moved === 0;
   return (
     <span

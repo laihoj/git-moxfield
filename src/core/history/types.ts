@@ -29,6 +29,9 @@ export interface CardVersionPoint {
   renamedFrom?: { key: CardKey; name: string };
 }
 
+/** What identifies a version in a card's history: its commit (`null` for the working state) and message. */
+export type VersionMeta = Pick<CardVersionPoint, 'commitId' | 'sequence' | 'at' | 'message'>;
+
 export type CardTransition =
   /** First version in the examined range that contains the card. */
   | 'first-seen'
@@ -91,6 +94,10 @@ export interface CardHistory {
     lastSeenSequence: number | null;
     /** Zones in the newest examined point. */
     currentZones: ZoneQuantity[];
+    /** Number of committed versions examined (the working state is not counted). */
+    versionCount: number;
+    /** Number of committed versions containing the card in any zone (Considering and the sideboard included). */
+    versionsPresent: number;
     /** Number of versions (among examined) containing the card in a played zone. */
     versionsInPlayedZones: number;
     /** Number of times the card left the played zones (cut to considering/sideboard or removed). */

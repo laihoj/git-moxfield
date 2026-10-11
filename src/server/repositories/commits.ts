@@ -4,7 +4,7 @@
  */
 import { and, count, desc, eq, getTableColumns, gte, lt, max } from 'drizzle-orm';
 
-import { commitId } from '@/core/hash';
+import { commitId, commitObjectOf, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
 import { branches, commits, decks, snapshots } from '@/server/db/schema';
@@ -49,7 +49,17 @@ export interface CommitWithSnapshot {
 }
 
 /** Shortest commit id prefix accepted by {@link CommitRepository.findByIdPrefix}. */
-export const MIN_COMMIT_ID_PREFIX_LENGTH = 4;
+const MIN_COMMIT_ID_PREFIX_LENGTH = 4;
+
+/** Length of a full commit id (a hex SHA-256 digest). */
+const COMMIT_ID_LENGTH = 64;
+
+/** Whether `text` (already lower-cased) can be a commit id prefix: 4 to 64 hex characters. */
+export function isCommitIdPrefix(text: string): boolean {
+  return (
+    /^[0-9a-f]+$/.test(text) && text.length >= MIN_COMMIT_ID_PREFIX_LENGTH && text.length <= COMMIT_ID_LENGTH
+  );
+}
 
 export interface CommitRepository {
   /**
@@ -116,7 +126,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
           .where(and(eq(decks.id, commit.deckId), eq(decks.workspaceId, ctx.workspaceId)))
           .get();
         if (!deck) throw new RepositoryError('not-found', `Deck ${commit.deckId} does not exist`);
-        assertContentAddressed(commit, `${deck.source}:${deck.externalId}`);
+        assertContentAddressed(commit, deckReference(deck));
 
         // Installation-wide on purpose: commit ids are the table's primary key.
         const existing = await db
@@ -209,7 +219,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
 
     async findByIdPrefix(deckId, prefix) {
       const normalized = prefix.trim().toLowerCase();
-      if (!/^[0-9a-f]+$/.test(normalized) || normalized.length < MIN_COMMIT_ID_PREFIX_LENGTH) return null;
+      if (!isCommitIdPrefix(normalized)) return null;
       // Ids are lowercase hex, so every id starting with the prefix sorts within
       // [prefix, prefix + 'g'): a primary-key range scan instead of LIKE.
       const [match, another] = await ctx.db
@@ -324,14 +334,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
 function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   let expected: string;
   try {
-    expected = commitId({
-      deck: deckRef,
-      snapshotHash: commit.snapshotHash,
-      parentId: commit.parentId,
-      createdAt: commit.createdAt,
-      sourceVersion: commit.sourceVersion,
-      message: commit.message,
-    });
+    expected = commitId(commitObjectOf(commit, deckRef));
   } catch (cause) {
     throw new RepositoryError('invalid-input', 'Commit cannot be serialized as a commit object', { cause });
   }

@@ -15,7 +15,12 @@ import { z } from 'zod';
 import { cardKey } from '@/core/card-key';
 import { MOXFIELD_INTERNAL_ID_PATTERN, MOXFIELD_PUBLIC_ID_PATTERN } from '@/integrations/moxfield/constants';
 
-import { moxfieldInternalId, type MoxCardSpec, type MoxDeckSpec } from '../support/moxfield-deck-builder';
+import {
+  BUILDER_BOARD_NAMES,
+  moxfieldInternalId,
+  type MoxCardSpec,
+  type MoxDeckSpec,
+} from '../support/moxfield-deck-builder';
 
 /**
  * Failure modes of the mock API (the deck page and the control API always work):
@@ -123,20 +128,7 @@ const MAX_EDIT_OPS = 500;
 const BUILDER_DEFAULT_UPDATED_AT = '2026-10-01T12:00:00.000Z';
 
 /** Boards the deck builder always emits; `extraBoards` must not override them. */
-const BUILDER_BOARDS: ReadonlySet<string> = new Set([
-  'mainboard',
-  'sideboard',
-  'maybeboard',
-  'commanders',
-  'companions',
-  'signatureSpells',
-  'attractions',
-  'stickers',
-  'contraptions',
-  'planes',
-  'schemes',
-  'tokens',
-]);
+const BUILDER_BOARDS: ReadonlySet<string> = new Set(BUILDER_BOARD_NAMES);
 
 const FINISHES = ['nonFoil', 'foil', 'etched'] as const satisfies readonly MoxFinish[];
 

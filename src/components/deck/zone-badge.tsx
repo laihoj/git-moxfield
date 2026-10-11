@@ -1,12 +1,11 @@
 import clsx from 'clsx';
 
-import { zoneLabel, type ZoneId } from '@/core/zones';
+import { isCommandZone, zoneLabel, type ZoneId } from '@/core/zones';
 
 /** Stable zone colors (docs/ux.md): commanders amber, mainboard violet, sideboard slate, considering teal. */
+const COMMAND_ZONE_TONE = 'bg-zone-commanders-bg text-zone-commanders';
+
 const ZONE_TONES: Partial<Record<ZoneId, string>> = {
-  commanders: 'bg-zone-commanders-bg text-zone-commanders',
-  companions: 'bg-zone-commanders-bg text-zone-commanders',
-  signatureSpells: 'bg-zone-commanders-bg text-zone-commanders',
   mainboard: 'bg-zone-mainboard-bg text-zone-mainboard',
   sideboard: 'bg-zone-sideboard-bg text-zone-sideboard',
   considering: 'bg-zone-considering-bg text-zone-considering',
@@ -14,9 +13,13 @@ const ZONE_TONES: Partial<Record<ZoneId, string>> = {
 
 const OTHER_TONE = 'bg-zone-other-bg text-zone-other';
 
+function zoneTone(zone: ZoneId): string {
+  return isCommandZone(zone) ? COMMAND_ZONE_TONE : (ZONE_TONES[zone] ?? OTHER_TONE);
+}
+
 /** Text color class of a zone (for headings that echo the badge color). */
 export function zoneTextClass(zone: ZoneId): string {
-  return (ZONE_TONES[zone] ?? OTHER_TONE).split(' ')[1] ?? 'text-zone-other';
+  return zoneTone(zone).split(' ')[1] ?? 'text-zone-other';
 }
 
 export interface ZoneBadgeProps {
@@ -32,7 +35,7 @@ export function ZoneBadge({ zone, quantity, className }: ZoneBadgeProps) {
     <span
       className={clsx(
         'inline-flex h-5 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium whitespace-nowrap',
-        ZONE_TONES[zone] ?? OTHER_TONE,
+        zoneTone(zone),
         className,
       )}
     >

@@ -5,11 +5,12 @@
 import { and, eq, inArray, notExists, sql, type SQL } from 'drizzle-orm';
 
 import { canonicalizeSnapshot, stableStringify } from '@/core/canonical';
+import { isRecord } from '@/core/guards';
 import { snapshotHash } from '@/core/hash';
 import { SNAPSHOT_SCHEMA_VERSION, type CanonicalSnapshot } from '@/core/model';
 import { commits, observations, snapshotCards, snapshots } from '@/server/db/schema';
 
-import { corruptData, decodeJson, isRecord } from './codec';
+import { corruptData, decodeJson } from './codec';
 import {
   assertStorableSize,
   batches,

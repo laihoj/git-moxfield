@@ -8,6 +8,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Disclosure } from '@/components/ui/disclosure';
 import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
+import { MAX_SETUP_CODE_INPUT_LENGTH } from '@/core/text-limits';
 
 export interface ClaimFormProps {
   /** Longest display name the server accepts. */
@@ -41,7 +42,7 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
           id={codeId}
           name="code"
           required
-          maxLength={64}
+          maxLength={MAX_SETUP_CODE_INPUT_LENGTH}
           autoComplete="one-time-code"
           autoCapitalize="characters"
           autoCorrect="off"

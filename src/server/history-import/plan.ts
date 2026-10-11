@@ -7,6 +7,7 @@ import 'server-only';
 
 import { randomUUID } from 'node:crypto';
 
+import { pluralize } from '@/core/text';
 import {
   assertCommitsContentAddressed,
   deckReferences,
@@ -102,10 +103,6 @@ export interface ImportPlan {
 export interface PlanImportOptions {
   /** Id generator for rows whose id is taken in the target. Default: `crypto.randomUUID`. */
   newId?: () => string;
-}
-
-function pluralize(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function countsOf(rows: DeckHistoryRows): ImportCounts {

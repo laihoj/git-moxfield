@@ -6,6 +6,10 @@
  * relative times match what the browser renders (see `RelativeTime`).
  */
 
+import { pluralize } from '@/core/text';
+
+export { joinList, MINUS_SIGN, pluralize } from '@/core/text';
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -13,9 +17,6 @@ const WEEK = 7 * DAY;
 /** Average month and year, for "3 months ago" style approximations. */
 const MONTH = 30.44 * DAY;
 const YEAR = 365.25 * DAY;
-
-/** U+2212 MINUS SIGN, typographically matching `+` in counters. */
-export const MINUS_SIGN = '−';
 
 export type RelativeTimeStyle =
   /** `just now`, `5 min ago`, `3 hours ago`, `yesterday`, `4 days ago`, `Sep 12`. */
@@ -59,7 +60,7 @@ export function formatRelativeTime(
   if (elapsed < DAY) {
     const hours = Math.round(elapsed / HOUR);
     if (hours >= 24) return short ? '1d' : 'yesterday';
-    return short ? `${hours}h` : `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    return short ? `${hours}h` : `${pluralize(hours, 'hour')} ago`;
   }
   if (elapsed < WEEK) {
     const days = Math.round(elapsed / DAY);
@@ -68,15 +69,15 @@ export function formatRelativeTime(
   }
   if (elapsed < 5 * WEEK) {
     const weeks = Math.round(elapsed / WEEK);
-    return short ? `${weeks}w` : `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
+    return short ? `${weeks}w` : `${pluralize(weeks, 'week')} ago`;
   }
   if (style !== 'words') return formatCalendarDate(time, now);
   if (elapsed < 11.5 * MONTH) {
     const months = Math.max(1, Math.round(elapsed / MONTH));
-    return `${months} ${months === 1 ? 'month' : 'months'} ago`;
+    return `${pluralize(months, 'month')} ago`;
   }
   const years = Math.max(1, Math.round(elapsed / YEAR));
-  return `${years} ${years === 1 ? 'year' : 'years'} ago`;
+  return `${pluralize(years, 'year')} ago`;
 }
 
 /** `in 5 min`, `in 3 hours`, `in 2 days`. */
@@ -86,10 +87,10 @@ function formatFutureTime(remaining: number): string {
     const hours = Math.round(remaining / HOUR);
     // 23.5 hours and more round to a day, as in the past tense (`yesterday`).
     if (hours >= 24) return 'in 1 day';
-    return `in ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+    return `in ${pluralize(hours, 'hour')}`;
   }
   const days = Math.round(remaining / DAY);
-  return `in ${days} ${days === 1 ? 'day' : 'days'}`;
+  return `in ${pluralize(days, 'day')}`;
 }
 
 const MONTH_DAY = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' });
@@ -138,17 +139,6 @@ export function formatClockTime(value: string | Date, now: number): string {
     : MONTH_DAY_TIME.format(time);
 }
 
-/** `1 card`, `3 cards`; irregular plurals via `plural`. */
-export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-/** `a`, `a and b`, `a, b and c`. */
-export function joinList(items: readonly string[]): string {
-  if (items.length <= 1) return items.join('');
-  return `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
-}
-
 /** Small counts as words for running text (`once`, `twice`, `3 times`). */
 export function formatTimes(count: number): string {
   if (count === 1) return 'once';
@@ -164,13 +154,6 @@ export function versionLabel(sequence: number): string {
 /** Inclusive version range: `v19`, or `v19–v24`. */
 export function versionRangeLabel(first: number, last: number): string {
   return first === last ? versionLabel(first) : `${versionLabel(first)}–${versionLabel(last)}`;
-}
-
-/** Signed counter with a real minus sign: `+3`, `−2`, `0`. */
-export function formatSigned(value: number): string {
-  if (value > 0) return `+${value}`;
-  if (value < 0) return `${MINUS_SIGN}${Math.abs(value)}`;
-  return '0';
 }
 
 /** Bytes as `512 B`, `12.3 KB`, `1.4 MB` (decimal units, as browsers show downloads). */

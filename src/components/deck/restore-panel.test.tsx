@@ -65,6 +65,33 @@ describe('RestorePanel', () => {
     expect(within(considering).queryByRole('button')).not.toBeInTheDocument();
   });
 
+  it('says once that an empty tab must be cleared, and names the tab only as the target', () => {
+    render();
+    const considering = screen.getByRole('article', { name: 'Considering' });
+    expect(considering).toHaveTextContent('Bulk Edit › Considering');
+    expect(considering.textContent).not.toMatch(/clear the tab/i);
+    expect(considering.textContent.match(/clear this tab/gi)).toHaveLength(1);
+  });
+
+  it('takes how a section is restored from its kind, whatever its zone', () => {
+    const restore = moxfieldRestoreExport(snapshot());
+    renderWithProviders(
+      <RestorePanel
+        restore={{
+          ...restore,
+          sections: restore.sections.map((section) =>
+            section.zone === 'mainboard' ? { ...section, kind: 'reference' } : section,
+          ),
+        }}
+        downloadHref="/decks/d/versions/3/restore.txt"
+      />,
+    );
+    const mainboard = screen.getByRole('article', { name: 'Mainboard' });
+    expect(mainboard).toHaveTextContent('Reference only');
+    expect(mainboard).toHaveTextContent('Moxfield cannot restore this by pasting');
+    expect(screen.getByRole('article', { name: 'Sideboard' })).not.toHaveTextContent('Reference only');
+  });
+
   it('offers the combined list for a new deck in a collapsed disclosure, plus limitations and a download', () => {
     render();
     const combined = screen.getByText('Create a new deck instead').closest('details');

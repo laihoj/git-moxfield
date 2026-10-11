@@ -14,8 +14,9 @@
  *   card-tags.txt      "Dress Down: hate, stax"
  *   primer.md          absent when the deck has no primer (or it was not captured)
  */
-import { compareStrings, snapshotZones, zoneCards } from './canonical';
+import { cardNames, compareStrings, snapshotZones, zoneCards } from './canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from './model';
+import { formatCardLines, formatPrintingLine, linesText, type LineFormat } from './printing-line';
 import { isKnownZone, type ZoneId } from './zones';
 
 /** Relative path → file contents (LF line endings, trailing newline). */
@@ -37,24 +38,16 @@ export function zoneFileName(zone: ZoneId): string {
     : `${zone.replace(':', '-')}.txt`;
 }
 
-function finishMarker(finish: string): string {
-  if (finish === 'nonfoil') return '';
-  if (finish === 'foil') return ' *F*';
-  if (finish === 'etched') return ' *E*';
-  return ` *${finish}*`;
-}
+/** The export is lossless: unknown finishes, languages and flags are written too. */
+const LOSSLESS_LINES: LineFormat = { unknownFinish: 'verbatim', lang: true, flags: true };
 
 /** One line per printing: `<qty> <name> (<SET>) <collector number>[ *F*][ [lang]][ {flags}]`. */
 export function printingLine(card: Pick<CanonicalCard, 'name'>, p: CanonicalPrinting): string {
-  let line = `${p.quantity} ${card.name} (${p.set.toUpperCase()}) ${p.collectorNumber}${finishMarker(p.finish)}`;
-  if (p.lang !== 'en') line += ` [${p.lang}]`;
-  if (p.flags && p.flags.length > 0) line += ` {${p.flags.join(',')}}`;
-  return line;
+  return formatPrintingLine(card.name, p, LOSSLESS_LINES);
 }
 
 export function cardLines(card: CanonicalCard): string[] {
-  if (card.printings.length === 0) return [`${card.quantity} ${card.name}`];
-  return card.printings.map((p) => printingLine(card, p));
+  return formatCardLines(card, LOSSLESS_LINES);
 }
 
 /**
@@ -92,13 +85,10 @@ export function snapshotToFileTree(snapshot: CanonicalSnapshot, options: FileTre
 
   for (const zone of snapshotZones(snapshot)) {
     const lines = zoneCards(snapshot, zone).flatMap(cardLines);
-    if (lines.length > 0) tree[zoneFileName(zone)] = `${lines.join('\n')}\n`;
+    if (lines.length > 0) tree[zoneFileName(zone)] = linesText(lines);
   }
 
-  const names = new Map<string, string>();
-  for (const zone of snapshotZones(snapshot)) {
-    for (const card of zoneCards(snapshot, zone)) if (!names.has(card.key)) names.set(card.key, card.name);
-  }
+  const names = cardNames(snapshot);
   const tagLines = Object.keys(snapshot.cardTags)
     .sort(compareStrings)
     .map((key) => `${names.get(key) ?? key}: ${(snapshot.cardTags[key] ?? []).join(', ')}`);

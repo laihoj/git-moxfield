@@ -3,6 +3,7 @@ import { ArrowRight, Equal } from 'lucide-react';
 import type { Route } from 'next';
 import type { ReactNode } from 'react';
 
+import { groupInto } from '@/core/collections';
 import {
   diffChangeCount,
   groupDiffForDisplay,
@@ -12,7 +13,7 @@ import {
   type DiffSection,
 } from '@/core/diff';
 import type { CardFacts, CardKey } from '@/core/model';
-import { isPlayedZone, sortZones, zoneLabel, type ZoneId } from '@/core/zones';
+import { isPlayedZone, zoneEntries, zoneLabel, type ZoneId } from '@/core/zones';
 import { Overline } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
@@ -149,8 +150,7 @@ const DECK_FIELD_LABELS: Record<DeckInfoChange['field'], string> = {
   tags: 'Deck tags',
 };
 
-function deckValue(field: DeckInfoChange['field'], value: string | string[]): string {
-  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.join(', ');
+function deckValue(field: 'name' | 'format' | 'description', value: string): string {
   if (field === 'format') return formatLabel(value);
   return value === '' ? 'empty' : value;
 }
@@ -165,8 +165,8 @@ function DeckInfoSection({ changes }: { changes: DeckInfoChange[] }) {
         {changes.map((change) => (
           <li key={change.field} className="flex flex-col gap-0.5 py-2 text-sm md:flex-row md:gap-3">
             <span className="w-28 shrink-0 font-medium text-fg">{DECK_FIELD_LABELS[change.field]}</span>
-            {change.field === 'tags' && Array.isArray(change.before) && Array.isArray(change.after) ? (
-              <TagListChange before={change.before} after={change.after} />
+            {change.field === 'tags' ? (
+              <TagListChange added={change.added} removed={change.removed} />
             ) : (
               <span className="min-w-0 break-words text-muted">
                 <span className="line-clamp-3">
@@ -188,9 +188,7 @@ function DeckInfoSection({ changes }: { changes: DeckInfoChange[] }) {
   );
 }
 
-function TagListChange({ before, after }: { before: string[]; after: string[] }) {
-  const added = after.filter((tag) => !before.includes(tag));
-  const removed = before.filter((tag) => !after.includes(tag));
+function TagListChange({ added, removed }: { added: string[]; removed: string[] }) {
   return (
     <span className="flex flex-wrap gap-x-2 text-muted">
       {added.map((tag) => (
@@ -264,24 +262,24 @@ function InitialVersionView({
   const byZone = new Map<ZoneId, AddedChange[]>();
   for (const change of diff.changes) {
     if (change.type !== 'added') continue;
-    const list = byZone.get(change.zone) ?? [];
-    list.push(change);
-    byZone.set(change.zone, list);
+    groupInto(byZone, change.zone, change);
   }
-  const zones = sortZones(byZone.keys());
-  const count = (zone: ZoneId): number =>
-    (byZone.get(zone) ?? []).reduce((sum, change) => sum + change.quantity, 0);
-  const total = zones.reduce((sum, zone) => sum + count(zone), 0);
+  const zones = zoneEntries(byZone).map(([zone, changes]) => ({
+    zone,
+    changes,
+    count: changes.reduce((sum, change) => sum + change.quantity, 0),
+  }));
+  const total = zones.reduce((sum, { count }) => sum + count, 0);
 
   return (
     <div className="flex flex-col gap-4">
       <ul aria-label="Cards per zone" className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-        {zones.map((zone) => (
+        {zones.map(({ zone, count }) => (
           <li key={zone} className="rounded-lg border border-border bg-surface-2/60 px-3 py-2">
             <p className={clsx('text-xs font-semibold tracking-wide uppercase', zoneTextClass(zone))}>
               {zoneLabel(zone)}
             </p>
-            <p className="mt-0.5 text-lg font-semibold text-fg tabular">{count(zone)}</p>
+            <p className="mt-0.5 text-lg font-semibold text-fg tabular">{count}</p>
           </li>
         ))}
       </ul>
@@ -301,14 +299,14 @@ function InitialVersionView({
       {diff.primer.status === 'unknown' && <p className="text-sm text-muted">Primer not captured</p>}
       <Disclosure summary={`Show all ${pluralize(total, 'card')}`} variant="card">
         <div className="flex flex-col gap-4">
-          {zones.map((zone) => (
+          {zones.map(({ zone, changes, count }) => (
             <section key={zone} aria-label={zoneLabel(zone)}>
               <Overline className={clsx('mb-1', zoneTextClass(zone))}>
                 {zoneLabel(zone)}
-                <span className="ml-1.5 font-medium text-subtle normal-case tabular">{count(zone)}</span>
+                <span className="ml-1.5 font-medium text-subtle normal-case tabular">{count}</span>
               </Overline>
               <ul className="divide-y divide-border">
-                {(byZone.get(zone) ?? []).map((change) => {
+                {changes.map((change) => {
                   const facts = catalog[change.key];
                   return (
                     <li key={change.key} className="flex items-center gap-3 py-1.5 text-sm">

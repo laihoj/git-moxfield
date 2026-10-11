@@ -41,6 +41,8 @@ import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { zoneLabel } from '@/core/zones';
+
 import { buildMoxfieldDeck, buildMoxfieldPrimer, type MoxDeckSpec } from '../support/moxfield-deck-builder';
 
 import { seedScenarios } from './scenarios';
@@ -52,7 +54,6 @@ import {
   zoneCounts,
   type MockClientKind,
   type MockMoxfieldStateOptions,
-  type MockZone,
 } from './state';
 
 /** Port used when `MOCK_MOXFIELD_PORT` is not set. */
@@ -62,14 +63,6 @@ export const DEFAULT_MOCK_MOXFIELD_HOST = '127.0.0.1';
 
 /** Largest accepted control request body. */
 const MAX_BODY_BYTES = 2_000_000;
-
-const ZONE_LABELS: Record<MockZone, string> = {
-  commanders: 'Commanders',
-  companions: 'Companion',
-  mainboard: 'Mainboard',
-  sideboard: 'Sideboard',
-  considering: 'Considering',
-};
 
 export interface MockMoxfieldServerOptions {
   /** State to serve. Default: a new state seeded with {@link seedScenarios}. */
@@ -244,7 +237,7 @@ function deckPage(deck: MoxDeckSpec): string {
       const card = toCardObject(spec);
       return `<li>${card.quantity ?? 1} ${escapeHtml(card.name)}</li>`;
     });
-    return `<section><h2>${ZONE_LABELS[zone]} (${counts[zone]})</h2><ul>${items.join('')}</ul></section>`;
+    return `<section><h2>${zoneLabel(zone)} (${counts[zone]})</h2><ul>${items.join('')}</ul></section>`;
   });
   return htmlPage(
     `${name} // Commander deck list mtg // Moxfield`,

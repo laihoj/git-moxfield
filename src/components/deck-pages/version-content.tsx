@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 
 import { CompareMenu, type CompareMenuItem } from '@/components/deck/compare-menu';
 import { DeckList } from '@/components/deck/deck-list';
-import { DiffView, initialPlayedCount } from '@/components/deck/diff-view';
+import { DiffView } from '@/components/deck/diff-view';
 import { PrimerDiffView } from '@/components/deck/primer-diff-view';
 import { PrimerView } from '@/components/deck/primer-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
@@ -184,7 +184,7 @@ export function VersionContent({
                 <div className="mb-4">
                   <h3 className="text-base font-semibold text-fg">Initial version</h3>
                   <p className="text-sm text-muted">
-                    {pluralize(initialPlayedCount(diff), 'card')} in the deck
+                    {pluralize(playedCardCount(snapshot), 'card')} in the deck
                   </p>
                 </div>
               ) : (

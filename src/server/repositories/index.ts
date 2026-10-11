@@ -157,7 +157,7 @@ export type {
   ObservationWithSnapshot,
 } from './observations';
 export {
-  MIN_COMMIT_ID_PREFIX_LENGTH,
+  isCommitIdPrefix,
   type CommitRecord,
   type CommitRepository,
   type CommitWithSnapshot,
@@ -169,13 +169,7 @@ export {
   type CardSearchHit,
   type CardVersionZones,
 } from './card-index';
-export {
-  MAX_VERSION_TAG_LENGTH,
-  normalizeVersionTag,
-  type TagCount,
-  type VersionTagRepository,
-  type VersionTagValidation,
-} from './tags';
+export type { TagCount, VersionTagRepository } from './tags';
 export type { CommitNoteRecord, CommitNoteRepository } from './notes';
 export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';

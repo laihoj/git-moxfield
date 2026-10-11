@@ -73,6 +73,10 @@ describe('deriveCardHistory', () => {
         firstSeenSequence: null,
         lastSeenSequence: null,
         currentZones: [],
+        versionCount: 0,
+
+        versionsPresent: 0,
+
         versionsInPlayedZones: 0,
         timesCut: 0,
         timesRestored: 0,
@@ -92,6 +96,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: null,
       lastSeenSequence: null,
       currentZones: [],
+      versionCount: 2,
+
+      versionsPresent: 0,
+
       versionsInPlayedZones: 0,
       timesCut: 0,
       timesRestored: 0,
@@ -113,6 +121,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: null,
       lastSeenSequence: null,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 0,
+
+      versionsPresent: 0,
+
       versionsInPlayedZones: 0,
       timesCut: 0,
       timesRestored: 0,
@@ -185,6 +197,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: 19,
       lastSeenSequence: 44,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 6,
+
+      versionsPresent: 6,
+
       versionsInPlayedZones: 4,
       timesCut: 2,
       timesRestored: 2,
@@ -383,6 +399,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: 1,
       lastSeenSequence: 1,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 2,
+
+      versionsPresent: 1,
+
       versionsInPlayedZones: 1,
       timesCut: 1,
       timesRestored: 1,
@@ -611,6 +631,10 @@ describe('cardPointsFromSnapshots', () => {
       firstSeenSequence: 1,
       lastSeenSequence: 3,
       currentZones: [{ zone: 'considering', quantity: 1 }],
+      versionCount: 3,
+
+      versionsPresent: 3,
+
       versionsInPlayedZones: 2,
       timesCut: 2,
       timesRestored: 1,

@@ -25,6 +25,7 @@ import { devNull } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { snapshotToFileTree, type FileTree } from '@/core/file-tree';
+import { deckReference } from '@/core/hash';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 import type { CommitRecord, DeckLocation, DeckRecord, Repositories } from '@/server/repositories';
@@ -468,7 +469,7 @@ function writeHistory(
   versions: readonly PlannedVersion[],
   exportedAt: Date,
 ): { exported: ExportedVersion[]; warnings: string[] } {
-  const deckRef = `${deck.source}:${deck.externalId}`;
+  const deckRef = deckReference(deck);
   git.run(['init', '--quiet', '--template=', '.']);
   git.run(['symbolic-ref', 'HEAD', `refs/heads/${EXPORT_BRANCH}`]);
   git.run(['config', EXPORT_MARKER_KEY, deckRef]);
@@ -549,7 +550,7 @@ export async function exportDeckToGit(options: ExportDeckToGitOptions): Promise<
 
   // Fail before touching the file system when git cannot run.
   new GitRepository(runner, process.cwd()).run(['--version']);
-  const created = prepareTarget(git, `${deck.source}:${deck.externalId}`);
+  const created = prepareTarget(git, deckReference(deck));
   try {
     const { exported, warnings } = writeHistory(git, deck, versions, (options.now ?? (() => new Date()))());
     const head = exported.at(-1)?.gitCommit;

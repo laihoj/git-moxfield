@@ -12,6 +12,8 @@
  */
 import 'server-only';
 
+import { pluralize } from '@/core/text';
+
 import { HistoryImportError } from './errors';
 import type { DeckImportPlan, ImportEndpoints, ImportPlan } from './plan';
 
@@ -140,7 +142,7 @@ export async function runImport(
   }
   if (result.skipped.length > 0 && !options.skipExisting) {
     throw new HistoryImportError(
-      `${result.skipped.length} deck${result.skipped.length === 1 ? ' conflicts' : 's conflict'} with the target; nothing was imported.`,
+      `${pluralize(result.skipped.length, 'deck conflicts', 'decks conflict')} with the target; nothing was imported.`,
     );
   }
 

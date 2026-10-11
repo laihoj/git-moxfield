@@ -7,6 +7,7 @@
  * under `stableStringify`.
  */
 import { cardKey, normalizeCardName } from './card-key';
+import { getOrCreate } from './collections';
 import type {
   CanonicalCard,
   CanonicalPrinting,
@@ -18,6 +19,7 @@ import type {
   ZoneMap,
 } from './model';
 import { SNAPSHOT_SCHEMA_VERSION } from './model';
+import { normalizeInlineText } from './text';
 import { isPlayedZone, isZoneId, sortZones, type ZoneId } from './zones';
 
 export class CanonicalizationError extends Error {
@@ -63,8 +65,8 @@ export function normalizePrimer(primer: string | null): string | null {
 export function normalizeTagList(tags: readonly string[]): string[] {
   const unique = new Set<string>();
   for (const tag of tags) {
-    const t = tag.normalize('NFC').replace(/\s+/g, ' ').trim();
-    if (t) unique.add(t);
+    const normalized = normalizeInlineText(tag);
+    if (normalized) unique.add(normalized);
   }
   return [...unique].sort(compareStrings);
 }
@@ -325,8 +327,7 @@ export function cardZoneIndex(snapshot: CanonicalSnapshot): Map<CardKey, Map<Zon
   const index = new Map<CardKey, Map<ZoneId, number>>();
   for (const zone of snapshotZones(snapshot)) {
     for (const card of zoneCards(snapshot, zone)) {
-      let zones = index.get(card.key);
-      if (!zones) index.set(card.key, (zones = new Map<ZoneId, number>()));
+      const zones = getOrCreate(index, card.key, () => new Map<ZoneId, number>());
       zones.set(zone, (zones.get(zone) ?? 0) + card.quantity);
     }
   }
@@ -338,11 +339,27 @@ export function findCard(snapshot: CanonicalSnapshot, zone: ZoneId, key: CardKey
   return zoneCards(snapshot, zone).find((c) => c.key === key);
 }
 
-/** All distinct card keys with their latest display name, sorted by key. */
-export function allCards(snapshot: CanonicalSnapshot): { key: CardKey; name: string }[] {
+/** Display name of every card by key: the first zone in canonical order that has the card names it. */
+export function cardNames(snapshot: CanonicalSnapshot): Map<CardKey, string> {
   const names = new Map<CardKey, string>();
   for (const zone of snapshotZones(snapshot)) {
     for (const card of zoneCards(snapshot, zone)) if (!names.has(card.key)) names.set(card.key, card.name);
   }
-  return [...names.entries()].sort(([a], [b]) => compareStrings(a, b)).map(([key, name]) => ({ key, name }));
+  return names;
+}
+
+/** Display name of one card (see {@link cardNames}), or `undefined` when the snapshot has no such card. */
+export function cardName(snapshot: CanonicalSnapshot, key: CardKey): string | undefined {
+  for (const zone of snapshotZones(snapshot)) {
+    const card = findCard(snapshot, zone, key);
+    if (card) return card.name;
+  }
+  return undefined;
+}
+
+/** All distinct card keys with their display name, sorted by key. */
+export function allCards(snapshot: CanonicalSnapshot): { key: CardKey; name: string }[] {
+  return [...cardNames(snapshot)]
+    .sort(([a], [b]) => compareStrings(a, b))
+    .map(([key, name]) => ({ key, name }));
 }

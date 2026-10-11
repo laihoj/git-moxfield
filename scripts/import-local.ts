@@ -29,7 +29,9 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { pluralize } from '@/core/text';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
+import { formatBytes } from '@/lib/format';
 import { getConfig, type AppConfig } from '@/server/config';
 import type { Db } from '@/server/db/client';
 import { createLibsqlDatabase, databaseFileOf, type LibsqlDatabase } from '@/server/db/libsql';
@@ -140,16 +142,12 @@ function parseArguments(argv: readonly string[]): ImportArguments | 'help' {
   };
 }
 
-function plural(count: number, noun: string, plural = `${noun}s`): string {
-  return `${count} ${count === 1 ? noun : plural}`;
-}
-
 function describeCounts(counts: ImportCounts): string {
-  const parts = [plural(counts.versions, 'version')];
-  if (counts.tags > 0) parts.push(plural(counts.tags, 'tag'));
-  if (counts.notes > 0) parts.push(plural(counts.notes, 'note'));
-  if (counts.observations > 0) parts.push(plural(counts.observations, 'observation'));
-  if (counts.relinks > 0) parts.push(plural(counts.relinks, 'Moxfield deck change'));
+  const parts = [pluralize(counts.versions, 'version')];
+  if (counts.tags > 0) parts.push(pluralize(counts.tags, 'tag'));
+  if (counts.notes > 0) parts.push(pluralize(counts.notes, 'note'));
+  if (counts.observations > 0) parts.push(pluralize(counts.observations, 'observation'));
+  if (counts.relinks > 0) parts.push(pluralize(counts.relinks, 'Moxfield deck change'));
   return parts.join(', ');
 }
 
@@ -157,18 +155,12 @@ function describeDeck(deck: ImportDeck): string {
   return `“${deck.name}” (${deck.source}:${deck.externalId})`;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1000) return `${bytes} B`;
-  if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} KB`;
-  return `${(bytes / 1_000_000).toFixed(1)} MB`;
-}
-
 function describePlan(plan: DeckImportPlan): string {
   switch (plan.action) {
     case 'import':
       return `  import    ${describeDeck(plan.deck)}: ${describeCounts(plan.counts)}`;
     case 'skip':
-      return `  skip      ${describeDeck(plan.deck)}: already imported (${plural(plan.counts.versions, 'version')})`;
+      return `  skip      ${describeDeck(plan.deck)}: already imported (${pluralize(plan.counts.versions, 'version')})`;
     case 'conflict':
       return `  CONFLICT  ${describeDeck(plan.deck)}: ${plan.message}`;
   }
@@ -256,7 +248,7 @@ async function importHistory(
   const toImport = plan.decks.filter((deck) => deck.action === 'import');
   if (conflicts.length > 0 && !args.skipExisting) {
     io.err(
-      `Nothing was imported: ${plural(conflicts.length, 'deck conflicts', 'decks conflict')} with what ` +
+      `Nothing was imported: ${pluralize(conflicts.length, 'deck conflicts', 'decks conflict')} with what ` +
         `${user.displayName} has (see above). Either stop tracking the conflicting deck in git-moxfield ` +
         '(that deletes its history there) and run the import again, or pass --skip-existing to import the ' +
         'other decks and leave it as it is.',
@@ -265,8 +257,8 @@ async function importHistory(
   }
   if (args.dryRun) {
     io.out(
-      `Dry run: would import ${plural(toImport.length, 'deck')}` +
-        `${conflicts.length > 0 ? ` and leave out ${plural(conflicts.length, 'conflicting deck')}` : ''}. ` +
+      `Dry run: would import ${pluralize(toImport.length, 'deck')}` +
+        `${conflicts.length > 0 ? ` and leave out ${pluralize(conflicts.length, 'conflicting deck')}` : ''}. ` +
         'Nothing was written.',
     );
     return 0;
@@ -277,7 +269,7 @@ async function importHistory(
     io.out(
       conflicts.length === 0
         ? 'Nothing to import: the target has every deck already.'
-        : `Nothing to import: the target has the other decks already; ${plural(conflicts.length, 'conflicting deck')} left out.`,
+        : `Nothing to import: the target has the other decks already; ${pluralize(conflicts.length, 'conflicting deck')} left out.`,
     );
     return 0;
   }
@@ -287,8 +279,8 @@ async function importHistory(
     onProgress: (event) => {
       if (event.kind === 'copying') {
         io.out(
-          `Importing ${describeDeck(event.deck.deck)}: copying ${plural(event.snapshots, 'snapshot')} and ` +
-            `${plural(event.rawBlobs, 'raw payload')} (${formatBytes(event.bytes)})…`,
+          `Importing ${describeDeck(event.deck.deck)}: copying ${pluralize(event.snapshots, 'snapshot')} and ` +
+            `${pluralize(event.rawBlobs, 'raw payload')} (${formatBytes(event.bytes)})…`,
         );
       } else {
         io.out(`  Imported as deck ${event.targetDeckId}; versions, tags and notes checked.`);
@@ -296,9 +288,10 @@ async function importHistory(
     },
   });
   const versions = result.imported.reduce((sum, deck) => sum + deck.plan.counts.versions, 0);
-  const parts = [`imported ${plural(result.imported.length, 'deck')} (${plural(versions, 'version')})`];
+  const parts = [`imported ${pluralize(result.imported.length, 'deck')} (${pluralize(versions, 'version')})`];
   if (result.alreadyImported.length > 0) parts.push(`${result.alreadyImported.length} already imported`);
-  if (result.skipped.length > 0) parts.push(`${plural(result.skipped.length, 'conflicting deck')} left out`);
+  if (result.skipped.length > 0)
+    parts.push(`${pluralize(result.skipped.length, 'conflicting deck')} left out`);
   io.out(`Done: ${parts.join('; ')}.`);
   return 0;
 }

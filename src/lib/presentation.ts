@@ -2,6 +2,8 @@
  * Shared wording for domain states, so the deck list, the status panel and the
  * version pages describe the same thing with the same words (docs/ux.md).
  */
+import { isRecord } from '@/core/guards';
+import { upperFirst } from '@/core/text';
 import type { DeckSourceErrorCode, IngestMethod } from '@/integrations/deck-source';
 import type { DeckStatus, DeckSummaryDTO, SharedDeckDTO, VersionRefDTO } from '@/server/services/types';
 
@@ -105,7 +107,7 @@ export function describeFetchError(code: DeckSourceErrorCode): string {
 export function formatLabel(format: string): string {
   if (format === '') return '';
   if (format.toLowerCase() === 'cedh') return 'cEDH';
-  return format.charAt(0).toUpperCase() + format.slice(1);
+  return upperFirst(format);
 }
 
 /**
@@ -114,9 +116,5 @@ export function formatLabel(format: string): string {
  */
 export function noteText(data: unknown): string {
   if (typeof data === 'string') return data;
-  if (typeof data === 'object' && data !== null && 'text' in data) {
-    const { text } = data;
-    if (typeof text === 'string') return text;
-  }
-  return '';
+  return isRecord(data) && typeof data.text === 'string' ? data.text : '';
 }

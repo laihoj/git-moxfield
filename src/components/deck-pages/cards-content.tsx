@@ -6,6 +6,7 @@ import { ZoneBadge } from '@/components/deck/zone-badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
+import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { CardSearchResultDTO } from '@/server/services/types';
@@ -17,7 +18,7 @@ export const CARD_RESULT_LIMIT = 50;
 
 /** The parsed `?q=` of the Cards page: trimmed and bounded; `''` for no search. */
 export function cardQuery(value: string | string[] | undefined): string {
-  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+  return typeof value === 'string' ? value.trim().slice(0, MAX_CARD_QUERY_LENGTH) : '';
 }
 
 export interface CardsContentProps {

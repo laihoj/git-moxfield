@@ -55,6 +55,7 @@ export function toVersionListItemDTO(input: {
     stats: diff.stats,
     primer: diff.primer,
     commanders: commanderNames(snapshot),
+    commandersChanged: parent !== null && diff.commanders.changed,
     playedCardCount: playedCardCount(snapshot),
     ingestMethod: commit.ingestMethod,
   };

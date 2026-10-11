@@ -24,7 +24,7 @@
 import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
-import { commitId, sha256Hex } from '@/core/hash';
+import { deckReference, isContentAddressed, sha256Hex } from '@/core/hash';
 import {
   branches,
   cardCatalog,
@@ -167,10 +167,10 @@ export function deckReferences(
   relinks: readonly DeckRelinkRow[],
 ): string[] {
   return distinct([
-    `${deck.source}:${deck.externalId}`,
+    deckReference(deck),
     ...relinks.flatMap((relink) => [
-      `${deck.source}:${relink.previousExternalId}`,
-      `${deck.source}:${relink.externalId}`,
+      deckReference({ source: deck.source, externalId: relink.previousExternalId }),
+      deckReference({ source: deck.source, externalId: relink.externalId }),
     ]),
   ]);
 }
@@ -184,23 +184,7 @@ export function assertCommitsContentAddressed(
   references: readonly string[],
 ): void {
   for (const row of rows) {
-    const verified = references.some((deck) => {
-      try {
-        return (
-          commitId({
-            deck,
-            snapshotHash: row.snapshotHash,
-            parentId: row.parentId,
-            createdAt: row.createdAt,
-            sourceVersion: row.sourceVersion,
-            message: row.message,
-          }) === row.id
-        );
-      } catch {
-        return false;
-      }
-    });
-    if (!verified) {
+    if (!isContentAddressed(row, references)) {
       throw new RepositoryError(
         'invalid-input',
         `Version v${row.sequence} (commit ${row.id}) does not match its content under any of the deck's references (${references.join(', ')})`,

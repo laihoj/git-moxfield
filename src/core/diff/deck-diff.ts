@@ -11,11 +11,13 @@
  * mutable objects with them, and the work is linear in the number of card entries
  * (plus sorting the resulting changes).
  */
-import { compareStrings, printingIdentity, snapshotZones, zoneCards } from '../canonical';
+import { commanderNames, compareStrings, printingIdentity, snapshotZones, zoneCards } from '../canonical';
+import { getOrCreate, groupInto } from '../collections';
 import type { CanonicalPrinting, CanonicalSnapshot, CardKey, DeckInfo } from '../model';
 import { primerChange } from '../primer/primer-diff';
-import { compareZones, sortZones, type ZoneId } from '../zones';
+import { compareZones, zoneEntries, type ZoneId } from '../zones';
 import {
+  primerHasChange,
   STRATEGIC_CHANGE_TYPES,
   type AddedChange,
   type CardChange,
@@ -86,7 +88,7 @@ export function diffSnapshots(before: CanonicalSnapshot, after: CanonicalSnapsho
   const primer = primerChange(before.primer, after.primer);
 
   const hasCardChanges = changes.some((change) => STRATEGIC_CHANGE_TYPES.has(change.type));
-  const hasOtherChanges = deck.length > 0 || primer.status === 'changed' || primer.status === 'captured';
+  const hasOtherChanges = deck.length > 0 || primerHasChange(primer);
   const isEmpty = changes.length === 0 && !hasOtherChanges;
 
   return {
@@ -179,11 +181,11 @@ function indexSnapshot(snapshot: CanonicalSnapshot): Map<CardKey, IndexedCard> {
   const index = new Map<CardKey, IndexedCard>();
   for (const zone of snapshotZones(snapshot)) {
     for (const card of zoneCards(snapshot, zone)) {
-      let indexed = index.get(card.key);
-      if (!indexed) {
-        indexed = { name: card.name, zones: new Map<ZoneId, ZoneEntry>(), identityTokens: new Set<string>() };
-        index.set(card.key, indexed);
-      }
+      const indexed = getOrCreate(index, card.key, () => ({
+        name: card.name,
+        zones: new Map<ZoneId, ZoneEntry>(),
+        identityTokens: new Set<string>(),
+      }));
       const entry = indexed.zones.get(zone);
       if (entry) {
         // Canonical snapshots have one entry per (zone, key); merge defensively anyway.
@@ -227,11 +229,7 @@ function reconcileRenames(
 function keysByToken(cards: ReadonlyMap<CardKey, IndexedCard>): Map<string, CardKey[]> {
   const byToken = new Map<string, CardKey[]>();
   for (const [key, card] of cards) {
-    for (const token of card.identityTokens) {
-      const keys = byToken.get(token);
-      if (keys) keys.push(key);
-      else byToken.set(token, [key]);
-    }
+    for (const token of card.identityTokens) groupInto(byToken, token, key);
   }
   return byToken;
 }
@@ -268,16 +266,12 @@ function collectZoneDeltas(
   resolveKey: (key: CardKey) => CardKey,
 ): Map<CardKey, Map<ZoneId, ZoneDelta>> {
   const deltas = new Map<CardKey, Map<ZoneId, ZoneDelta>>();
-  const slot = (key: CardKey, zone: ZoneId): ZoneDelta => {
-    let zones = deltas.get(key);
-    if (!zones) deltas.set(key, (zones = new Map<ZoneId, ZoneDelta>()));
-    let delta = zones.get(zone);
-    if (!delta) {
-      delta = { zone, before: 0, after: 0, beforePrintings: [], afterPrintings: [] };
-      zones.set(zone, delta);
-    }
-    return delta;
-  };
+  const slot = (key: CardKey, zone: ZoneId): ZoneDelta =>
+    getOrCreate(
+      getOrCreate(deltas, key, () => new Map<ZoneId, ZoneDelta>()),
+      zone,
+      () => ({ zone, before: 0, after: 0, beforePrintings: [], afterPrintings: [] }),
+    );
   // Renames are injective onto keys absent from `before`, so slots never collide.
   for (const [key, card] of beforeIndex) {
     for (const [zone, entry] of card.zones) {
@@ -297,10 +291,7 @@ function collectZoneDeltas(
 }
 
 function sortZoneDeltas(zones: ReadonlyMap<ZoneId, ZoneDelta>): ZoneDelta[] {
-  return sortZones(zones.keys()).flatMap((zone) => {
-    const delta = zones.get(zone);
-    return delta ? [delta] : [];
-  });
+  return zoneEntries(zones).map(([, delta]) => delta);
 }
 
 /**
@@ -422,13 +413,14 @@ class ChangeCollector {
     this.zone(change.from).movedOut += change.quantity;
     this.zone(change.to).movedIn += change.quantity;
     const edge = `${change.from}\u0000${change.to}`;
-    const stats = this.moves.get(edge);
-    if (stats) {
-      stats.quantity += change.quantity;
-      stats.cards += 1;
-    } else {
-      this.moves.set(edge, { from: change.from, to: change.to, quantity: change.quantity, cards: 1 });
-    }
+    const stats = getOrCreate(this.moves, edge, () => ({
+      from: change.from,
+      to: change.to,
+      quantity: 0,
+      cards: 0,
+    }));
+    stats.quantity += change.quantity;
+    stats.cards += 1;
   }
 
   /** Records an addition, removal or quantity change; `residual` is the signed copy delta. */
@@ -445,10 +437,7 @@ class ChangeCollector {
   }
 
   stats(tagChanges: number): DiffStats {
-    const zones = sortZones(this.zones.keys()).flatMap((zone) => {
-      const stats = this.zones.get(zone);
-      return stats ? [{ ...stats }] : [];
-    });
+    const zones = zoneEntries(this.zones).map(([, stats]) => ({ ...stats }));
     const moves = [...this.moves.values()]
       .map((stats) => ({ ...stats }))
       .sort((a, b) => compareZones(a.from, b.from) || compareZones(a.to, b.to));
@@ -456,12 +445,7 @@ class ChangeCollector {
   }
 
   private zone(zone: ZoneId): ZoneDiffStats {
-    let stats = this.zones.get(zone);
-    if (!stats) {
-      stats = { zone, added: 0, removed: 0, movedIn: 0, movedOut: 0 };
-      this.zones.set(zone, stats);
-    }
-    return stats;
+    return getOrCreate(this.zones, zone, () => ({ zone, added: 0, removed: 0, movedIn: 0, movedOut: 0 }));
   }
 }
 
@@ -480,15 +464,26 @@ function diffCardTags(
   const keys = new Set([...beforeTags.keys(), ...afterTags.keys()]);
   const changes: CardTagsChange[] = [];
   for (const key of keys) {
-    const was = beforeTags.get(key) ?? new Set<string>();
-    const is = afterTags.get(key) ?? new Set<string>();
-    const added = [...is].filter((tag) => !was.has(tag)).sort(compareStrings);
-    const removed = [...was].filter((tag) => !is.has(tag)).sort(compareStrings);
+    const { added, removed } = tagDelta(
+      beforeTags.get(key) ?? new Set<string>(),
+      afterTags.get(key) ?? new Set<string>(),
+    );
     if (added.length > 0 || removed.length > 0) {
       changes.push({ type: 'tags', key, name: nameOf(key), added, removed });
     }
   }
   return changes;
+}
+
+/** Tags only `after` has and tags only `before` has, each sorted (ordinal). */
+function tagDelta(
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+): { added: string[]; removed: string[] } {
+  return {
+    added: [...after].filter((tag) => !before.has(tag)).sort(compareStrings),
+    removed: [...before].filter((tag) => !after.has(tag)).sort(compareStrings),
+  };
 }
 
 function tagSets(
@@ -497,9 +492,7 @@ function tagSets(
 ): Map<CardKey, Set<string>> {
   const sets = new Map<CardKey, Set<string>>();
   for (const [key, tags] of Object.entries(cardTags)) {
-    const resolved = resolveKey(key);
-    let set = sets.get(resolved);
-    if (!set) sets.set(resolved, (set = new Set<string>()));
+    const set = getOrCreate(sets, resolveKey(key), () => new Set<string>());
     for (const tag of tags) set.add(tag);
   }
   return sets;
@@ -510,16 +503,11 @@ function diffDeckInfo(before: DeckInfo, after: DeckInfo): DeckInfoChange[] {
   for (const field of ['name', 'format', 'description'] as const) {
     if (before[field] !== after[field]) changes.push({ field, before: before[field], after: after[field] });
   }
-  if (!sameStringSet(before.tags, after.tags)) {
-    changes.push({ field: 'tags', before: [...before.tags], after: [...after.tags] });
+  const { added, removed } = tagDelta(new Set(before.tags), new Set(after.tags));
+  if (added.length > 0 || removed.length > 0) {
+    changes.push({ field: 'tags', before: [...before.tags], after: [...after.tags], added, removed });
   }
   return changes;
-}
-
-function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
-  const setA = new Set(a);
-  const setB = new Set(b);
-  return setA.size === setB.size && [...setA].every((value) => setB.has(value));
 }
 
 function commanderSummary(
@@ -527,11 +515,9 @@ function commanderSummary(
   after: CanonicalSnapshot,
   changes: readonly CardChange[],
 ): CommanderSummary {
-  const names = (snapshot: CanonicalSnapshot): string[] =>
-    [...zoneCards(snapshot, 'commanders')].sort((a, b) => compareStrings(a.key, b.key)).map((c) => c.name);
   return {
-    before: names(before),
-    after: names(after),
+    before: commanderNames(before),
+    after: commanderNames(after),
     changed: changes.some(
       (change) => STRATEGIC_CHANGE_TYPES.has(change.type) && changeTouchesZone(change, 'commanders'),
     ),

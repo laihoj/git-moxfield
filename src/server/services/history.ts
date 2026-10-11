@@ -16,13 +16,14 @@
  */
 import 'server-only';
 
-import { allCards, cardZoneIndex, emptySnapshot } from '@/core/canonical';
+import { allCards, cardName, cardZoneIndex, emptySnapshot } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
 import { diffSnapshots, renamedKeys } from '@/core/diff';
 import { deriveCardHistory, traceCardKeys } from '@/core/history/card-history';
 import type { CardHistory, CardVersionPoint, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { primerLineDiff } from '@/core/primer/primer-diff';
+import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
 import type { RestoreExport, RestoreTarget } from '@/integrations/deck-source';
 import {
   DEFAULT_CARD_SEARCH_LIMIT,
@@ -60,9 +61,6 @@ import type {
 
 /** Upper bound for card search results. */
 export const MAX_CARD_SEARCH_LIMIT = 100;
-
-/** Longest card search query considered; card names are far shorter. */
-const MAX_SEARCH_QUERY_LENGTH = 200;
 
 /**
  * The repository methods that read a deck's committed history, and nothing else: no
@@ -293,7 +291,7 @@ export class DeckHistory {
       : DEFAULT_CARD_SEARCH_LIMIT;
     const hits = await this.repos.cardIndex.searchCardsInDeck(
       deckId,
-      query.slice(0, MAX_SEARCH_QUERY_LENGTH),
+      query.slice(0, MAX_CARD_QUERY_LENGTH),
       boundedLimit,
       { includeWorking },
     );
@@ -557,9 +555,4 @@ class CardHistoryInputs {
     }
     return wantedKeys.length + wantedCommits.length;
   }
-}
-
-/** Display name of a card in a snapshot (first zone that has it), if present. */
-function cardName(snapshot: CanonicalSnapshot, key: CardKey): string | undefined {
-  return allCards(snapshot).find((card) => card.key === key)?.name;
 }

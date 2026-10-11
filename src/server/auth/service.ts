@@ -35,6 +35,7 @@
  */
 import 'server-only';
 
+import { groupInto } from '@/core/collections';
 import { buildBookmarklet } from '@/integrations/moxfield/capture';
 import type { AppConfig } from '@/server/config';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
@@ -1370,9 +1371,7 @@ function descendantKeyIds(all: readonly CredentialRecord[], rootId: string): str
   const children = new Map<string, CredentialRecord[]>();
   for (const key of all) {
     if (key.createdByCredentialId === null) continue;
-    const siblings = children.get(key.createdByCredentialId) ?? [];
-    siblings.push(key);
-    children.set(key.createdByCredentialId, siblings);
+    groupInto(children, key.createdByCredentialId, key);
   }
   const found: CredentialRecord[] = [];
   const seen = new Set([rootId]);

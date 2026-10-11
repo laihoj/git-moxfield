@@ -11,7 +11,7 @@
  */
 import { expect } from 'vitest';
 
-import { commitId } from '@/core/hash';
+import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
 import { openDatabase, type OpenDatabaseOptions } from '@/server/db/client';
@@ -189,7 +189,7 @@ export function commitTestSnapshot(
     const message = options.message ?? `Version ${sequence}`;
     const sourceVersion = options.sourceVersion === undefined ? sequence : options.sourceVersion;
     const id = commitId({
-      deck: `${deck.source}:${deck.externalId}`,
+      deck: deckReference(deck),
       snapshotHash,
       parentId,
       createdAt,

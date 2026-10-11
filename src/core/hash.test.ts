@@ -6,7 +6,10 @@ import { emptySnapshot, stableStringify } from './canonical';
 import {
   COMMIT_OBJECT_VERSION,
   commitId,
+  commitObjectOf,
   type CommitObject,
+  deckReference,
+  isContentAddressed,
   serializeCommitObject,
   sha256Hex,
   shortId,
@@ -156,6 +159,34 @@ describe('commitId', () => {
 
   it('does not change with message line-ending style', () => {
     expect(commitId({ ...base, message: base.message.replace(/\n/g, '\r\n') })).toBe(commitId(base));
+  });
+});
+
+describe('deckReference, commitObjectOf and isContentAddressed', () => {
+  const { deck: _deck, ...content } = base;
+
+  it('builds the deck header from the source and the external id', () => {
+    expect(deckReference({ source: 'moxfield', externalId: 'FixtureDeckId_00000001' })).toBe(base.deck);
+  });
+
+  it('puts stored commit content and a deck reference together as the commit object', () => {
+    expect(commitObjectOf({ ...content, extra: 'ignored' } as typeof content, base.deck)).toEqual(base);
+    expect(commitId(commitObjectOf(content, base.deck))).toBe(commitId(base));
+  });
+
+  it('accepts an id that is the hash of the content under any listed reference, and nothing else', () => {
+    const commit = { ...content, id: commitId(base) };
+    expect(isContentAddressed(commit, [base.deck])).toBe(true);
+    expect(isContentAddressed(commit, ['moxfield:Other', base.deck])).toBe(true);
+    expect(isContentAddressed(commit, ['moxfield:Other'])).toBe(false);
+    expect(isContentAddressed(commit, [])).toBe(false);
+    expect(isContentAddressed({ ...commit, message: 'edited' }, [base.deck])).toBe(false);
+    expect(isContentAddressed({ ...commit, sourceVersion: null }, [base.deck])).toBe(false);
+  });
+
+  it('treats content that cannot be serialized as not content addressed', () => {
+    const commit = { ...content, createdAt: '2026-10-09\n12:34', id: 'whatever' };
+    expect(isContentAddressed(commit, [base.deck])).toBe(false);
   });
 });
 

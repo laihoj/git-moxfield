@@ -163,7 +163,7 @@ describe('diffSnapshots — additions, removals and quantities', () => {
       deck: [
         { field: 'name', before: '', after: 'Blue Farm' },
         { field: 'format', before: '', after: 'commander' },
-        { field: 'tags', before: [], after: ['cEDH'] },
+        { field: 'tags', before: [], after: ['cEDH'], added: ['cEDH'], removed: [] },
       ],
       primer: { status: 'changed', addedLines: 3, removedLines: 0 },
       commanders: { before: [], after: BASE_COMMANDERS, changed: true },
@@ -884,7 +884,7 @@ describe('diffSnapshots — card tags, deck info and primer', () => {
           { field: 'format', before: 'commander', after: 'duel' },
           { field: 'description', before: '', after: 'Turbo' },
           // Ordinal (UTF-16) order: uppercase sorts before lowercase.
-          { field: 'tags', before: ['cEDH'], after: ['Turbo', 'cEDH'] },
+          { field: 'tags', before: ['cEDH'], after: ['Turbo', 'cEDH'], added: ['Turbo'], removed: [] },
         ],
         hasCardChanges: false,
         onlyCosmetic: false,

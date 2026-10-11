@@ -107,6 +107,14 @@ export class DeckSourceError extends Error {
   }
 }
 
+/**
+ * Whole seconds from `nowMs` until `untilMs` (epoch milliseconds), rounded up and at least
+ * 0: the `retryAfterSeconds` of a pause that lasts until a deadline. `NaN` in, `NaN` out.
+ */
+export function retryAfterSecondsUntil(untilMs: number, nowMs: number): number {
+  return Math.max(0, Math.ceil((untilMs - nowMs) / 1000));
+}
+
 export function isDeckSourceError(value: unknown): value is DeckSourceError {
   if (value instanceof DeckSourceError) return true;
   return (
@@ -116,11 +124,20 @@ export function isDeckSourceError(value: unknown): value is DeckSourceError {
   );
 }
 
+/**
+ * How a section is restored on the source site: `paste` it into a Bulk Edit board (the
+ * primary action), `manual` when the source sets it with an action of its own (the
+ * command zone), `reference` when the source cannot restore it by pasting at all (the list
+ * is only there to read).
+ */
+export type RestoreSectionKind = 'paste' | 'manual' | 'reference';
+
 /** One block of restore text, intended to be pasted into one place on the source site. */
 export interface RestoreSection {
   zone: ZoneId;
   /** Human label, e.g. `Mainboard`. */
   label: string;
+  kind: RestoreSectionKind;
   /** Where to paste it, e.g. `Bulk Edit → Mainboard`. */
   target: string;
   /** Text to paste. Deterministic. Ends with a newline when non-empty. */

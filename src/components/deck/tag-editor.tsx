@@ -6,7 +6,7 @@ import { useId, useOptimistic, useRef, useState, useTransition, type SubmitEvent
 import { addTagAction, removeTagAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/field';
-import { normalizeTagInput, tagProblem } from '@/lib/tags';
+import { normalizeTagInput, tagProblem } from '@/core/tags';
 
 export interface TagEditorProps {
   deckId: string;

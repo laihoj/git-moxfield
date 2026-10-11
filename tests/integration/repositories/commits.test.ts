@@ -6,6 +6,7 @@ import type { CanonicalSnapshot } from '@/core/model';
 import { commits } from '@/server/db/schema';
 import {
   createRepositories,
+  isCommitIdPrefix,
   type CommitRecord,
   type DeckRecord,
   type Repositories,
@@ -285,6 +286,16 @@ describe('commits repository', () => {
       expect(await repos.commits.findByIdPrefix(deck.id, `${v1.id.slice(0, 6)}%`)).toBeNull();
       expect(await repos.commits.findByIdPrefix(deck.id, 'v1')).toBeNull();
       expect(await repos.commits.findByIdPrefix(deck.id, `${v1.id}0`)).toBeNull();
+    });
+
+    it('knows what a commit id prefix looks like: 4 to 64 lower-case hex characters', () => {
+      expect(isCommitIdPrefix('abcd')).toBe(true);
+      expect(isCommitIdPrefix('0123456789abcdef'.repeat(4))).toBe(true);
+      expect(isCommitIdPrefix('abc')).toBe(false);
+      expect(isCommitIdPrefix('0123456789abcdef'.repeat(4) + '0')).toBe(false);
+      expect(isCommitIdPrefix('ABCD')).toBe(false);
+      expect(isCommitIdPrefix('abcg')).toBe(false);
+      expect(isCommitIdPrefix('')).toBe(false);
     });
 
     it('returns null for ambiguous prefixes', async () => {
