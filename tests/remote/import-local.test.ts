@@ -15,7 +15,7 @@ import { ensureLocalWorkspace } from '@/server/db/client';
 import { applyMigrations } from '@/server/db/migration-state';
 import { createRepositories } from '@/server/repositories';
 import { createServices } from '@/server/services';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 import {
   blueFarmSpec,
   commitReviewed,
@@ -43,7 +43,7 @@ beforeAll(async () => {
 
 describe('pnpm import:local into a remote database', () => {
   it('imports a local installation’s history, identical, and skips it the second time', async () => {
-    const path = join(tempDir('git-moxfield-remote-import-'), 'git-moxfield.db');
+    const path = join(scratchDir('git-moxfield-remote-import-'), 'git-moxfield.db');
     const harness = await createServiceHarness({ databaseUrl: pathToFileURL(path).href });
     // A long primer makes a raw payload of a realistic size.
     const spec = blueFarmSpec({

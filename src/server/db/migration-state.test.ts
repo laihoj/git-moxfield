@@ -2,11 +2,17 @@ import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { eq, sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { countRows, seedDeckHistory, tempDir, tempFileUrl } from '@tests/support/libsql';
+import {
+  countRows,
+  openRawDatabase,
+  scratchDir,
+  scratchFileUrl,
+  seedDeckHistory,
+} from '@tests/support/libsql';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from './libsql';
+import type { LibsqlDatabase } from './libsql';
 import {
   applyMigrations,
   assertMigrationsApplied,
@@ -32,16 +38,8 @@ const IMMUTABILITY_TRIGGERS = [
   'snapshots_immutable_update',
 ];
 
-const opened: LibsqlDatabase[] = [];
-
-afterEach(() => {
-  for (const handle of opened.splice(0)) handle.close();
-});
-
-async function open(url = ':memory:'): Promise<LibsqlDatabase> {
-  const handle = await createLibsqlDatabase({ url });
-  opened.push(handle);
-  return handle;
+function open(url = ':memory:'): Promise<LibsqlDatabase> {
+  return openRawDatabase({ url });
 }
 
 interface ExtraMigration {
@@ -55,7 +53,7 @@ interface ExtraMigration {
  * plus extra hand-written migrations.
  */
 function migrationsFolder(entries: readonly MigrationJournalEntry[], extra: ExtraMigration[] = []): string {
-  const folder = tempDir('git-moxfield-migrations-');
+  const folder = scratchDir('git-moxfield-migrations-');
   mkdirSync(join(folder, 'meta'));
   for (const entry of entries) {
     copyFileSync(join(DEFAULT_MIGRATIONS_FOLDER, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
@@ -95,7 +93,7 @@ describe('bundledMigrations', () => {
 
 describe.each([
   ['in memory', () => ':memory:'],
-  ['in a file', () => tempFileUrl()],
+  ['in a file', () => scratchFileUrl()],
 ])('migrations %s', (_, url) => {
   it('takes a new database from missing to up to date, once', async () => {
     const handle = await open(url());
@@ -166,7 +164,7 @@ describe.each([
 describe('applyMigrations on a populated database', () => {
   it('upgrades it without losing or orphaning rows', async () => {
     const all = bundledMigrations();
-    const { db } = await open(tempFileUrl());
+    const { db } = await open(scratchFileUrl());
     await applyMigrations(db, { migrationsFolder: migrationsFolder(all.slice(0, 2)) });
     const seeded = await seedDeckHistory(db);
     // The catalog before 0005 made it per workspace.

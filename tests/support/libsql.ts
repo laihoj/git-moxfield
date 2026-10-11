@@ -4,25 +4,57 @@
  * modules and by the opt-in remote suite (`tests/remote`).
  */
 import { execFile } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { eq, sql } from 'drizzle-orm';
+import { afterAll, onTestFinished } from 'vitest';
 
-import type { LibsqlExecutor } from '@/server/db/libsql';
+import {
+  createLibsqlDatabase,
+  type LibsqlDatabase,
+  type LibsqlDatabaseOptions,
+  type LibsqlExecutor,
+} from '@/server/db/libsql';
 import * as schema from '@/server/db/schema';
 
-/** A fresh, empty temporary directory. */
-export function tempDir(prefix = 'git-moxfield-db-'): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+/**
+ * Runs `cleanup` when the current test finishes, after the cleanups registered later
+ * (vitest runs them in reverse: register a directory before the databases opened in it).
+ * Outside a test (in `describe` scope or `beforeAll`) it runs when the file's tests are done.
+ */
+export function cleanUpAfterTest(cleanup: () => void | Promise<void>): void {
+  try {
+    onTestFinished(cleanup);
+  } catch {
+    afterAll(cleanup);
+  }
 }
 
-/** A `file:` URL for a database in a fresh temporary directory (the file does not exist yet). */
-export function tempFileUrl(name = 'test.db'): string {
-  return `file:${join(tempDir(), name)}`;
+/** A fresh, empty temporary directory, removed when the test finishes. */
+export function scratchDir(prefix = 'git-moxfield-db-'): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  cleanUpAfterTest(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
+
+/** A `file:` URL for a database in a scratch directory (the file does not exist yet). */
+export function scratchFileUrl(name = 'test.db'): string {
+  return `file:${join(scratchDir(), name)}`;
+}
+
+/** A database opened with `createLibsqlDatabase` (not migrated), closed when the test finishes. */
+export async function openRawDatabase(options: LibsqlDatabaseOptions): Promise<LibsqlDatabase> {
+  const handle = await createLibsqlDatabase(options);
+  cleanUpAfterTest(() => {
+    handle.close();
+  });
+  return handle;
 }
 
 export interface SeededHistory {
@@ -142,7 +174,8 @@ function integerResult(column: string, value: number | undefined): unknown {
  * A minimal libSQL server (Hrana 2 over HTTP, JSON) that answers every statement with one
  * integer row: `PRAGMA foreign_keys` with `foreignKeys`, statements matching `empty` with
  * no rows, anything else with 1. Enough to open a remote database without a real server.
- * With `status`, it answers every request with that HTTP status instead.
+ * With `status`, it answers every request with that HTTP status instead. Closed when the
+ * test finishes (closing it earlier is fine).
  */
 export async function startHranaStub(options: HranaStubOptions = {}): Promise<HranaStub> {
   let requests = 0;
@@ -182,17 +215,20 @@ export async function startHranaStub(options: HranaStubOptions = {}): Promise<Hr
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }));
+  cleanUpAfterTest(close);
   return {
     url: `http://127.0.0.1:${port}`,
     requests: () => requests,
     statements: () => [...statements],
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      }),
+    close,
   };
 }
 

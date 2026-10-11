@@ -9,7 +9,7 @@
  * atomically), so tests can build realistic histories quickly. Everything is asynchronous,
  * like the database.
  */
-import { expect, onTestFinished } from 'vitest';
+import { expect } from 'vitest';
 
 import { commitId } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
@@ -28,6 +28,8 @@ import {
   type RepositoryErrorCode,
   type RepositoryOptions,
 } from '@/server/repositories';
+
+import { cleanUpAfterTest } from './libsql';
 
 export { countRows } from './libsql';
 
@@ -74,21 +76,6 @@ export async function expectDatabaseError(
 }
 
 /**
- * Closes `handle` when the current test finishes. Outside a test (in `beforeAll` or at
- * module level) there is no test to wait for; the database then lives as long as the test
- * file's worker.
- */
-function closeWhenTestFinishes(handle: LibsqlDatabase): void {
-  try {
-    onTestFinished(() => {
-      handle.close();
-    });
-  } catch {
-    // Not inside a test: nothing to attach the cleanup to.
-  }
-}
-
-/**
  * Opens a migrated database with the local workspace (default: an isolated in-memory one)
  * and closes it when the current test finishes. For tests that need the handle itself
  * (its client, its write lock, closing and reopening a file).
@@ -97,7 +84,9 @@ export async function openTestDatabaseHandle(
   options: Partial<OpenDatabaseOptions> = {},
 ): Promise<LibsqlDatabase> {
   const handle = await openDatabase({ url: ':memory:', ...options });
-  closeWhenTestFinishes(handle);
+  cleanUpAfterTest(() => {
+    handle.close();
+  });
   return handle;
 }
 

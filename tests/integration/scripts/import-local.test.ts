@@ -6,12 +6,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { parseConfig, type AppConfig } from '@/server/config';
 import { openDatabase, type Db } from '@/server/db/client';
@@ -20,7 +20,7 @@ import { createRepositories, type Repositories } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import { commitTestSnapshot, countRows, createTestDeck, openTestDatabase } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 import {
   blueFarmSpec,
   commitReviewed,
@@ -41,18 +41,6 @@ const MAIN = blueFarmSpec({ publicId: 'ImportBlueFarm00000001', name: 'Blue Farm
 const OTHER = blueFarmSpec({ publicId: 'ImportOtherDeck0000002', name: 'Other deck' });
 /** OTHER, deleted on Moxfield and made again. */
 const OTHER_AGAIN = blueFarmSpec({ publicId: 'ImportOtherDeckNew0003', name: 'Other deck' });
-
-const directories: string[] = [];
-
-afterEach(() => {
-  for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function scratchDir(prefix: string): string {
-  const dir = tempDir(prefix);
-  directories.push(dir);
-  return dir;
-}
 
 interface Installation {
   /** The database file. */

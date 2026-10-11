@@ -1,18 +1,17 @@
 /**
  * Admin user management and the first-run claim (ADR 0006).
  */
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createAuthService, SETUP_CODE_SETTING, SYSTEM_ACTOR } from '@/server/auth/service';
 import { SETUP_CODE_PATTERN } from '@/server/auth/setup-code';
-import { LOCAL_WORKSPACE_ID, openDatabase } from '@/server/db/client';
-import type { LibsqlDatabase } from '@/server/db/libsql';
+import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
+import { openTestDatabaseHandle } from '@tests/support/db';
+import { scratchDir } from '@tests/support/libsql';
 import {
   blueFarmSpec,
   BLUE_FARM_URL,
@@ -291,22 +290,12 @@ describe('claim', () => {
   });
 
   describe('across processes', () => {
-    let dir: string | undefined;
-    const open: LibsqlDatabase[] = [];
-
-    afterEach(() => {
-      for (const handle of open.splice(0)) handle.close();
-      if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
-      dir = undefined;
-    });
-
     it('lets exactly one of two processes claim, although both saw it claimable', async () => {
-      dir = mkdtempSync(join(tmpdir(), 'git-moxfield-claim-'));
+      const dir = scratchDir('git-moxfield-claim-');
       const { config } = await createServiceHarness();
       // Two app instances, each with a connection pool of its own on the same file.
       const start = async () => {
-        const handle = await openDatabase({ url: `file:${join(dir ?? '', 'app.db')}` });
-        open.push(handle);
+        const handle = await openTestDatabaseHandle({ url: `file:${join(dir, 'app.db')}` });
         return createAuthService({ db: handle.db, config, logger: recordingLogger() });
       };
       const first = await start();

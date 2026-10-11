@@ -1,16 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from './db/libsql';
+import { openRawDatabase } from '@tests/support/libsql';
+
 import { createLogger } from './logger';
 
 const SECRET = 'f00dfeed'.repeat(8);
-
-const opened: LibsqlDatabase[] = [];
-
-afterEach(() => {
-  for (const handle of opened.splice(0)) handle.close();
-});
 
 /** Logs at every level and returns the parsed JSON lines. */
 function capture(): () => Record<string, unknown>[] {
@@ -26,8 +21,7 @@ function capture(): () => Record<string, unknown>[] {
 
 /** A real query failure: Drizzle's error carries the SQL and the bound parameters. */
 async function failedQuery(): Promise<unknown> {
-  const handle = await createLibsqlDatabase({ url: ':memory:' });
-  opened.push(handle);
+  const handle = await openRawDatabase({ url: ':memory:' });
   await handle.db.run(sql`CREATE TABLE parents (id TEXT PRIMARY KEY)`);
   await handle.db.run(sql`CREATE TABLE children (token_hash TEXT NOT NULL REFERENCES parents (id))`);
   try {

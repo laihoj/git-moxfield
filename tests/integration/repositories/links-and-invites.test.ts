@@ -2,13 +2,11 @@
  * One-time links and invites: single use, expiry, and single use across connections
  * (two processes of the app share one database file).
  */
-import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
-import type { LibsqlDatabase } from '@/server/db/libsql';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import {
   countRows,
@@ -16,7 +14,7 @@ import {
   expectRepositoryError,
   openTestDatabaseHandle,
 } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 
 const HASH = 'c'.repeat(64);
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -287,25 +285,14 @@ describe('invite repository', () => {
 });
 
 describe('single use across connections', () => {
-  let dir: string | undefined;
-  const open: LibsqlDatabase[] = [];
-
-  afterEach(() => {
-    for (const handle of open.splice(0)) handle.close();
-    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
-    dir = undefined;
-  });
-
   /**
    * Two handles on one database file, like two requests (or, through SQLite's file lock,
    * two processes) of the app.
    */
   async function twoConnections(): Promise<[Repositories, Repositories]> {
-    dir = tempDir('git-moxfield-once-');
-    const url = `file:${join(dir, 'app.db')}`;
+    const url = `file:${join(scratchDir('git-moxfield-once-'), 'app.db')}`;
     const first = await openTestDatabaseHandle({ url });
     const second = await openTestDatabaseHandle({ url });
-    open.push(first, second);
     return [createRepositories(first.db), createRepositories(second.db)];
   }
 

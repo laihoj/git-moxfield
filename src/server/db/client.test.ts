@@ -1,10 +1,10 @@
-import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { startHranaStub, tempDir, type HranaStub } from '@tests/support/libsql';
+import { openTestDatabaseHandle } from '@tests/support/db';
+import { scratchDir, scratchFileUrl, startHranaStub } from '@tests/support/libsql';
 
 import { resetConfigForTests } from '../config';
 import { ensureLocalWorkspace, getDb, LOCAL_WORKSPACE_ID, openDatabase, resetDbForTests } from './client';
@@ -12,34 +12,15 @@ import { DatabaseConfigError, type LibsqlDatabase } from './libsql';
 import { bundledMigrations, checkMigrationState, MigrationStateError } from './migration-state';
 import { workspaces } from './schema';
 
-const opened: LibsqlDatabase[] = [];
-const stubs: HranaStub[] = [];
-const dirs: string[] = [];
-
 afterEach(async () => {
-  for (const handle of opened.splice(0)) handle.close();
-  await Promise.all(stubs.splice(0).map((stub) => stub.close()));
   await resetDbForTests();
   vi.unstubAllEnvs();
   resetConfigForTests();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-async function open(url: string): Promise<LibsqlDatabase> {
-  const handle = await openDatabase({ url });
-  opened.push(handle);
-  return handle;
-}
-
-/** A database file path in a fresh temporary directory, removed after the test. */
+/** A database file path in a fresh scratch directory. */
 function tempDatabasePath(): string {
-  const dir = tempDir('git-moxfield-client-');
-  dirs.push(dir);
-  return join(dir, 'app.db');
-}
-
-function fileUrl(): string {
-  return `file:${tempDatabasePath()}`;
+  return join(scratchDir('git-moxfield-client-'), 'app.db');
 }
 
 async function localWorkspaces(handle: LibsqlDatabase): Promise<unknown[]> {
@@ -48,7 +29,7 @@ async function localWorkspaces(handle: LibsqlDatabase): Promise<unknown[]> {
 
 describe('openDatabase', () => {
   it('migrates a new local database and creates the local workspace', async () => {
-    const handle = await open(':memory:');
+    const handle = await openTestDatabaseHandle({ url: ':memory:' });
     expect(handle.kind).toBe('local');
     expect((await checkMigrationState(handle.db)).status).toBe('up-to-date');
     expect(await localWorkspaces(handle)).toEqual([
@@ -57,12 +38,12 @@ describe('openDatabase', () => {
   });
 
   it('reopens a local file without migrating or seeding it again', async () => {
-    const url = fileUrl();
-    const first = await open(url);
+    const url = scratchFileUrl('app.db');
+    const first = await openTestDatabaseHandle({ url });
     const [created] = await localWorkspaces(first);
     first.close();
 
-    const second = await open(url);
+    const second = await openTestDatabaseHandle({ url });
     expect(await localWorkspaces(second)).toEqual([created]);
     const recorded = await second.db.all(sql`SELECT COUNT(*) AS n FROM __drizzle_migrations`);
     expect(recorded).toEqual([{ n: bundledMigrations().length }]);
@@ -71,7 +52,6 @@ describe('openDatabase', () => {
   it('never migrates a remote database: it refuses one that is not up to date', async () => {
     // A server whose database has no tables yet.
     const stub = await startHranaStub({ empty: /sqlite_master|__drizzle_migrations/ });
-    stubs.push(stub);
 
     const failure = openDatabase({ url: stub.url });
     await expect(failure).rejects.toBeInstanceOf(MigrationStateError);
@@ -84,7 +64,7 @@ describe('openDatabase', () => {
   });
 
   it('creates the local workspace only when it is missing', async () => {
-    const handle = await open(':memory:');
+    const handle = await openTestDatabaseHandle({ url: ':memory:' });
     await handle.db.delete(workspaces).where(eq(workspaces.id, LOCAL_WORKSPACE_ID));
     await ensureLocalWorkspace(handle.db);
     await ensureLocalWorkspace(handle.db);
@@ -117,7 +97,7 @@ describe('getDb', () => {
   });
 
   it('opens an explicit TURSO_DATABASE_URL on Netlify, even a local one', async () => {
-    vi.stubEnv('TURSO_DATABASE_URL', fileUrl());
+    vi.stubEnv('TURSO_DATABASE_URL', scratchFileUrl('app.db'));
     vi.stubEnv('NETLIFY', 'true');
     resetConfigForTests();
     expect((await checkMigrationState(await getDb())).status).toBe('up-to-date');

@@ -3,13 +3,12 @@
  * migrated empty, which hides migrations that fail or lose data on existing installs,
  * so these tests upgrade a file database that holds a deck with history.
  */
-import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { openDatabase } from '@/server/db/client';
 import type { LibsqlDatabase, LibsqlExecutor } from '@/server/db/libsql';
 import { createRepositories } from '@/server/repositories';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
@@ -20,8 +19,9 @@ import {
   expectDatabaseError,
   observeTestSnapshot,
   openTestDatabase,
+  openTestDatabaseHandle,
 } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 
 const MIGRATIONS = join(process.cwd(), 'drizzle');
 
@@ -129,13 +129,10 @@ describe('database migrations', () => {
     let migrations: string;
     let url: string;
     let before: Record<string, number>;
-    const open: LibsqlDatabase[] = [];
 
     /** Opens (and migrates) a database file with the copied migrations folder. */
-    async function openFile(fileUrl: string): Promise<LibsqlDatabase> {
-      const handle = await openDatabase({ url: fileUrl, migrationsFolder: migrations });
-      open.push(handle);
-      return handle;
+    function openFile(fileUrl: string): Promise<LibsqlDatabase> {
+      return openTestDatabaseHandle({ url: fileUrl, migrationsFolder: migrations });
     }
 
     /** Adds a migration after the shipped ones to the copied migrations folder. */
@@ -168,7 +165,7 @@ describe('database migrations', () => {
     }
 
     beforeEach(async () => {
-      dir = tempDir('git-moxfield-migrations-');
+      dir = scratchDir('git-moxfield-migrations-');
       migrations = join(dir, 'drizzle');
       cpSync(MIGRATIONS, migrations, { recursive: true });
       url = `file:${join(dir, 'app.db')}`;
@@ -184,11 +181,6 @@ describe('database migrations', () => {
       before = await rowCounts(handle.db);
       handle.close();
       for (const count of Object.values(before)) expect(count).toBeGreaterThan(0);
-    });
-
-    afterEach(() => {
-      for (const handle of open.splice(0)) handle.close();
-      rmSync(dir, { recursive: true, force: true });
     });
 
     async function reopen(): Promise<LibsqlExecutor> {

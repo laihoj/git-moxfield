@@ -2,11 +2,11 @@ import { LibsqlError } from '@libsql/client/http';
 import { createClient as createLocalClient } from '@libsql/client/sqlite3';
 import { sql, TransactionRollbackError } from 'drizzle-orm';
 import { drizzle as drizzleLocal } from 'drizzle-orm/libsql/sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { holdWriteLockInChildProcess, tempFileUrl } from '@tests/support/libsql';
+import { holdWriteLockInChildProcess, openRawDatabase, scratchFileUrl } from '@tests/support/libsql';
 
-import { createLibsqlDatabase, type LibsqlDatabase, type LibsqlExecutor } from './libsql';
+import type { LibsqlDatabase, LibsqlExecutor } from './libsql';
 import * as schema from './schema';
 import { classifySqlError } from './sql-errors';
 import {
@@ -18,15 +18,8 @@ import {
 } from './transaction';
 import { WriteLockError } from './write-lock';
 
-const opened: LibsqlDatabase[] = [];
-
-afterEach(() => {
-  for (const handle of opened.splice(0)) handle.close();
-});
-
 async function openItems(url: string, options: { busyTimeoutMs?: number } = {}): Promise<LibsqlDatabase> {
-  const handle = await createLibsqlDatabase({ url, ...options });
-  opened.push(handle);
+  const handle = await openRawDatabase({ url, ...options });
   await handle.db.run(sql`CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)`);
   await handle.db.run(sql`CREATE TABLE counter (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`);
   await handle.db.run(sql`INSERT INTO counter VALUES (1, 0)`);
@@ -81,7 +74,7 @@ function transactionTimeout(): LibsqlError {
 
 describe.each([
   ['in memory', () => ':memory:'],
-  ['in a file', () => tempFileUrl()],
+  ['in a file', () => scratchFileUrl()],
 ])('runInTransaction %s', (_, url) => {
   it('commits what the callback did and returns its result', async () => {
     const { db } = await openItems(url());
@@ -362,7 +355,7 @@ describe.each([
 
 describe('runInTransaction on a file shared with another process', () => {
   it('takes the write lock up front (BEGIN IMMEDIATE), even before the first write', async () => {
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     const { db } = await openItems(url, { busyTimeoutMs: 0 });
     const other = createLocalClient({ url });
     try {
@@ -380,7 +373,7 @@ describe('runInTransaction on a file shared with another process', () => {
 
   it('retries while another connection holds the lock', async () => {
     const logs = captureLogs();
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     // In-process stand-in for another process: SQLite's busy wait would block the holder.
     const { db } = await openItems(url, { busyTimeoutMs: 0 });
     const other = createLocalClient({ url });
@@ -398,7 +391,7 @@ describe('runInTransaction on a file shared with another process', () => {
 
   it('reopens its connections after a lock conflict, so later commits are not lost', async () => {
     const logs = captureLogs();
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     const { db } = await openItems(url, { busyTimeoutMs: 0 });
     const other = createLocalClient({ url });
     try {
@@ -428,7 +421,7 @@ describe('runInTransaction on a file shared with another process', () => {
 
   it('waits for a lock held by another process instead of failing', async () => {
     const logs = captureLogs();
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     const { db } = await openItems(url);
     const holder = await holdWriteLockInChildProcess(url, 300);
     try {

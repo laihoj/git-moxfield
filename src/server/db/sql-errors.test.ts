@@ -1,11 +1,11 @@
 import { LibsqlBatchError, LibsqlError } from '@libsql/client/http';
 import { createClient as createLocalClient } from '@libsql/client/sqlite3';
 import { DrizzleQueryError, eq, sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { seedDeckHistory, tempFileUrl } from '@tests/support/libsql';
+import { openRawDatabase, scratchFileUrl, seedDeckHistory } from '@tests/support/libsql';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from './libsql';
+import type { LibsqlDatabase } from './libsql';
 import { applyMigrations } from './migration-state';
 import * as schema from './schema';
 import {
@@ -336,12 +336,8 @@ describe('classifySqlError with real local libSQL errors', () => {
   let database: LibsqlDatabase;
 
   beforeEach(async () => {
-    database = await createLibsqlDatabase({ url: ':memory:' });
+    database = await openRawDatabase({ url: ':memory:' });
     await applyMigrations(database.db);
-  });
-
-  afterEach(() => {
-    database.close();
   });
 
   async function failure(operation: () => Promise<unknown>): Promise<unknown> {
@@ -436,9 +432,9 @@ describe('classifySqlError with real local libSQL errors', () => {
   });
 
   it('classifies a lock held by another connection as busy and retryable', async () => {
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     // No busy wait: the lock holder below runs in this process and could never release it.
-    const handle = await createLibsqlDatabase({ url, busyTimeoutMs: 0 });
+    const handle = await openRawDatabase({ url, busyTimeoutMs: 0 });
     // A second client on the same file, as another process would have.
     const other = createLocalClient({ url });
     try {
@@ -454,7 +450,6 @@ describe('classifySqlError with real local libSQL errors', () => {
       });
     } finally {
       other.close();
-      handle.close();
     }
   });
 });
