@@ -75,7 +75,7 @@ export interface InviteRepository {
     user: { displayName: string; adoptWorkspaceId?: string },
   ): Promise<{ invite: InviteRecord; user: UserRecord } | null>;
   /**
-   * Revokes an invite that is neither used nor revoked yet.
+   * Revokes an invite that is neither used, revoked nor expired at `at`, like login links.
    * @returns whether the invite was revoked.
    */
   revoke(id: string, at: string): Promise<boolean>;
@@ -189,7 +189,7 @@ export function createInviteRepository(ctx: RepositoryContext): InviteRepository
         ctx,
         invites,
         { revokedAt: at },
-        and(eq(invites.id, id), isNull(invites.usedAt), isNull(invites.revokedAt)),
+        and(eq(invites.id, id), pendingInvite(at)),
       );
       return changed > 0;
     },

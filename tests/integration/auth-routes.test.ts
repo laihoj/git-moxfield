@@ -7,10 +7,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type * as AuthModule from '@/server/auth';
-import { HANDOFF_LIFETIME_MS } from '@/server/auth/service';
+import { HANDOFF_LIFETIME_MS, SYSTEM_ACTOR } from '@/server/auth/service';
 import type { SignIn } from '@/server/auth/types';
 import type * as ConfigModule from '@/server/config';
 import { parseConfig, type AppConfig } from '@/server/config';
+import type * as DbClientModule from '@/server/db/client';
 import { createKey, keyOfBookmarklet, signUp } from '@tests/support/auth';
 import { currentHarness, setUpRouteHarness } from '@tests/support/route-harness';
 import { appRequest, setCookies } from '@tests/support/routes';
@@ -27,6 +28,10 @@ vi.mock('@/server/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AuthModule>()),
   getAuthService: () => Promise.resolve(harness().auth),
 }));
+vi.mock('@/server/db/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof DbClientModule>()),
+  getDb: () => Promise.resolve(harness().db),
+}));
 vi.mock('@/server/config', async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigModule>()),
   getConfig: (): AppConfig => state.config ?? harness().config,
@@ -34,6 +39,7 @@ vi.mock('@/server/config', async (importOriginal) => ({
 
 const { GET: handoffRoute, POST: handoffConfirmRoute } = await import('@/app/api/auth/handoff/route');
 const { POST: e2eSession } = await import('@/app/api/e2e/session/route');
+const { POST: e2eInvite } = await import('@/app/api/e2e/invite/route');
 const { GET: e2eSetupCode } = await import('@/app/api/e2e/setup-code/route');
 
 setUpRouteHarness(state, { fakeDate: true });
@@ -371,6 +377,33 @@ describe('test-only e2e endpoints', () => {
     expect(body.user.role).toBe('member');
     expect(body.user.displayName).toMatch(/^Tester [0-9a-f]{6}$/);
     expect((await session({ role: 'owner' })).status).toBe(400);
+  });
+
+  it('issue an invite that expires in the given seconds, for journeys that need one to expire', async () => {
+    enableE2e();
+    const issue = (body: unknown, contentType = 'application/json'): Promise<Response> =>
+      e2eInvite(
+        appRequest('/api/e2e/invite', {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body: JSON.stringify(body),
+        }),
+      );
+    expect((await issue({ note: 'Late', expiresInSeconds: 5 }, 'text/plain')).status).toBe(415);
+    expect((await issue({ note: 'Late', expiresInSeconds: 0 })).status).toBe(400);
+
+    const response = await issue({ note: 'Late', expiresInSeconds: 5 });
+    expect(response.status).toBe(200);
+    const { expiresAt } = (await response.json()) as { expiresAt: string };
+    expect(Date.parse(expiresAt) - Date.now()).toBe(5000);
+    const status = async (): Promise<string[]> =>
+      (await harness().auth.listInvites(SYSTEM_ACTOR)).map((invite) => `${invite.note}: ${invite.status}`);
+    expect(await status()).toEqual(['Late: pending']);
+    harness().clock.advance(5);
+    expect(await status()).toEqual(['Late: expired']);
+
+    state.config = parseConfig({});
+    expect((await issue({ note: 'Late', expiresInSeconds: 5 })).status).toBe(404);
   });
 
   it('read the setup code while the installation is unclaimed', async () => {

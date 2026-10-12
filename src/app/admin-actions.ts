@@ -78,7 +78,9 @@ export async function revokeInviteAction(inviteId: string): Promise<AccountActio
     const auth = await getAuthService();
     const revoked = await auth.revokeInvite(user, id.data);
     revalidatePath(routes.admin());
-    return revoked ? { ok: true } : { ok: false, message: 'This invite was already used or withdrawn.' };
+    return revoked
+      ? { ok: true }
+      : { ok: false, message: 'This invite was already used, withdrawn or expired.' };
   } catch (error) {
     return { ok: false, message: failureMessage(log, error, 'revokeInvite', { userId: user.id }) };
   }
@@ -134,7 +136,7 @@ export async function revokeRecoveryLinkAction(linkId: string): Promise<AccountA
     revalidatePath(routes.admin());
     return revoked
       ? { ok: true }
-      : { ok: false, message: 'This recovery link was already used or withdrawn.' };
+      : { ok: false, message: 'This recovery link was already used, withdrawn or expired.' };
   } catch (error) {
     return { ok: false, message: failureMessage(log, error, 'revokeRecoveryLink', { userId: user.id }) };
   }

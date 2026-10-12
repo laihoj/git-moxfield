@@ -6,6 +6,7 @@
  * no admin page.
  */
 import {
+  createExpiringInvite,
   expectSignedInAs,
   inviteRow,
   openFromAccountMenu,
@@ -173,4 +174,32 @@ test('an admin invite makes another admin, and a withdrawn invite stops working'
     // Admins manage accounts, never decks: nothing on the page leads to anyone's decks.
     await expect(coAdmin.getByRole('main').locator('a[href^="/decks/"]')).toHaveCount(0);
   });
+});
+
+test('an invite that expired while the admin page was open cannot be withdrawn, and shows as expired', async ({
+  page,
+  context,
+}) => {
+  await signIn(context, { role: 'admin', displayName: uniqueName('Admin') });
+  // Warm up the page first: the invite must still be pending when the page shows it.
+  await page.goto('/admin');
+  const note = uniqueName('Too late');
+  const expiresAt = await createExpiringInvite(note, 5);
+  await page.goto('/admin');
+  const row = inviteRow(page, note);
+  await expect(row).toContainText('Pending');
+  const withdraw = row.getByRole('button', { name: `Withdraw the invite for ${note}` });
+  await expect(withdraw).toBeVisible();
+
+  await page.waitForTimeout(Math.max(0, expiresAt.getTime() - Date.now()) + 500);
+  await withdraw.click();
+  await row.getByRole('group').getByRole('button', { name: 'Withdraw invite' }).click();
+  // Refused: the page shows the invite as it is now, expired, with nothing to withdraw.
+  await expect(row).toContainText('Expired');
+  await expect(row).not.toContainText('Withdrawn');
+  await expect(withdraw).toHaveCount(0);
+
+  await page.reload();
+  await expect(inviteRow(page, note)).toContainText('Expired');
+  await expect(inviteRow(page, note)).not.toContainText('Withdrawn');
 });

@@ -433,6 +433,18 @@ describe('invites', () => {
     expect(await harness.repos.users.count()).toBe(0);
   });
 
+  it('cannot be withdrawn once expired, like login links, and stay expired', async () => {
+    const harness = await createServiceHarness();
+    const late = await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member', note: 'Late' });
+    harness.clock.advance(INVITE_LIFETIME_MS / 1000);
+
+    expect(await harness.auth.revokeInvite(SYSTEM_ACTOR, late.invite.id)).toBe(false);
+    expect(await harness.auth.getInvite(tokenOfPath(late.path))).toEqual({ status: 'expired' });
+    expect((await harness.auth.listInvites(SYSTEM_ACTOR)).map((invite) => invite.status)).toEqual([
+      'expired',
+    ]);
+  });
+
   it('create exactly one user when accepted twice at the same time', async () => {
     const harness = await createServiceHarness();
     const token = tokenOfPath((await harness.auth.createInvite(SYSTEM_ACTOR, { role: 'member' })).path);

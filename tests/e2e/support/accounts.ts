@@ -119,6 +119,20 @@ export async function readSetupCode(): Promise<string | null> {
   return ((await response.json()) as { setupCode: string | null }).setupCode;
 }
 
+/**
+ * Issues an invite from the command line that expires in `seconds`, for journeys in
+ * which it expires while a page shows it (`POST /api/e2e/invite`). Resolves with its expiry.
+ */
+export async function createExpiringInvite(note: string, seconds: number): Promise<Date> {
+  const response = await fetch(`${APP_URL}/api/e2e/invite`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ note, expiresInSeconds: seconds }),
+  });
+  if (!response.ok) throw new Error(`POST ${APP_URL}/api/e2e/invite answered ${response.status}`);
+  return new Date(((await response.json()) as { expiresAt: string }).expiresAt);
+}
+
 /** The header's account menu button of a signed-in page. */
 export function accountMenuButton(page: Page, displayName: string): Locator {
   return page.getByRole('button', { name: `Account menu, signed in as ${displayName}` });
