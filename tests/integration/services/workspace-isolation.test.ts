@@ -58,7 +58,7 @@ describe('deck services: workspace isolation', () => {
     const before = defined(await alice.services.getOverview(deckId));
     const working = defined(before.working);
 
-    await expectServiceError(bob.refresh(deckId, 'manual'), 'not-found');
+    await expectServiceError(bob.refresh(deckId), 'not-found');
     await expectServiceError(
       bob.commit(deckId, {
         message: 'Hijack',

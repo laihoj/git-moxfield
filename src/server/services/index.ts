@@ -28,7 +28,7 @@ export { FREE_TEXT_NOTE_KIND, RECENT_VERSION_COUNT } from './deck-services';
 export { MAX_CARD_SEARCH_LIMIT } from './history';
 export { ServiceError, isServiceError, type ServiceErrorCode } from './errors';
 export { KeyedMutex } from './mutex';
-export { setupInfo } from './setup-info';
+export { moxfieldOrigins, setupInfo } from './setup-info';
 export { createShareLinkServices, type ShareLinkServicesDependencies } from './share-links';
 export {
   openSharedDeck,

@@ -76,14 +76,20 @@ export type RelinkDeckOutcome =
       trackedBy?: { deckId: string; name: string; versionCount: number };
     };
 
-export interface SetupInfoDTO {
-  serverFetch: ServerFetchStatus;
-  /** Whether a Moxfield-issued User-Agent is configured (value never exposed). */
-  userAgentConfigured: boolean;
+/** Where Moxfield is and who may hand captures over: no secrets, no database reads. */
+export interface MoxfieldOriginsDTO {
   /** Origins allowed to hand captured decks to /capture. */
   captureAllowedOrigins: string[];
   moxfieldSiteOrigin: string;
   moxfieldApiBaseUrl: string;
+}
+
+export interface SetupInfoDTO extends MoxfieldOriginsDTO {
+  serverFetch: ServerFetchStatus;
+  /** Whether a Moxfield-issued User-Agent is configured (value never exposed). */
+  userAgentConfigured: boolean;
+  /** Why the configured User-Agent should not be used here (see `moxfieldUserAgentWarning`), or `null`. */
+  userAgentWarning: string | null;
 }
 
 /**
@@ -142,8 +148,11 @@ export interface DeckServices {
   relinkDeck(deckId: string, input: string): Promise<RelinkDeckOutcome>;
 
   getOverview(deckId: string): Promise<DeckOverviewDTO | null>;
-  /** Server-side fetch of the current Moxfield state. Respects cooldowns and block backoff. */
-  refresh(deckId: string, trigger: 'manual' | 'auto'): Promise<FetchOutcome>;
+  /**
+   * Server-side fetch of the current Moxfield state, when the user asks for it. Respects the
+   * per-deck cooldown and the installation-wide request limiter (ADR 0009).
+   */
+  refresh(deckId: string): Promise<FetchOutcome>;
   /**
    * Ingests a deck handed over by the user's browser (bookmarklet) or pasted manually,
    * into the workspace. `data` is untrusted.
@@ -185,7 +194,7 @@ export interface DeckServices {
    * Configuration facts for the setup page. Holds no secrets. (Pages without a signed-in
    * user use `getSetupInfo()` from `@/server/access`.)
    */
-  getSetupInfo(): SetupInfoDTO;
+  getSetupInfo(): Promise<SetupInfoDTO>;
 }
 
 /** A share link to create (see {@link ShareLinkServices.createShareLink}). */

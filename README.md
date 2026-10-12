@@ -262,11 +262,16 @@ normally. git-moxfield never tries to evade this. It supports three honest paths
    and hands them to git-moxfield. A _same tab_ variant exists for phones and in-app
    browsers, which block popups. Each bookmarklet carries your personal key and is shown
    only once.
-2. **Server fetch.** Automatic refresh, used when it works. If Moxfield grants you an
-   API User-Agent, put it in `MOXFIELD_USER_AGENT` and refresh becomes fully
-   automatic. When blocked, server fetches pause for an hour
-   (`MOXFIELD_BLOCK_BACKOFF_SECONDS`) and the UI switches to the bookmarklet. On Netlify
-   it is off by default (`MOXFIELD_SERVER_FETCH=off`): Cloudflare blocks cloud servers.
+2. **Server fetch.** **Refresh** fetches the deck from Moxfield, and every commit checks
+   it first; nothing is fetched in the background. It works when Moxfield grants you an
+   API User-Agent (`MOXFIELD_USER_AGENT`; see
+   [Turn on server fetching](#turn-on-server-fetching-with-moxfields-user-agent)). All
+   servers of an installation together send at most one request every 2 s (Moxfield's
+   terms allow one per second), a 429 slows all of them down, and a refusal pauses
+   server fetching until an admin resumes it
+   ([ADR 0009](docs/adr/0009-global-moxfield-rate-limit.md)); the UI then switches to the
+   bookmarklet. On Netlify it is off by default (`MOXFIELD_SERVER_FETCH=off`):
+   Cloudflare blocks cloud servers without the User-Agent.
 3. **Paste JSON.** `/capture?mode=paste` explains which two URLs to open and paste.
 
 Details, endpoints and failure handling: [`docs/moxfield-integration.md`](docs/moxfield-integration.md).
@@ -399,6 +404,53 @@ computer with `pnpm install` done.
 12. **Bring your local history** (optional): see
     [Moving your local history to the hosted instance](#moving-your-local-history-to-the-hosted-instance).
 
+### Turn on server fetching with Moxfield's User-Agent
+
+Optional, and only if Moxfield issued you a User-Agent. Its terms: **at most one API call
+per second**, no profit, never share the User-Agent, no support. git-moxfield keeps the
+limit for every function instance together through the database
+([ADR 0009](docs/adr/0009-global-moxfield-rate-limit.md)), so:
+
+- **The User-Agent is a secret.** Set it only in the production site's Netlify
+  environment variables, never in `.env`, `.env.local` or any other file, chat or
+  issue. Logs and pages never show it.
+- **Only one deployment uses it.** Each deployment (another site, `netlify dev`, your
+  computer) has a database of its own and so a limit of its own: together they could
+  exceed one call per second. A deployment that needs server fetching needs a User-Agent
+  of its own. git-moxfield warns loudly when the User-Agent is configured anywhere but in
+  Netlify's production deployment.
+
+1. In Netlify, _Project configuration › Environment variables › Add a variable_:
+   `MOXFIELD_USER_AGENT` with the value Moxfield gave you, scope **Functions** (at least),
+   deploy context **Production**, and mark it **Contains secret values**. Paste it there
+   and nowhere else.
+2. Add `MOXFIELD_SERVER_FETCH` = `auto` (production context).
+3. Leave `MOXFIELD_MIN_REQUEST_INTERVAL_MS` unset: the default is one request every
+   2,000 ms. It can be lowered to 1,500 at the least; the app refuses anything lower
+   against Moxfield.
+4. Deploy (_Deploys › Trigger deploy › Deploy site_). The deploy applies migration 0010,
+   which adds the limiter.
+
+**One safe manual test.** Pick one public deck of your own, then:
+
+1. Open _Admin_ (signed in as the admin). _Server fetching from Moxfield_ must say
+   "Moxfield-issued User-Agent configured", "Interval 2 s" and "Never rate limited",
+   with no warning.
+2. Open the deck's page and click **Refresh** once. Two requests go out (deck and
+   primer, 2 s apart): the page shows "Updated from Moxfield" (or "checked just now").
+3. Do not click again for a minute, and do not test with loops or several tabs.
+4. If the page says "Moxfield asked us to slow down", wait: it ends on its own. If it says
+   "Moxfield blocked the server", server fetching is paused for everyone: do not resume
+   it right away. Read the reason on _Admin_, find out why (is the User-Agent exactly
+   the one Moxfield issued, is the deck public?), then resume on _Admin_ or with
+   `pnpm moxfield resume`.
+
+To switch it off again, set `MOXFIELD_SERVER_FETCH` to `off` and deploy. From your
+computer, `pnpm moxfield status` (with `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` of the
+production database in your shell, not in a file) shows the state, and
+`pnpm moxfield resume` resumes after a refusal; neither contacts Moxfield nor needs the
+User-Agent.
+
 **Updating.** Every push to `main` builds, migrates and publishes a new deploy (15
 credits). Migrations run before publishing, so the deploy still live keeps serving on
 them for a moment; that is why every migration stays compatible with the previous
@@ -414,7 +466,8 @@ holds everyone's decks and account records: keep it private.
 (host check, session cookie refresh) as an edge function in front of every page, and
 runs pages, server actions and the capture endpoints in one Node function in Ohio, which
 talks to Turso over HTTPS. With server fetching off (the default there), the server never
-contacts Moxfield: decks arrive through your browser. See
+contacts Moxfield: decks arrive through your browser. With it on, the server asks
+Moxfield only when someone refreshes, tracks or relinks a deck, or commits. See
 [`docs/architecture.md`](docs/architecture.md#deployment).
 
 ## Free plans and their limits
@@ -576,6 +629,7 @@ Full design: [`docs/architecture.md`](docs/architecture.md). UX:
 | `pnpm mock-moxfield`           | Mock Moxfield API, deck page and control API on :4010                |
 | `pnpm seed:demo`               | Seed a demo deck with 8 versions and print a sign-in link            |
 | `pnpm users <command>`         | `invite [--admin]`, `list`, `recover <user>`, `claim-code`           |
+| `pnpm moxfield <command>`      | `status`, `resume` (server fetching after Moxfield refused)          |
 | `pnpm build` / `pnpm start`    | Production build / server (this computer only)                       |
 | `pnpm start:lan`               | Production server reachable from your network                        |
 | `pnpm db:migrate`              | Apply migrations (automatic for a local file; required for Turso)    |
@@ -749,13 +803,11 @@ Netlify, set `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `PUBLIC_APP_URL` (see
 | `PUBLIC_APP_URL`                   | request origin              | The app's public URL: baked into bookmarklets and links, allowed as a host |
 | `ALLOWED_HOSTS`                    | —                           | Other host names to answer to, e.g. `mybox.local` (see security notes)     |
 | `CAPTURE_ALLOWED_ORIGINS`          | `https://moxfield.com`      | Origins allowed to hand decks to `/capture`                                |
-| `MOXFIELD_USER_AGENT`              | —                           | Moxfield-issued User-Agent for server-side access                          |
+| `MOXFIELD_USER_AGENT`              | —                           | Moxfield-issued User-Agent (secret; Netlify production only)               |
 | `MOXFIELD_SERVER_FETCH`            | `auto` (`off` on Netlify)   | `off` = bookmarklet/paste only                                             |
-| `MOXFIELD_BLOCK_BACKOFF_SECONDS`   | `3600`                      | Pause after a Cloudflare block                                             |
-| `MOXFIELD_MIN_REQUEST_INTERVAL_MS` | `1000`                      | Spacing between Moxfield requests                                          |
+| `MOXFIELD_MIN_REQUEST_INTERVAL_MS` | `2000`                      | Spacing of Moxfield requests, all instances together (at least `1500`)     |
 | `MOXFIELD_TIMEOUT_MS`              | `15000`                     | Timeout of one Moxfield request                                            |
 | `REFRESH_COOLDOWN_SECONDS`         | `10`                        | Minimum time between refreshes of one deck                                 |
-| `AUTO_REFRESH_AFTER_SECONDS`       | `300`                       | Deck page refreshes in the background when older                           |
 | `LOG_LEVEL`                        | `info`                      | `debug`, `info`, `warn` or `error`                                         |
 | `MOXFIELD_API_BASE_URL`            | `https://api2.moxfield.com` | Moxfield API (tests point it at the mock)                                  |
 | `MOXFIELD_SITE_ORIGIN`             | `https://moxfield.com`      | Moxfield website (deck URLs, capture origin)                               |
@@ -891,8 +943,8 @@ Verified against live Moxfield on 2026-10-09.
    same account (ADR 0006), and sharing a deck with a specific user (the viewer scope of
    ADR 0007).
 7. **GitHub sync.** Push `export:git` output to a repository automatically.
-8. **Official Moxfield access.** If Moxfield grants an API UA, enable background
-   refresh on load. With an official write API, add opt-in restore write-back.
+8. **Official Moxfield access.** With an official write API, add opt-in restore
+   write-back.
 9. **Browser extension.** Replaces the bookmarklet where installation friction is
    acceptable, with no popup or CSP dependency.
 
@@ -918,6 +970,9 @@ Verified against live Moxfield on 2026-10-09.
   One access layer; owner scope per workspace, a read-only viewer scope per share link.
 - [ADR 0008: Hosting on Netlify with Turso](docs/adr/0008-hosting-netlify-and-turso.md).
   Free hosting, libSQL everywhere, compressed captures, migrations in the deploy.
+- [ADR 0009: One request limit for every instance](docs/adr/0009-global-moxfield-rate-limit.md).
+  Moxfield's one call per second, kept in one database row by every function instance;
+  429s slow everyone down, refusals pause until an admin resumes; no background fetching.
 
 ---
 

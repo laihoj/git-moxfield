@@ -344,6 +344,30 @@ describe('database migrations', () => {
       expect(await countRows(db, 'deck_relinks')).toBe(0);
     });
 
+    it('adds the Moxfield request limiter, with its only row, to a database with history (0010)', async () => {
+      const restoreJournal = journalBefore('0010_moxfield_rate');
+      const fresh = `file:${join(dir, 'before-0010.db')}`;
+      const old = await openFile(fresh);
+      const deck = await createTestDeck(createRepositories(old.db));
+      expect(await sqliteNames(old.db, 'table')).not.toContain('moxfield_rate');
+      old.close();
+
+      restoreJournal();
+      const db = (await openFile(fresh)).db;
+      const repos = createRepositories(db);
+      expect(await countRows(db, 'moxfield_rate')).toBe(1);
+      const state = await repos.moxfieldRate.state();
+      expect(state).toMatchObject({ nextSlotMs: 0, pausedAtMs: null, backoffUntilMs: 0, rateLimitCount: 0 });
+      expect(await repos.moxfieldRate.reserve({ intervalMs: 2_000, maxWaitMs: 10_000 })).toMatchObject({
+        granted: true,
+        intervalMs: 2_000,
+      });
+      // Exactly one row, ever.
+      await expect(db.run(sql`INSERT INTO moxfield_rate (id) VALUES (2)`)).rejects.toThrow();
+      expect(await repos.decks.getById(deck.id)).not.toBeNull();
+      expect(await sqliteNames(db, 'trigger')).toEqual(IMMUTABILITY_TRIGGERS);
+    });
+
     it('opens an up-to-date database unchanged', async () => {
       const db = await reopen();
       expect(await rowCounts(db)).toEqual(before);

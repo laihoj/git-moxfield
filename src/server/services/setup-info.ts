@@ -10,14 +10,23 @@ import { MOXFIELD_SOURCE_ID } from '@/integrations/moxfield/constants';
 import type { AppConfig } from '@/server/config';
 import type { DeckSourceRegistry } from '@/server/sources';
 
-import type { SetupInfoDTO } from './contract';
+import type { MoxfieldOriginsDTO, SetupInfoDTO } from './contract';
 
-export function setupInfo(config: AppConfig, sources: DeckSourceRegistry): SetupInfoDTO {
+/** The Moxfield origins and capture origins of the installation (no database read). */
+export function moxfieldOrigins(config: AppConfig): MoxfieldOriginsDTO {
   return {
-    serverFetch: sources.require(MOXFIELD_SOURCE_ID).serverFetchStatus(),
-    userAgentConfigured: config.MOXFIELD_USER_AGENT !== undefined,
     captureAllowedOrigins: [...config.captureAllowedOrigins],
     moxfieldSiteOrigin: config.moxfieldSiteOrigin,
     moxfieldApiBaseUrl: config.MOXFIELD_API_BASE_URL,
+  };
+}
+
+/** {@link moxfieldOrigins} and whether server fetching works (reads the request limiter). */
+export async function setupInfo(config: AppConfig, sources: DeckSourceRegistry): Promise<SetupInfoDTO> {
+  return {
+    ...moxfieldOrigins(config),
+    serverFetch: await sources.require(MOXFIELD_SOURCE_ID).serverFetchStatus(),
+    userAgentConfigured: config.moxfieldUserAgent !== undefined,
+    userAgentWarning: config.moxfieldUserAgentWarning,
   };
 }

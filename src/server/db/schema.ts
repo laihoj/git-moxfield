@@ -15,6 +15,7 @@
 import { sql } from 'drizzle-orm';
 import {
   blob,
+  check,
   index,
   integer,
   primaryKey,
@@ -307,6 +308,40 @@ export const appSettings = sqliteTable('app_settings', {
   value: text('value').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+/**
+ * The installation-wide limiter of server-side requests to Moxfield (ADR 0009): exactly one
+ * row (`id = 1`, created by the migration), shared by every process and function instance
+ * that uses this database. Times are epoch milliseconds of the **database's** clock
+ * (`unixepoch('subsec')`), never an instance's, so instance clock skew cannot matter.
+ * Only `src/server/repositories/moxfield-rate.ts` reads or writes it, one atomic statement
+ * at a time.
+ */
+export const moxfieldRate = sqliteTable(
+  'moxfield_rate',
+  {
+    id: integer('id').primaryKey(),
+    /** The earliest time the next request may start: every reservation advances it. */
+    nextSlotMs: integer('next_slot_ms').notNull().default(0),
+    /** The start time granted by the latest reservation; `NULL` when it was refused. */
+    lastGrantMs: integer('last_grant_ms'),
+    /** After a 429: no request starts before this time. */
+    backoffUntilMs: integer('backoff_until_ms').notNull().default(0),
+    /** 429s in a row, each within the slow period of the previous one (exponential backoff). */
+    backoffLevel: integer('backoff_level').notNull().default(0),
+    /** Until this time the interval between requests is doubled (a 429's slow period). */
+    slowUntilMs: integer('slow_until_ms').notNull().default(0),
+    /** The latest 429, `NULL` when there never was one. */
+    lastRateLimitedMs: integer('last_rate_limited_ms'),
+    /** Every 429 ever answered (for the operator). */
+    rateLimitCount: integer('rate_limit_count').notNull().default(0),
+    /** When a 403 or a bot-protection challenge paused server fetching; `NULL` when not paused. */
+    pausedAtMs: integer('paused_at_ms'),
+    /** Why it was paused; `NULL` when not paused. */
+    pauseReason: text('pause_reason'),
+  },
+  (t) => [check('moxfield_rate_single_row', sql`${t.id} = 1`)],
+);
 
 // ---------------------------------------------------------------------------
 // Accounts and access (ADR 0006, ADR 0007)

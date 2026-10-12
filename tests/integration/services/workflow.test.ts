@@ -77,7 +77,6 @@ describe('deck services: the core workflow', () => {
       warnings: [],
       recentVersions: [],
       serverFetch: { state: 'available' },
-      autoRefreshSuggested: false,
       suggestedMessage: 'Initial version',
     });
     const initialWorking = defined(initial.working);
@@ -223,31 +222,26 @@ describe('deck services: the core workflow', () => {
     expect(api.requests).toEqual([]);
   });
 
-  it('suggests a background refresh only when the deck was last checked long enough ago', async () => {
+  it('never fetches when a deck page is opened, however old the last check is', async () => {
     const { services, api, clock } = await createServiceHarness();
     api.setDeck(blueFarmSpec());
     const tracked = await services.trackDeck(BLUE_FARM_URL);
     if (!tracked.ok) throw new Error(tracked.reason);
-
-    expect((await services.getOverview(tracked.deckId))?.autoRefreshSuggested).toBe(false);
-    clock.advance(299);
-    expect((await services.getOverview(tracked.deckId))?.autoRefreshSuggested).toBe(false);
-    clock.advance(1);
-    expect((await services.getOverview(tracked.deckId))?.autoRefreshSuggested).toBe(true);
-
-    // A failed attempt counts as a check: no retry on every page load.
-    api.mode = 'down';
-    expect(await services.refresh(tracked.deckId, 'auto')).toMatchObject({ ok: false });
-    clock.advance(60);
-    expect((await services.getOverview(tracked.deckId))?.autoRefreshSuggested).toBe(false);
+    const requests = api.requests.length;
+    clock.advance(30 * 86_400);
+    defined(await services.getOverview(tracked.deckId));
+    await services.listDecks();
+    expect(api.requests).toHaveLength(requests);
   });
 
   it('exposes setup information without the User-Agent value', async () => {
     const { services } = await createServiceHarness({ env: { MOXFIELD_USER_AGENT: 'secret-agent/1.0' } });
-    const setup = services.getSetupInfo();
+    const setup = await services.getSetupInfo();
     expect(setup).toEqual({
       serverFetch: { state: 'available' },
       userAgentConfigured: true,
+      // Tests do not run on Netlify: a User-Agent here is warned about.
+      userAgentWarning: expect.stringContaining('outside the Netlify production deployment') as unknown,
       captureAllowedOrigins: ['https://moxfield.com'],
       moxfieldSiteOrigin: 'https://moxfield.com',
       moxfieldApiBaseUrl: 'https://api2.moxfield.test',

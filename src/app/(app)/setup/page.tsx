@@ -34,7 +34,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
   const { welcome: rawWelcome } = await searchParams;
   const welcome = WELCOME_REASONS.find((reason) => reason === rawWelcome) ?? null;
   const requestHeaders = await headers();
-  const setup = getSetupInfo();
+  const setup = await getSetupInfo();
   const appUrl = publicAppUrl(requestHeaders);
   const auth = await getAuthService();
   const keys = await auth.listKeys(user);
@@ -112,7 +112,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
       <Card as="section" aria-labelledby="ua-heading" className="flex flex-col gap-3">
         <h2 id="ua-heading" className="flex items-center gap-2 text-base font-semibold text-fg">
           <KeyRound aria-hidden="true" className="size-4 text-muted" />
-          Automatic refresh with a Moxfield User-Agent
+          Server fetching with a Moxfield User-Agent
         </h2>
         <p className="text-sm text-muted">
           Moxfield&apos;s bot protection (Cloudflare) blocks requests from servers unless they carry a
@@ -124,10 +124,17 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
           . git-moxfield never disguises itself as a browser.
         </p>
         <p className="text-sm text-muted">
-          If you get one, add it to <InlineCode>.env.local</InlineCode> as{' '}
-          <InlineCode>MOXFIELD_USER_AGENT=…</InlineCode> and restart. Decks then refresh on their own when you
-          open them and before every commit.
+          If you get one, it is a secret: set it only as the <InlineCode>MOXFIELD_USER_AGENT</InlineCode>{' '}
+          environment variable of the production site on Netlify, never in a file. Refresh then fetches a deck
+          from Moxfield, and every commit checks it first. All of git-moxfield&apos;s servers together send
+          Moxfield at most one request per second (by default one every two seconds), and nothing is fetched
+          in the background.
         </p>
+        {setup.userAgentWarning !== null && (
+          <Alert tone="error" title="This User-Agent should not be configured here">
+            {setup.userAgentWarning}
+          </Alert>
+        )}
         <p className="text-sm">
           {setup.userAgentConfigured ? (
             <span className="inline-flex items-center gap-1.5 font-medium text-add">
@@ -148,34 +155,45 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
 
 function ServerFetchCard({ setup }: { setup: SetupInfoDTO }) {
   const status = setup.serverFetch;
-  if (status.state === 'available') {
-    return (
-      <Alert tone={setup.userAgentConfigured ? 'success' : 'info'} title="Server fetch: on">
-        {setup.userAgentConfigured
-          ? 'git-moxfield fetches decks from Moxfield itself, using your Moxfield-issued User-Agent.'
-          : 'git-moxfield will try to fetch decks itself. Without a Moxfield-issued User-Agent, Moxfield usually blocks this; git-moxfield then pauses server fetching and you use the bookmarklet instead.'}
-      </Alert>
-    );
+  switch (status.state) {
+    case 'available':
+      return (
+        <Alert tone={setup.userAgentConfigured ? 'success' : 'info'} title="Server fetch: on">
+          {setup.userAgentConfigured
+            ? 'Refresh fetches decks from Moxfield, using your Moxfield-issued User-Agent.'
+            : 'Refresh will try to fetch decks from Moxfield. Without a Moxfield-issued User-Agent, Moxfield usually blocks this; git-moxfield then pauses server fetching and you use the bookmarklet instead.'}
+        </Alert>
+      );
+    case 'rate-limited':
+      return (
+        <Alert tone="warn" title="Server fetch: slowed down by Moxfield">
+          <p>{status.reason}</p>
+          <p className="mt-1 text-muted">
+            Resumes at <ClockTime value={status.retryAt} /> (<RelativeTime value={status.retryAt} future />
+            ), then runs at half speed for a while.
+          </p>
+        </Alert>
+      );
+    case 'paused':
+      return (
+        <Alert tone="warn" title="Server fetch: paused">
+          <p>{status.reason}</p>
+          <p className="mt-1 text-muted">
+            Paused since <ClockTime value={status.pausedAt} /> (<RelativeTime value={status.pausedAt} />
+            ), until an admin resumes it on the <TextLink href={routes.admin()}>Admin</TextLink> page.
+          </p>
+        </Alert>
+      );
+    case 'disabled':
+      return (
+        <Alert tone="info" title="Server fetch: off">
+          <p>{status.reason}</p>
+          <p className="mt-1 text-muted">
+            Set <InlineCode tone="tinted">MOXFIELD_SERVER_FETCH=auto</InlineCode> to turn it on.
+          </p>
+        </Alert>
+      );
   }
-  if (status.state === 'blocked') {
-    return (
-      <Alert tone="warn" title="Server fetch: blocked by Moxfield">
-        <p>{status.reason}</p>
-        <p className="mt-1 text-muted">
-          Paused until <ClockTime value={status.retryAt} /> (<RelativeTime value={status.retryAt} future />
-          ).
-        </p>
-      </Alert>
-    );
-  }
-  return (
-    <Alert tone="info" title="Server fetch: off">
-      <p>{status.reason}</p>
-      <p className="mt-1 text-muted">
-        Set <InlineCode tone="tinted">MOXFIELD_SERVER_FETCH=auto</InlineCode> to turn it on.
-      </p>
-    </Alert>
-  );
 }
 
 const WELCOME: Record<WelcomeReason, (name: string) => { title: string; body: string }> = {

@@ -11,7 +11,7 @@ import { Card } from '@/components/ui/card';
 import { ExternalLink } from '@/components/ui/external-link';
 import { IconTile } from '@/components/ui/item-list';
 import { routes } from '@/lib/routes';
-import { getSetupInfo } from '@/server/access';
+import { getMoxfieldOrigins } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { getCurrentUser } from '@/server/auth/current-user';
 import { safeRedirectPath } from '@/server/auth/paths';
@@ -33,7 +33,7 @@ export default async function SignInPage({ searchParams }: PageProps<'/signin'>)
 
   const auth = await getAuthService();
   const claimable = await auth.isClaimable();
-  const { moxfieldSiteOrigin } = getSetupInfo();
+  const { moxfieldSiteOrigin } = getMoxfieldOrigins();
   const moxfieldHost = new URL(moxfieldSiteOrigin).host;
 
   return (

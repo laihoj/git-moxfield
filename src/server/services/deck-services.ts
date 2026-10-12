@@ -129,8 +129,11 @@ export interface DeckServicesDependencies {
   locks: KeyedMutex;
 }
 
-/** Why the server fetched a deck: an explicit or automatic refresh, or a commit. */
-type FetchReason = 'manual' | 'auto' | 'commit';
+/**
+ * Why the server fetched a deck: the user refreshed it (also when tracking or relinking it)
+ * or committed it. Nothing fetches in the background (ADR 0009).
+ */
+type FetchReason = 'refresh' | 'commit';
 
 interface Ingested {
   observation: ObservationRecord;
@@ -302,14 +305,15 @@ class DefaultDeckServices implements DeckServices {
         this.repos.decks.listRelinks(deck.id),
       ]);
       const { head, working, diff } = state;
-      const serverFetch = this.sources.require(deck.source).serverFetchStatus();
+      const serverFetchStatus = this.sources.require(deck.source).serverFetchStatus();
       const snapshot = state.workingSnapshot ?? state.headSnapshot;
       const commanderKeys = snapshot ? zoneCards(snapshot, 'commanders').map((card) => card.key) : [];
       let suggestedMessage = '';
       if (diff !== null) suggestedMessage = head ? suggestCommitMessage(diff) : INITIAL_VERSION_MESSAGE;
-      const [recentVersions, catalog] = await Promise.all([
+      const [recentVersions, catalog, serverFetch] = await Promise.all([
         this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
         this.history.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
+        serverFetchStatus,
       ]);
 
       return {
@@ -320,7 +324,6 @@ class DefaultDeckServices implements DeckServices {
         recentVersions,
         serverFetch,
         catalog,
-        autoRefreshSuggested: this.autoRefreshSuggested(deck, working, serverFetch),
         suggestedMessage,
       };
     });
@@ -330,7 +333,7 @@ class DefaultDeckServices implements DeckServices {
   // Ingestion: server refresh and browser capture
   // -------------------------------------------------------------------------
 
-  refresh(deckId: string, trigger: 'manual' | 'auto'): Promise<FetchOutcome> {
+  refresh(deckId: string): Promise<FetchOutcome> {
     return this.locks.run(deckId, async (): Promise<FetchOutcome> => {
       const deck = await this.requireDeck(deckId);
       const source = this.sources.require(deck.source);
@@ -348,10 +351,10 @@ class DefaultDeckServices implements DeckServices {
           },
         };
       }
-      const unavailable = unavailableError(source.serverFetchStatus(), now);
+      const unavailable = unavailableError(await source.serverFetchStatus(), now);
       if (unavailable) return { ok: false, error: unavailable };
 
-      const result = await this.fetchAndIngest(deck, source, trigger);
+      const result = await this.fetchAndIngest(deck, source, 'refresh');
       if (!result.ok) return result;
       return {
         ok: true,
@@ -409,7 +412,7 @@ class DefaultDeckServices implements DeckServices {
 
   /** A first fetch of `deckId`, when its source can be fetched from the server; `null` otherwise. */
   private async refreshIfAvailable(source: DeckSource, deckId: string): Promise<FetchOutcome | null> {
-    return source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+    return (await source.serverFetchStatus()).state === 'available' ? await this.refresh(deckId) : null;
   }
 
   /**
@@ -574,7 +577,7 @@ class DefaultDeckServices implements DeckServices {
     // Fetch on commit: make sure the reviewed state is still what the source has.
     // Failures (blocked, rate limited, offline, ...) are recorded and logged, and the
     // reviewed state is committed: it is a real observation the user has reviewed.
-    if (source.serverFetchStatus().state === 'available') {
+    if ((await source.serverFetchStatus()).state === 'available') {
       // The reviewed observation must survive the pruning of this ingest.
       const fresh = await this.fetchAndIngest(deck, source, 'commit', [reviewed.observation.id]);
       // Both snapshots are at hand: nothing to read, so nothing another instance's pruning
@@ -850,7 +853,7 @@ class DefaultDeckServices implements DeckServices {
   // Setup
   // -------------------------------------------------------------------------
 
-  getSetupInfo(): SetupInfoDTO {
+  getSetupInfo(): Promise<SetupInfoDTO> {
     return setupInfo(this.config, this.sources);
   }
 
@@ -1116,49 +1119,30 @@ class DefaultDeckServices implements DeckServices {
     if (!(elapsedMs >= 0 && elapsedMs < cooldownMs)) return 0;
     return Math.ceil((cooldownMs - elapsedMs) / 1000);
   }
-
-  /**
-   * True when the client should refresh in the background after rendering: server
-   * fetching works, the deck is not cooling down, the source's `Retry-After` from the
-   * deck's last (rate-limited) attempt has passed, and the deck was last checked (by a
-   * fetch attempt or any observation) at least `AUTO_REFRESH_AFTER_SECONDS` ago.
-   * Failed attempts count as checks, so a failing deck is not retried on every load.
-   */
-  private autoRefreshSuggested(
-    deck: DeckRecord,
-    working: ObservationRecord | null,
-    serverFetch: ServerFetchStatus,
-  ): boolean {
-    if (serverFetch.state !== 'available') return false;
-    const now = this.now();
-    if (this.cooldownRemainingSeconds(deck, now) > 0) return false;
-    const error = deck.lastFetchError;
-    if (error?.code === 'rate-limited' && error.retryAfterSeconds !== null) {
-      const retryAt = Date.parse(error.at) + error.retryAfterSeconds * 1000;
-      if (now.getTime() < retryAt) return false;
-    }
-    const checks = [working?.fetchedAt, deck.lastFetchAttemptAt ?? undefined]
-      .flatMap((at) => (at === undefined ? [] : [Date.parse(at)]))
-      .filter((ms) => !Number.isNaN(ms));
-    if (checks.length === 0) return true;
-    return now.getTime() - Math.max(...checks) >= this.config.AUTO_REFRESH_AFTER_SECONDS * 1000;
-  }
 }
 
-/** The `blocked` error returned without any request when server fetching is unavailable. */
+/** The error returned without any request when server fetching is unavailable. */
 function unavailableError(status: ServerFetchStatus, now: Date): FetchErrorDTO | null {
+  const at = now.toISOString();
   switch (status.state) {
     case 'available':
       return null;
     case 'disabled':
-      return { code: 'blocked', message: status.reason, at: now.toISOString(), retryAfterSeconds: null };
-    case 'blocked': {
+      return { code: 'blocked', message: status.reason, at, retryAfterSeconds: null };
+    case 'paused':
+      return {
+        code: 'blocked',
+        message: `${status.reason} Server fetching is paused until an admin resumes it. Use the bookmarklet or paste the deck JSON meanwhile.`,
+        at,
+        retryAfterSeconds: null,
+      };
+    case 'rate-limited': {
       // `retryAt` comes from any DeckSource: an unreadable date is no deadline.
       const retryAfterSeconds = retryAfterSecondsUntil(Date.parse(status.retryAt), now.getTime());
       return {
-        code: 'blocked',
+        code: 'rate-limited',
         message: status.reason,
-        at: now.toISOString(),
+        at,
         retryAfterSeconds: Number.isNaN(retryAfterSeconds) ? null : retryAfterSeconds,
       };
     }

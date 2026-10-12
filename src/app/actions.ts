@@ -75,21 +75,19 @@ export async function trackDeckAction(
 }
 
 /**
- * Fetches the current Moxfield deck server-side. A manual refresh re-renders the deck
- * pages in the same round trip; an automatic (background) refresh only returns its
- * result, and the client calls `router.refresh()` afterwards, so the page never
- * re-renders mid-interaction because of a server action it did not ask for.
+ * Fetches the current Moxfield deck server-side, when the user asks for it (the Refresh
+ * button; nothing fetches in the background, ADR 0009), and re-renders the deck pages in
+ * the same round trip.
  */
-export async function refreshAction(deckId: string, trigger: 'manual' | 'auto'): Promise<RefreshResult> {
+export async function refreshAction(deckId: string): Promise<RefreshResult> {
   const services = await ownerServices();
   const id = idSchema.safeParse(deckId);
-  const kind = z.enum(['manual', 'auto']).safeParse(trigger);
-  if (!id.success || !kind.success) {
+  if (!id.success) {
     return { ok: false, code: 'internal', message: INVALID_REQUEST, retryAfterSeconds: null };
   }
   try {
-    const outcome = await services.refresh(id.data, kind.data);
-    if (kind.data === 'manual') revalidateDeck(id.data);
+    const outcome = await services.refresh(id.data);
+    revalidateDeck(id.data);
     if (outcome.ok) return { ok: true, changed: outcome.changedSinceLastObservation };
     return {
       ok: false,

@@ -25,7 +25,7 @@ export function RefreshButton({ deckId, label = 'Refresh', variant = 'secondary'
 
   function refresh(): void {
     startTransition(async () => {
-      const result = await refreshAction(deckId, 'manual');
+      const result = await refreshAction(deckId);
       if (result.ok) {
         toast(
           result.changed

@@ -181,3 +181,80 @@ describe('parseConfig — MOXFIELD_SERVER_FETCH', () => {
     expect(() => parseConfig({ MOXFIELD_SERVER_FETCH: 'sometimes' })).toThrow(/MOXFIELD_SERVER_FETCH/);
   });
 });
+
+describe('parseConfig — MOXFIELD_MIN_REQUEST_INTERVAL_MS (ADR 0009)', () => {
+  it('defaults to 2 s between any two requests of the installation', () => {
+    expect(parseConfig({}).MOXFIELD_MIN_REQUEST_INTERVAL_MS).toBe(2_000);
+  });
+
+  it("never goes below 1.5 s against Moxfield's API (one call per second, with room for a late start)", () => {
+    expect(parseConfig({ MOXFIELD_MIN_REQUEST_INTERVAL_MS: '1500' }).MOXFIELD_MIN_REQUEST_INTERVAL_MS).toBe(
+      1_500,
+    );
+    expect(() => parseConfig({ MOXFIELD_MIN_REQUEST_INTERVAL_MS: '1499' })).toThrow(/at least 1500/);
+    expect(() =>
+      parseConfig({
+        MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0',
+        MOXFIELD_API_BASE_URL: 'https://API2.moxfield.com/',
+      }),
+    ).toThrow(/at least 1500/);
+    expect(() =>
+      parseConfig({ MOXFIELD_MIN_REQUEST_INTERVAL_MS: '100', MOXFIELD_API_BASE_URL: 'https://moxfield.com' }),
+    ).toThrow(/at least 1500/);
+  });
+
+  it('allows less against a stand-in for Moxfield (the mock server of the tests)', () => {
+    expect(
+      parseConfig({ MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0', MOXFIELD_API_BASE_URL: 'http://127.0.0.1:4010' })
+        .MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+    ).toBe(0);
+    // A look-alike host is not Moxfield's.
+    expect(
+      parseConfig({ MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0', MOXFIELD_API_BASE_URL: 'https://notmoxfield.com' })
+        .MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+    ).toBe(0);
+  });
+});
+
+describe('parseConfig — MOXFIELD_USER_AGENT', () => {
+  const agent = 'ApprovedProject/1.0 (issued-secret-123)';
+
+  it('never exposes the User-Agent when the configuration is logged, serialized or inspected', () => {
+    const config = parseConfig({ MOXFIELD_USER_AGENT: agent, SITE_ID: 'site-1' });
+    expect(config.moxfieldUserAgent?.value).toBe(agent);
+    const shown = [
+      JSON.stringify(config),
+      inspect(config, { depth: 5 }),
+      String(config.moxfieldUserAgent),
+      JSON.stringify({ agent: config.moxfieldUserAgent }),
+      Object.keys(config).join(','),
+    ].join('\n');
+    expect(shown).not.toContain('issued-secret-123');
+    expect(Object.keys(config)).not.toContain('MOXFIELD_USER_AGENT');
+  });
+
+  it('is fine in the Netlify production deployment', () => {
+    expect(
+      parseConfig({ MOXFIELD_USER_AGENT: agent, SITE_ID: 'site-1' }).moxfieldUserAgentWarning,
+    ).toBeNull();
+    expect(
+      parseConfig({ MOXFIELD_USER_AGENT: agent, NETLIFY: 'true', CONTEXT: 'production' })
+        .moxfieldUserAgentWarning,
+    ).toBeNull();
+  });
+
+  it.each([
+    ['a local machine', {}],
+    ['netlify dev', { SITE_ID: 'site-1', NETLIFY_DEV: 'true' }],
+    ['a deploy preview', { NETLIFY: 'true', CONTEXT: 'deploy-preview' }],
+    ['a branch deploy', { SITE_ID: 'site-1', CONTEXT: 'branch-deploy' }],
+  ])('is warned about on %s: another database would keep a limit of its own', (_label, env) => {
+    const warning = parseConfig({ ...env, MOXFIELD_USER_AGENT: agent }).moxfieldUserAgentWarning;
+    expect(warning).toContain('outside the Netlify production deployment');
+    expect(warning).not.toContain('issued-secret-123');
+  });
+
+  it('warns about nothing without a User-Agent', () => {
+    expect(parseConfig({}).moxfieldUserAgentWarning).toBeNull();
+  });
+});

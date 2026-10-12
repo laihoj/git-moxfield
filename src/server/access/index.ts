@@ -54,14 +54,17 @@ import {
   createServices,
   createShareLinkServices,
   KeyedMutex,
+  moxfieldOrigins,
   openSharedDeck,
   setupInfo,
   type DeckServices,
+  type MoxfieldOriginsDTO,
   type SetupInfoDTO,
   type SharedDeckAccess,
   type ShareLinkServices,
 } from '@/server/services';
-import { getDeckSourceRegistry } from '@/server/sources';
+import type { MoxfieldLimiterDetails } from '@/server/moxfield-limiter';
+import { getDeckSourceRegistry, getMoxfieldLimiter } from '@/server/sources';
 
 /**
  * Per-deck locks shared by every service instance of the process. They live on
@@ -117,10 +120,35 @@ export async function sharedDeckServices(token: unknown): Promise<SharedDeckAcce
 }
 
 /**
- * Installation facts for pages that render before anyone is signed in (the
- * bookmarklet's capture page, which may be how the browser signs in). Holds no secrets
- * and no user data.
+ * Where Moxfield is, for pages that render before anyone is signed in (the bookmarklet's
+ * capture page, which may be how the browser signs in, and sign-in). Holds no secrets and
+ * no user data, and reads no database.
  */
-export function getSetupInfo(): SetupInfoDTO {
+export function getMoxfieldOrigins(): MoxfieldOriginsDTO {
+  return moxfieldOrigins(getConfig());
+}
+
+/** {@link getMoxfieldOrigins} and whether server fetching works, for the setup page. */
+export function getSetupInfo(): Promise<SetupInfoDTO> {
   return setupInfo(getConfig(), getDeckSourceRegistry());
+}
+
+/** Server fetching from Moxfield as the Admin page shows it (ADR 0009). */
+export interface ServerFetchAdminDTO {
+  /** `MOXFIELD_SERVER_FETCH` (or its platform default). */
+  mode: 'auto' | 'off';
+  userAgentConfigured: boolean;
+  userAgentWarning: string | null;
+  limiter: MoxfieldLimiterDetails;
+}
+
+/** For the Admin page only (the caller checks the role). */
+export async function getServerFetchAdminInfo(): Promise<ServerFetchAdminDTO> {
+  const config = getConfig();
+  return {
+    mode: config.MOXFIELD_SERVER_FETCH,
+    userAgentConfigured: config.moxfieldUserAgent !== undefined,
+    userAgentWarning: config.moxfieldUserAgentWarning,
+    limiter: await getMoxfieldLimiter().details(),
+  };
 }

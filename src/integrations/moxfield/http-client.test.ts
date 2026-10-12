@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { expectRejection } from '@tests/support/errors';
+import { FakeMoxfieldLimiter } from '@tests/support/request-limiter';
 
 import { DeckSourceError } from '../deck-source';
 
@@ -16,11 +17,11 @@ function setup(handler: Parameters<typeof fakeFetch>[0], overrides: Partial<Moxf
   const sleeps: number[] = [];
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const fetchImpl = fakeFetch(handler);
+  const limiter = new FakeMoxfieldLimiter();
   const client = new MoxfieldHttpClient({
     apiBaseUrl: 'https://api2.moxfield.com',
     timeoutMs: 5_000,
-    minRequestIntervalMs: 1_000,
-    blockBackoffSeconds: 3_600,
+    limiter,
     fetchImpl,
     now: () => now,
     sleep: (ms) => {
@@ -31,15 +32,7 @@ function setup(handler: Parameters<typeof fakeFetch>[0], overrides: Partial<Moxf
     logger,
     ...overrides,
   });
-  return {
-    client,
-    calls: fetchImpl.calls,
-    sleeps,
-    logger,
-    advance: (ms: number) => {
-      now += ms;
-    },
-  };
+  return { client, calls: fetchImpl.calls, sleeps, logger, limiter };
 }
 
 function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
@@ -96,8 +89,7 @@ describe('MoxfieldHttpClient — success', () => {
         new MoxfieldHttpClient({
           apiBaseUrl: 'file:///etc',
           timeoutMs: 1,
-          minRequestIntervalMs: 0,
-          blockBackoffSeconds: 0,
+          limiter: new FakeMoxfieldLimiter(),
         }),
     ).toThrow(TypeError);
   });
@@ -137,35 +129,43 @@ describe('MoxfieldHttpClient — error mapping', () => {
     });
   });
 
-  it('maps a 403 JSON answer to forbidden', async () => {
-    const { client } = setup(() => jsonResponse({ title: 'Forbidden' }, 403));
-    expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({ code: 'forbidden', status: 403 });
-    expect(client.blockedUntil()).toBeNull();
+  it('pauses server fetching on any 403, also a JSON one: a refusal may start a ban', async () => {
+    const { client, calls, limiter } = setup(() => jsonResponse({ title: 'Forbidden' }, 403));
+    expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
+      code: 'blocked',
+      status: 403,
+      message: expect.stringContaining('until an admin resumes it') as unknown,
+    });
+    expect(limiter.blocks).toEqual([`Moxfield refused a request (HTTP 403) for /v3/decks/all/${DECK_ID}.`]);
+    // The limiter refuses everything after that, so nothing more is sent.
+    expect((await failure(client.getPrimerJson('Fx001'))).code).toBe('blocked');
+    expect(calls).toHaveLength(1);
   });
 
-  it('maps 401 to forbidden', async () => {
-    const { client } = setup(() => new Response(null, { status: 401 }));
+  it('maps 401 to forbidden without pausing', async () => {
+    const { client, limiter } = setup(() => new Response(null, { status: 401 }));
     expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('forbidden');
+    expect(limiter.blocks).toEqual([]);
   });
 
-  it('detects a Cloudflare block, pauses requests and resumes after the backoff', async () => {
+  it('detects a Cloudflare block, pauses every request until resumed', async () => {
     let blocked = true;
-    const { client, calls, advance } = setup(() =>
+    const { client, calls, limiter } = setup(() =>
       blocked ? cloudflareBlockResponse() : jsonResponse({ ok: 1 }),
     );
     const error = await failure(client.getDeckJson(DECK_ID));
-    expect(error).toMatchObject({ code: 'blocked', status: 403, retryAfterSeconds: 3_600 });
-    expect(client.blockedUntil()).toBe(START + 3_600_000);
+    expect(error).toMatchObject({ code: 'blocked', status: 403, retryAfterSeconds: undefined });
+    expect(limiter.blocks).toEqual(["Moxfield's bot protection answered a request (HTTP 403, text/html)."]);
     expect(calls).toHaveLength(1);
 
-    advance(600_000);
-    const shortCircuit = await failure(client.getPrimerJson('Fx001'));
-    expect(shortCircuit).toMatchObject({ code: 'blocked', retryAfterSeconds: 3_000, status: undefined });
+    expect(await failure(client.getPrimerJson('Fx001'))).toMatchObject({
+      code: 'blocked',
+      status: undefined,
+    });
     expect(calls).toHaveLength(1);
 
     blocked = false;
-    advance(3_000_000);
-    expect(client.blockedUntil()).toBeNull();
+    await limiter.resume();
     await expect(client.getDeckJson(DECK_ID)).resolves.toEqual({ ok: 1 });
     expect(calls).toHaveLength(2);
   });
@@ -187,29 +187,41 @@ describe('MoxfieldHttpClient — error mapping', () => {
           headers: { 'content-type': 'text/html', 'cf-ray': 'x', 'cf-mitigated': 'Challenge' },
         }),
     ],
+    [
+      'a Cloudflare challenge answered with 200',
+      () =>
+        new Response('<!DOCTYPE html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html', 'cf-mitigated': 'challenge' },
+        }),
+    ],
+    [
+      'an HTML page answered with 200 (never the API)',
+      () => new Response('<html></html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+    ],
   ])('treats %s as a block', async (_label, response) => {
-    const { client, calls } = setup(response);
+    const { client, calls, limiter } = setup(response);
     expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('blocked');
-    expect(client.blockedUntil()).not.toBeNull();
+    expect(limiter.blocks).toHaveLength(1);
     expect(calls).toHaveLength(1);
   });
 
   it('treats a 503 HTML page behind Cloudflare as unavailable, retrying once without pausing', async () => {
     let attempts = 0;
-    const { client, calls, sleeps } = setup(() =>
+    const { client, calls, sleeps, limiter } = setup(() =>
       ++attempts === 1 ? cloudflareBlockResponse(503) : jsonResponse({ ok: true }),
     );
     await expect(client.getDeckJson(DECK_ID)).resolves.toEqual({ ok: true });
     expect(calls).toHaveLength(2);
     expect(sleeps).toEqual([1_000]);
-    expect(client.blockedUntil()).toBeNull();
+    expect(limiter.blocks).toEqual([]);
   });
 
   it('maps a persistent 503 HTML page to unavailable, not blocked', async () => {
-    const { client, calls } = setup(() => cloudflareBlockResponse(503));
+    const { client, calls, limiter } = setup(() => cloudflareBlockResponse(503));
     expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({ code: 'unavailable', status: 503 });
     expect(calls).toHaveLength(2);
-    expect(client.blockedUntil()).toBeNull();
+    expect(limiter.blocks).toEqual([]);
     // Server fetches stay possible right away.
     await failure(client.getDeckJson(DECK_ID));
     expect(calls).toHaveLength(4);
@@ -240,86 +252,34 @@ describe('MoxfieldHttpClient — error mapping', () => {
     expect(sleeps).toEqual([]);
   });
 
-  it('maps 429 with Retry-After seconds', async () => {
-    const { client, calls } = setup(() => jsonResponse({}, 429, { 'retry-after': '120' }));
+  it('reports a 429 with Retry-After seconds to the limiter, which slows every instance down', async () => {
+    const { client, calls, limiter } = setup(() => jsonResponse({}, 429, { 'retry-after': '120' }));
     expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
       code: 'rate-limited',
       status: 429,
       retryAfterSeconds: 120,
+      message: expect.stringContaining('slow down (HTTP 429)') as unknown,
     });
+    expect(limiter.rateLimits).toEqual([120]);
+    expect(limiter.blocks).toEqual([]);
+    // Never retried: the limiter decides when the next request goes out.
     expect(calls).toHaveLength(1);
   });
 
-  it('maps 429 with an HTTP-date Retry-After', async () => {
+  it('reports an HTTP-date Retry-After in seconds', async () => {
     const retryAt = new Date(START + 90_500).toUTCString();
-    const { client } = setup(() => new Response(null, { status: 429, headers: { 'retry-after': retryAt } }));
-    expect((await failure(client.getDeckJson(DECK_ID))).retryAfterSeconds).toBe(90);
-  });
-
-  it('maps 429 without Retry-After to a default pause', async () => {
-    const { client } = setup(() => new Response(null, { status: 429 }));
-    const error = await failure(client.getDeckJson(DECK_ID));
-    expect(error.code).toBe('rate-limited');
-    expect(error.retryAfterSeconds).toBe(60);
-    expect(client.rateLimitedUntil()).toBe(START + 60_000);
-  });
-
-  it('honors Retry-After: sends nothing until it has passed, for any request', async () => {
-    let limited = true;
-    const { client, calls, advance } = setup(() =>
-      limited ? jsonResponse({}, 429, { 'retry-after': '30' }) : jsonResponse({ ok: 1 }),
+    const { client, limiter } = setup(
+      () => new Response(null, { status: 429, headers: { 'retry-after': retryAt } }),
     );
-    expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
-      code: 'rate-limited',
-      retryAfterSeconds: 30,
-    });
-    expect(client.rateLimitedUntil()).toBe(START + 30_000);
-    expect(calls).toHaveLength(1);
-
-    // Other decks and the primer endpoint wait too; the remaining time counts down.
-    advance(11_000);
-    expect(await failure(client.getDeckJson('OtherDeckId_0000000001'))).toMatchObject({
-      code: 'rate-limited',
-      retryAfterSeconds: 19,
-      status: undefined,
-    });
-    expect(await failure(client.getPrimerJson('A0j00'))).toMatchObject({ code: 'rate-limited' });
-    expect(calls).toHaveLength(1);
-    // Not a bot-protection block: server fetching stays available.
-    expect(client.blockedUntil()).toBeNull();
-
-    advance(19_000);
-    limited = false;
-    expect(client.rateLimitedUntil()).toBeNull();
-    await expect(client.getDeckJson(DECK_ID)).resolves.toEqual({ ok: 1 });
-    expect(calls).toHaveLength(2);
+    expect((await failure(client.getDeckJson(DECK_ID))).retryAfterSeconds).toBe(90);
+    expect(limiter.rateLimits).toEqual([90]);
   });
 
-  it('ends block and rate-limit pauses on clearPauses', async () => {
-    let answer: () => Response = () => cloudflareBlockResponse();
-    const { client, calls } = setup(() => answer());
-    expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('blocked');
-    expect(client.blockedUntil()).toBe(START + 3_600_000);
-    client.clearPauses();
-    expect(client.blockedUntil()).toBeNull();
-
-    answer = () => jsonResponse({}, 429, { 'retry-after': '30' });
-    expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('rate-limited');
-    expect(client.rateLimitedUntil()).not.toBeNull();
-    client.clearPauses();
-    expect(client.rateLimitedUntil()).toBeNull();
-
-    answer = () => jsonResponse({ ok: 1 });
-    await expect(client.getDeckJson(DECK_ID)).resolves.toEqual({ ok: 1 });
-    expect(calls).toHaveLength(3);
-  });
-
-  it('caps an absurd Retry-After at the block backoff', async () => {
-    const { client } = setup(() => jsonResponse({}, 429, { 'retry-after': '999999' }), {
-      blockBackoffSeconds: 600,
-    });
-    expect((await failure(client.getDeckJson(DECK_ID))).retryAfterSeconds).toBe(600);
-    expect(client.rateLimitedUntil()).toBe(START + 600_000);
+  it('leaves the pause after a 429 without Retry-After to the limiter (exponential backoff)', async () => {
+    const { client, limiter } = setup(() => new Response(null, { status: 429 }));
+    const error = await failure(client.getDeckJson(DECK_ID));
+    expect(error).toMatchObject({ code: 'rate-limited', retryAfterSeconds: 30 });
+    expect(limiter.rateLimits).toEqual([undefined]);
   });
 
   it('retries a 5xx once after a short backoff', async () => {
@@ -407,10 +367,6 @@ describe('MoxfieldHttpClient — error mapping', () => {
 
   it.each([
     [
-      'HTML with status 200',
-      () => new Response('<html></html>', { status: 200, headers: { 'content-type': 'text/html' } }),
-    ],
-    [
       'invalid JSON',
       () => new Response('{not json', { status: 200, headers: { 'content-type': 'application/json' } }),
     ],
@@ -422,6 +378,10 @@ describe('MoxfieldHttpClient — error mapping', () => {
           headers: { 'content-type': 'application/json', 'content-length': '99999999' },
         }),
     ],
+    [
+      'plain text with status 200',
+      () => new Response('hello', { status: 200, headers: { 'content-type': 'text/plain' } }),
+    ],
   ])('maps %s to schema', async (_label, response) => {
     const { client, calls } = setup(response);
     expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('schema');
@@ -429,57 +389,55 @@ describe('MoxfieldHttpClient — error mapping', () => {
   });
 });
 
-describe('MoxfieldHttpClient — pacing', () => {
-  it('spaces request starts by the minimum interval', async () => {
-    const { client, sleeps, advance } = setup(() => jsonResponse({}));
-    await client.getDeckJson(DECK_ID);
-    expect(sleeps).toEqual([]);
-    await client.getPrimerJson('Fx001');
-    expect(sleeps).toEqual([1_000]);
-    advance(400);
-    await client.getPrimerJson('Fx001');
-    expect(sleeps).toEqual([1_000, 600]);
-    advance(5_000);
-    await client.getPrimerJson('Fx001');
-    expect(sleeps).toEqual([1_000, 600]);
-  });
-
-  it('serializes concurrent requests', async () => {
-    const order: string[] = [];
-    const releases: (() => void)[] = [];
-    const { client } = setup(
-      (url) =>
-        new Promise<Response>((resolve) => {
-          order.push(`start ${url.slice(-6)}`);
-          releases.push(() => {
-            order.push(`end ${url.slice(-6)}`);
-            resolve(jsonResponse({}));
-          });
-        }),
-      { minRequestIntervalMs: 0 },
-    );
-    const first = client.getDeckJson(DECK_ID);
-    const second = client.getPrimerJson('Fx001');
-    await vi.waitFor(() => {
-      expect(releases).toHaveLength(1);
-    });
-    releases[0]?.();
-    await first;
-    await vi.waitFor(() => {
-      expect(releases).toHaveLength(2);
-    });
-    releases[1]?.();
-    await second;
-    expect(order).toEqual(['start 000001', 'end 000001', 'start primer', 'end primer']);
-  });
-
-  it('keeps working after a failed request in the queue', async () => {
+describe('MoxfieldHttpClient — request limiter', () => {
+  it('asks the limiter before every request it sends, retries included', async () => {
     let attempts = 0;
-    const { client } = setup(() => (++attempts === 1 ? jsonResponse({}, 404) : jsonResponse({ ok: 1 })));
-    const first = client.getDeckJson(DECK_ID);
-    const second = client.getDeckJson(DECK_ID);
-    expect((await failure(first)).code).toBe('not-found');
-    await expect(second).resolves.toEqual({ ok: 1 });
+    const { client, calls, limiter } = setup(() =>
+      ++attempts === 1 ? new Response(null, { status: 502 }) : jsonResponse({ ok: true }),
+    );
+    await client.getDeckJson(DECK_ID);
+    await client.getPrimerJson('Fx001');
+    expect(calls).toHaveLength(3);
+    expect(limiter.admitted).toBe(3);
+  });
+
+  it('sends nothing when the limiter refuses (fails closed)', async () => {
+    const { client, calls, limiter } = setup(() => jsonResponse({}));
+    limiter.refuseWith = new DeckSourceError('unavailable', 'database unavailable', { source: 'moxfield' });
+    expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
+      code: 'unavailable',
+      message: 'database unavailable',
+    });
+    expect(await failure(client.getPrimerJson('Fx001'))).toMatchObject({ code: 'unavailable' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('never logs the User-Agent or puts it in an error', async () => {
+    const userAgent = 'ApprovedProject/1.0 (secret-token-xyz)';
+    let attempt = 0;
+    const answers: (() => Response)[] = [
+      () => new Response(null, { status: 502 }),
+      () => jsonResponse({ ok: 1 }),
+      () => jsonResponse({}, 429, { 'retry-after': '5' }),
+    ];
+    const { client, logger, limiter } = setup(() => (answers[attempt++] ?? cloudflareBlockResponse)(), {
+      userAgent,
+    });
+    await client.getDeckJson(DECK_ID);
+    const errors = [await failure(client.getDeckJson(DECK_ID)), await failure(client.getDeckJson(DECK_ID))];
+    const logged = JSON.stringify([
+      logger.debug.mock.calls,
+      logger.info.mock.calls,
+      logger.warn.mock.calls,
+      logger.error.mock.calls,
+    ]);
+    expect(logged).toContain('Moxfield request failed');
+    expect(logged).not.toContain('secret-token-xyz');
+    for (const error of errors) {
+      expect(error.message).not.toContain('secret');
+      expect(JSON.stringify(error)).not.toContain('secret');
+    }
+    expect(JSON.stringify(limiter.blocks)).not.toContain('secret');
   });
 });
 

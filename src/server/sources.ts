@@ -1,18 +1,21 @@
 /**
  * Deck source registry: maps source ids (`moxfield`) to their {@link DeckSource}.
  *
- * Sources are stateful: the Moxfield source spaces its requests and pauses server
- * fetches after a bot-protection block. The registry must therefore be a process
- * singleton ({@link getDeckSourceRegistry}), so every request handler and the service
- * layer share the same throttle and block backoff.
+ * The Moxfield source admits every request through the installation-wide request limiter
+ * on the database (ADR 0009), which every process and function instance shares. The
+ * registry is still a process singleton ({@link getDeckSourceRegistry}), so that it is
+ * built (and warns about its configuration) once per process.
  */
 import 'server-only';
 
 import type { DeckSource } from '@/integrations/deck-source';
 import { MoxfieldDeckSource } from '@/integrations/moxfield/moxfield-deck-source';
+import type { MoxfieldRequestLimiter } from '@/integrations/moxfield/request-limiter';
 
 import { getConfig, type AppConfig } from './config';
+import { getDb } from './db/client';
 import { createLogger, type Logger } from './logger';
+import { DatabaseMoxfieldLimiter } from './moxfield-limiter';
 import { processSingleton } from './process-singleton';
 
 export interface DeckSourceRegistry {
@@ -28,39 +31,55 @@ export interface DeckSourceRegistry {
 }
 
 export interface DeckSourceRegistryOptions {
+  /** Admits every request to Moxfield: the installation-wide limiter (ADR 0009). */
+  moxfieldLimiter: MoxfieldRequestLimiter;
   /** `fetch` used for server-side requests (tests inject a fake Moxfield). */
   fetchImpl?: typeof fetch;
   /** Logger for the Moxfield adapter. Default: `createLogger('moxfield')`. */
   logger?: Logger;
-  /** Clock in epoch milliseconds for throttling and block backoff. Default: `Date.now`. */
+  /** Clock in epoch milliseconds, for HTTP-date `Retry-After` values. Default: `Date.now`. */
   now?: () => number;
-  /** Delay function used between retries and for throttling. Default: `setTimeout`. */
+  /** Delay before a retry. Default: `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
  * Creates a registry with the sources configured in `config`. Today that is the
  * Moxfield source, wired to the configured API base URL, site origin, User-Agent,
- * server-fetch mode, timeout, request spacing and block backoff.
+ * server-fetch mode and timeout, and to `options.moxfieldLimiter`.
  */
 export function createDeckSourceRegistry(
   config: AppConfig,
-  options: DeckSourceRegistryOptions = {},
+  options: DeckSourceRegistryOptions,
 ): DeckSourceRegistry {
   const moxfield = new MoxfieldDeckSource({
     apiBaseUrl: config.MOXFIELD_API_BASE_URL,
     siteOrigin: config.moxfieldSiteOrigin,
-    userAgent: config.MOXFIELD_USER_AGENT,
+    userAgent: config.moxfieldUserAgent?.value,
     serverFetch: config.MOXFIELD_SERVER_FETCH,
     timeoutMs: config.MOXFIELD_TIMEOUT_MS,
-    minRequestIntervalMs: config.MOXFIELD_MIN_REQUEST_INTERVAL_MS,
-    blockBackoffSeconds: config.MOXFIELD_BLOCK_BACKOFF_SECONDS,
+    limiter: options.moxfieldLimiter,
     fetchImpl: options.fetchImpl,
     now: options.now,
     sleep: options.sleep,
     logger: options.logger ?? createLogger('moxfield'),
   });
   return createStaticDeckSourceRegistry([moxfield]);
+}
+
+/**
+ * The process-wide Moxfield request limiter on the app's database, configured by
+ * {@link getConfig}. Every instance on the same database shares its limit.
+ */
+export function getMoxfieldLimiter(): DatabaseMoxfieldLimiter {
+  return processSingleton(Symbol.for('git-moxfield.moxfieldLimiter'), () => {
+    const config = getConfig();
+    return new DatabaseMoxfieldLimiter({
+      db: getDb,
+      intervalMs: config.MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+      logger: createLogger('moxfield'),
+    });
+  });
 }
 
 /**
@@ -86,11 +105,17 @@ export function createStaticDeckSourceRegistry(sources: readonly DeckSource[]): 
 }
 
 /**
- * The process-wide registry built from {@link getConfig}. Cached on `globalThis`, so the
- * block backoff and request throttle survive dev-server hot reloads.
+ * The process-wide registry built from {@link getConfig}, on {@link getMoxfieldLimiter}.
+ * Cached on `globalThis`, so it is built once per process, also across dev-server reloads.
+ * Building it warns (loudly, as an error) when the Moxfield-issued User-Agent is configured
+ * outside the Netlify production deployment.
  */
 export function getDeckSourceRegistry(): DeckSourceRegistry {
-  return processSingleton(Symbol.for('git-moxfield.deckSources'), () =>
-    createDeckSourceRegistry(getConfig()),
-  );
+  return processSingleton(Symbol.for('git-moxfield.deckSources'), () => {
+    const config = getConfig();
+    if (config.moxfieldUserAgentWarning !== null) {
+      createLogger('moxfield').error(config.moxfieldUserAgentWarning);
+    }
+    return createDeckSourceRegistry(config, { moxfieldLimiter: getMoxfieldLimiter() });
+  });
 }

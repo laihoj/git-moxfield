@@ -4,6 +4,7 @@ import { zoneCount } from '@/core/canonical';
 import { DeckSourceError } from '@/integrations/deck-source';
 import { MoxfieldDeckSource } from '@/integrations/moxfield';
 import { expectRejection } from '@tests/support/errors';
+import { FakeMoxfieldLimiter } from '@tests/support/request-limiter';
 import {
   buildMoxfieldDeck,
   moxfieldInternalId,
@@ -87,7 +88,7 @@ function adapter(): MoxfieldDeckSource {
   return new MoxfieldDeckSource({
     apiBaseUrl: mock.url,
     siteOrigin: mock.url,
-    minRequestIntervalMs: 0,
+    limiter: new FakeMoxfieldLimiter(),
     sleep: () => Promise.resolve(),
   });
 }

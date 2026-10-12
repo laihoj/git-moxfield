@@ -20,10 +20,41 @@ export const MOXFIELD_PAYLOAD_MEDIA_TYPE = 'application/vnd.git-moxfield.moxfiel
 export const DEFAULT_MOXFIELD_API_BASE_URL = 'https://api2.moxfield.com';
 export const DEFAULT_MOXFIELD_SITE_ORIGIN = 'https://moxfield.com';
 
-/** Defaults of the adapter's request handling (the app's configuration starts from the same values). */
+/** Default per-attempt timeout of a request to Moxfield. */
 export const DEFAULT_MOXFIELD_TIMEOUT_MS = 15_000;
-export const DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS = 1_000;
-export const DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS = 3_600;
+
+/**
+ * Moxfield's terms for an issued User-Agent: at most one API call per second, so the starts
+ * of two requests of the whole installation are at least this far apart (ADR 0009).
+ */
+export const MOXFIELD_MIN_SPACING_MS = 1_000;
+
+/**
+ * Headroom on top of {@link MOXFIELD_MIN_SPACING_MS} for what happens between starting a
+ * request and Moxfield receiving it (connection setup, routing), which varies per request.
+ */
+export const MOXFIELD_START_MARGIN_MS = 250;
+
+/**
+ * The shortest configurable interval between two requests to the real Moxfield API: a
+ * request that starts up to {@link MOXFIELD_START_MARGIN_MS} late must still leave
+ * {@link MOXFIELD_MIN_SPACING_MS} plus the margin.
+ */
+export const MIN_MOXFIELD_REQUEST_INTERVAL_MS = 1_500;
+
+/** Default interval between two requests of the whole installation (`MOXFIELD_MIN_REQUEST_INTERVAL_MS`). */
+export const DEFAULT_MOXFIELD_REQUEST_INTERVAL_MS = 2_000;
+
+/** Whether `apiBaseUrl` is Moxfield's own API (any `moxfield.com` host), not a stand-in such as the mock. */
+export function isMoxfieldApiHost(apiBaseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(apiBaseUrl).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  return host === 'moxfield.com' || host.endsWith('.moxfield.com');
+}
 
 /**
  * Honest User-Agent sent by server-side fetches when no Moxfield-issued one is

@@ -442,7 +442,7 @@ describe('pnpm import:local', { timeout: 30_000 }, () => {
       journalPath,
       JSON.stringify({
         ...journal,
-        entries: journal.entries.filter((entry) => entry.tag !== '0009_deck_relinks'),
+        entries: journal.entries.filter((entry) => entry.tag !== '0010_moxfield_rate'),
       }),
     );
     const path = join(dir, 'old.db');
@@ -456,11 +456,11 @@ describe('pnpm import:local', { timeout: 30_000 }, () => {
 
     const run = await runImport(['--from', path, '--to-user', 'Jaakko'], { target: target.db });
     expect(run.err).toEqual([]);
-    expect(run.out[1]).toBe("  The copy was brought up to this version's schema (0009_deck_relinks).");
+    expect(run.out[1]).toBe("  The copy was brought up to this version's schema (0010_moxfield_rate).");
     expect((await target.services.listVersions(deck.id)).map((version) => version.commitId)).toEqual([v1.id]);
     // The source itself was not migrated.
     const reopened = await openDatabase({ url: pathToFileURL(path).href, migrationsFolder: migrations });
-    expect(await reopened.db.all(sql`SELECT name FROM sqlite_master WHERE name = 'deck_relinks'`)).toEqual(
+    expect(await reopened.db.all(sql`SELECT name FROM sqlite_master WHERE name = 'moxfield_rate'`)).toEqual(
       [],
     );
     reopened.close();

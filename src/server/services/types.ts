@@ -102,8 +102,6 @@ export interface DeckOverviewDTO extends DeckSummaryDTO {
   serverFetch: ServerFetchStatus;
   /** Card facts for every card key referenced by `diff`. */
   catalog: Record<CardKey, CardFacts>;
-  /** True when the client should trigger a background refresh on load. */
-  autoRefreshSuggested: boolean;
   /** Suggested commit message derived from the diff. */
   suggestedMessage: string;
 }

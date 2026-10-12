@@ -1,9 +1,9 @@
 'use server';
 
 /**
- * Server actions of the admin page (ADR 0006): invites, recovery links, and disabling
- * or enabling people. Admins manage accounts, not decks: no action here reaches anyone's
- * decks. A recovery link signs in as the person it is for; the auth service makes using
+ * Server actions of the admin page (ADR 0006): invites, recovery links, disabling or
+ * enabling people, and resuming server fetching from Moxfield (ADR 0009). Admins manage
+ * accounts, not decks: no action here reaches anyone's decks. A recovery link signs in as the person it is for; the auth service makes using
  * one sign out their other devices and shows it on their Account page.
  *
  * Every action resolves the signed-in user again and hands that user to the auth
@@ -20,6 +20,7 @@ import { getAuthService } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
+import { getMoxfieldLimiter } from '@/server/sources';
 import { absoluteAppUrl } from '@/core/http-url';
 import { routes } from '@/lib/routes';
 
@@ -139,5 +140,22 @@ export async function revokeRecoveryLinkAction(linkId: string): Promise<AccountA
       : { ok: false, message: 'This recovery link was already used, withdrawn or expired.' };
   } catch (error) {
     return { ok: false, message: failureMessage(log, error, 'revokeRecoveryLink', { userId: user.id }) };
+  }
+}
+
+/**
+ * Resumes server fetching from Moxfield for every instance, after a 403 or a bot-protection
+ * challenge paused it (ADR 0009). A 429 backoff keeps running: that is Moxfield's request.
+ */
+export async function resumeServerFetchAction(): Promise<AccountActionResult> {
+  const user = await actor();
+  if (user.role !== 'admin') return { ok: false, message: 'Only an admin can resume server fetching.' };
+  try {
+    const wasPaused = await getMoxfieldLimiter().resume();
+    log.info('Server fetching from Moxfield resumed by an admin', { userId: user.id, wasPaused });
+    revalidatePath(routes.admin());
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: failureMessage(log, error, 'resumeServerFetch', { userId: user.id }) };
   }
 }
