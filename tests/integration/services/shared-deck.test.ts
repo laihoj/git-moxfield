@@ -220,7 +220,7 @@ describe('the shared deck', () => {
       1,
     ]);
     expect(await viewer.listVersions({ tag: 'nope' })).toEqual([]);
-    expect(await viewer.listTags()).toEqual([{ name: 'tournament', count: 1 }]);
+    expect(await viewer.listTags()).toEqual([{ name: 'tournament', count: 1, lastSequence: 1 }]);
   });
 
   it('shows versions as the owner sees them, without notes unless the link includes them', async () => {

@@ -234,7 +234,10 @@ export type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'
 
 export interface TagCountDTO {
   name: string;
+  /** Versions of the deck carrying the tag. */
   count: number;
+  /** Sequence of the newest version carrying the tag. */
+  lastSequence: number;
 }
 
 /** A compare side from the committed history: a version or the empty deck, never the working state. */

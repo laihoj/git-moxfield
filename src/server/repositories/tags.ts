@@ -2,7 +2,7 @@
  * Version tags: short, reusable, mutable labels on versions (`tournament`, `stable`,
  * `pre-ban`). A version can carry many tags and a tag many versions.
  */
-import { and, count, desc, eq, getTableColumns, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, getTableColumns, inArray, max } from 'drizzle-orm';
 
 import { compareStrings } from '@/core/canonical';
 import { normalizeVersionTag } from '@/core/tags';
@@ -25,6 +25,8 @@ export interface TagCount {
   name: string;
   /** Number of versions of the deck carrying the tag. */
   count: number;
+  /** Sequence of the newest version carrying the tag. */
+  lastSequence: number;
 }
 
 export interface VersionTagRepository {
@@ -108,7 +110,12 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
 
     async listForDeck(deckId) {
       const rows = await ctx.db
-        .select({ name: versionTags.name, count: count() })
+        .select({
+          name: versionTags.name,
+          count: count(),
+          // Never null: every row joins a commit.
+          lastSequence: max(commits.sequence).mapWith(Number),
+        })
         .from(versionTags)
         .innerJoin(commits, eq(commits.id, versionTags.commitId))
         .where(and(eq(commits.deckId, deckId), deckInWorkspace(ctx, deckId)))

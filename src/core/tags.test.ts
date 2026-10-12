@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_VERSION_TAG_LENGTH, normalizeVersionTag, parseTagDraft } from './tags';
+import { MAX_VERSION_TAG_LENGTH, normalizeVersionTag, parseTagDraft, rankTagSuggestions } from './tags';
 
 describe('normalizeVersionTag', () => {
   it.each([
@@ -54,5 +54,19 @@ describe('parseTagDraft (what the editors preview)', () => {
       problem: 'Tags may contain letters, digits, spaces, ".", "-" and "_".',
     });
     expect(parseTagDraft('x'.repeat(MAX_VERSION_TAG_LENGTH + 1))).toMatchObject({ kind: 'invalid' });
+  });
+});
+
+describe('rankTagSuggestions', () => {
+  it('puts the tags on the most versions first, then the most recently used, then by name', () => {
+    expect(
+      rankTagSuggestions([
+        { name: 'alpha', count: 1, lastSequence: 2 },
+        { name: 'beta', count: 1, lastSequence: 3 },
+        { name: 'gamma', count: 1, lastSequence: 3 },
+        { name: 'zeta', count: 2, lastSequence: 2 },
+      ]),
+    ).toEqual(['zeta', 'beta', 'gamma', 'alpha']);
+    expect(rankTagSuggestions([])).toEqual([]);
   });
 });

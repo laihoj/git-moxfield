@@ -2,6 +2,7 @@
  * Version tags (`tournament`, `pre-ban`): the one rule for what a tag is. The repository
  * enforces it; the tag editors show a tag the way it will be stored and explain a refusal.
  */
+import { compareStrings } from './canonical';
 import { codePointLength, foldInlineText } from './text';
 
 /** Maximum tag length in Unicode code points (after normalization). */
@@ -43,4 +44,16 @@ export function normalizeVersionTag(input: string): VersionTagValidation {
   const name = foldInlineText(input);
   const problem = tagProblem(name);
   return problem === null ? { ok: true, name } : { ok: false, reason: problem };
+}
+
+/**
+ * Tag names in the order the tag editors suggest them: the tag on the most versions
+ * first, then the one a later version used (`lastSequence`), then alphabetically.
+ */
+export function rankTagSuggestions(
+  tags: readonly { name: string; count: number; lastSequence: number }[],
+): string[] {
+  return [...tags]
+    .sort((a, b) => b.count - a.count || b.lastSequence - a.lastSequence || compareStrings(a.name, b.name))
+    .map((tag) => tag.name);
 }

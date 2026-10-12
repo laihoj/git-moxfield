@@ -400,7 +400,11 @@ export class DeckHistory {
 
   /** Every tag used in the deck, with the number of versions carrying it, sorted by name. */
   async listTags(deckId: string): Promise<TagCountDTO[]> {
-    return (await this.repos.tags.listForDeck(deckId)).map((tag) => ({ name: tag.name, count: tag.count }));
+    return (await this.repos.tags.listForDeck(deckId)).map(({ name, count, lastSequence }) => ({
+      name,
+      count,
+      lastSequence,
+    }));
   }
 }
 

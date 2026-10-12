@@ -31,8 +31,8 @@ describe('deck services: tags', () => {
     expect(await services.addTag(deckId, 2, 'Tournament')).toEqual({ ok: true, tags: ['tournament'] });
 
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 1 },
-      { name: 'tournament', count: 2 },
+      { name: 'stable', count: 1, lastSequence: 1 },
+      { name: 'tournament', count: 2, lastSequence: 2 },
     ]);
     expect(
       (await services.listVersions(deckId, { tag: 'STABLE' })).map((version) => version.sequence),
@@ -41,8 +41,8 @@ describe('deck services: tags', () => {
     expect(await services.removeTag(deckId, 1, 'Tournament')).toEqual({ ok: true, tags: ['stable'] });
     expect(await services.removeTag(deckId, 1, 'never-added')).toEqual({ ok: true, tags: ['stable'] });
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 1 },
-      { name: 'tournament', count: 1 },
+      { name: 'stable', count: 1, lastSequence: 1 },
+      { name: 'tournament', count: 1, lastSequence: 2 },
     ]);
   });
 

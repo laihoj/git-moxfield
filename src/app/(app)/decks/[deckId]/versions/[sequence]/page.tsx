@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { NotesEditor } from '@/components/deck/notes-editor';
 import { TagEditor } from '@/components/deck/tag-editor';
 import { parseVersionTab, VersionContent } from '@/components/deck-pages/version-content';
+import { rankTagSuggestions } from '@/core/tags';
 import { versionLabel } from '@/lib/format';
 import { deckPageTitle, deckTitle, freeTextNote } from '@/lib/presentation';
 import { FREE_TEXT_NOTE_KIND } from '@/server/services';
@@ -50,7 +51,7 @@ export default async function VersionPage({
           deckId={deck.id}
           sequence={version.sequence}
           tags={version.tags}
-          suggestions={tags.map((tag) => tag.name)}
+          suggestions={rankTagSuggestions(tags)}
         />
       }
       notes={

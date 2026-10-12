@@ -73,7 +73,7 @@ describe('version tags repository', () => {
     expect((await repos.tags.listForCommits([])).size).toBe(0);
   });
 
-  it('counts tag usage per deck', async () => {
+  it('counts tag usage per deck, with the newest version carrying each tag', async () => {
     const { repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);
     const other = await createTestDeck(repos);
@@ -88,9 +88,9 @@ describe('version tags repository', () => {
     await repos.tags.add(foreign.id, 'casual');
 
     expect(await repos.tags.listForDeck(deck.id)).toEqual([
-      { name: 'budget', count: 1 },
-      { name: 'stable', count: 2 },
-      { name: 'tournament', count: 1 },
+      { name: 'budget', count: 1, lastSequence: 3 },
+      { name: 'stable', count: 2, lastSequence: 3 },
+      { name: 'tournament', count: 1, lastSequence: 2 },
     ]);
     expect(await repos.tags.listForDeck((await createTestDeck(repos)).id)).toEqual([]);
   });

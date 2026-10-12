@@ -1,8 +1,6 @@
 import { X } from 'lucide-react';
 import { notFound } from 'next/navigation';
 
-import type { IngestWarning } from '@/core/model';
-import type { DeckOverviewDTO } from '@/server/services/types';
 import { CommitForm } from '@/components/deck/commit-form';
 import {
   changesTitle,
@@ -21,10 +19,13 @@ import { Card, CardHeader } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { Link } from '@/components/ui/navigation';
 import { SidebarLayout } from '@/components/ui/sidebar-layout';
+import type { IngestWarning } from '@/core/model';
+import { rankTagSuggestions } from '@/core/tags';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckTitle } from '@/lib/presentation';
 import { ownerDeckRoutes, routes } from '@/lib/routes';
 import { EMPTY_REF, HEAD_REF, WORKING_REF } from '@/lib/version-refs';
+import type { DeckOverviewDTO } from '@/server/services/types';
 
 import { decodeSegment, loadOverview, loadTags } from './data';
 
@@ -66,7 +67,7 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
             suggestedMessage={overview.suggestedMessage}
             expectedObservationId={working.id}
             expectedHeadCommitId={head?.commitId ?? null}
-            existingTags={tags.map((tag) => tag.name)}
+            existingTags={rankTagSuggestions(tags)}
           />
         )}
 

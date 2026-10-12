@@ -40,9 +40,9 @@ describe('demo seed', () => {
       1,
     );
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 2 },
-      { name: 'testing', count: 1 },
-      { name: 'tournament', count: 2 },
+      { name: 'stable', count: 2, lastSequence: 8 },
+      { name: 'testing', count: 1, lastSequence: 5 },
+      { name: 'tournament', count: 2, lastSequence: 8 },
     ]);
 
     const tournament = defined(await services.getVersion(deckId, 3));
