@@ -98,6 +98,14 @@ describe('GET /s/{token}/versions/{n}/restore.txt', () => {
     expect(response.headers.has('set-cookie')).toBe(false);
   });
 
+  it('labels each section by how Moxfield restores it', async () => {
+    const text = await (await download(token, 'v1')).text();
+    expect(text).toMatch(
+      /^=== Commanders \(2 cards\) ===\nSet on Moxfield: Deck page › More › Change Commander \/ Add Partner\n/m,
+    );
+    expect(text).toMatch(/^=== Mainboard \(\d+ cards\) ===\nPaste into: Bulk Edit › Main Deck\n/m);
+  });
+
   it('answers every failure with the same private 404', async () => {
     const failures = [
       await download(token, '3'),

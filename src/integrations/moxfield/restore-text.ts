@@ -99,9 +99,9 @@ function sectionDestination(zone: ZoneId): { kind: RestoreSectionKind; target: s
 
 function unrestorableTarget(zone: ZoneId): string {
   if (zone === 'tokens') {
-    return 'Not restorable via Bulk Edit (the Tokens tab cannot be edited); listed for reference';
+    return 'Not restorable via Bulk Edit (the Tokens tab cannot be edited)';
   }
-  return 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board); listed for reference';
+  return 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board)';
 }
 
 function buildSections(snapshot: CanonicalSnapshot): RestoreSection[] {

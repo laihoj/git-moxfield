@@ -102,7 +102,7 @@ describe('moxfieldRestoreExport — golden', () => {
         zone: 'tokens',
         label: 'Tokens',
         kind: 'reference',
-        target: 'Not restorable via Bulk Edit (the Tokens tab cannot be edited); listed for reference',
+        target: 'Not restorable via Bulk Edit (the Tokens tab cannot be edited)',
         text: '1 Treasure (TLTR) 5\n',
         cardCount: 1,
       },
@@ -110,8 +110,7 @@ describe('moxfieldRestoreExport — golden', () => {
         zone: 'other:dungeon-deck',
         label: 'Dungeon deck',
         kind: 'reference',
-        target:
-          'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board); listed for reference',
+        target: 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board)',
         text: '1 Tomb of Annihilation (AFR) 1\n',
         cardCount: 1,
       },

@@ -212,10 +212,12 @@ restored too. Empty boards come with an explicit "clear this tab" step, because 
 Bulk Edit replaces each board. The primer is offered verbatim, in Moxfield's own markup
 (`===panel:` directives, `[[Card]]` links), so pasting it into Moxfield's primer editor
 reproduces it exactly. A version's primer can also be copied from its Primer tab, or
-from either side of a Compare. The whole export also downloads as a text file. The page
-also lists limitations: alter/proxy flags, card tags, non-English printings, multiple
-printings of one card. Restoring never changes git-moxfield's history. After you save in
-Moxfield, the restored state shows up as uncommitted changes.
+from either side of a Compare. The whole export also downloads as a text file, in which
+each section says how it is restored: "Paste into", "Set on Moxfield" (a manual step) or
+"Reference only". The page also lists limitations: alter/proxy flags, card tags,
+non-English printings, multiple printings of one card. Restoring never changes
+git-moxfield's history. After you save in Moxfield, the restored state shows up as
+uncommitted changes.
 
 ## Accounts and sharing
 
