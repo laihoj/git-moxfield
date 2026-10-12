@@ -1,11 +1,6 @@
 import { notFound } from 'next/navigation';
 
-import {
-  CARD_RESULT_LIMIT,
-  CardsContent,
-  cardQuery,
-  cardResults,
-} from '@/components/deck-pages/cards-content';
+import { CARD_RESULT_LIMIT, CardsContent, cardQuery } from '@/components/deck-pages/cards-content';
 
 import { deckServices, decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
@@ -20,9 +15,10 @@ export default async function CardsPage({ params, searchParams }: PageProps<'/de
   const overview = await loadOverview(deckId);
   if (overview === null) notFound();
 
-  const results = await cardResults(query, overview.versionCount, async (text) =>
-    (await deckServices(deckId)).searchCards(deckId, text, CARD_RESULT_LIMIT),
-  );
+  const results =
+    query === '' || overview.versionCount === 0
+      ? []
+      : await (await deckServices(deckId)).searchCards(deckId, query, CARD_RESULT_LIMIT);
 
   return (
     <CardsContent

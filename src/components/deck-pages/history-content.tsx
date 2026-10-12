@@ -14,13 +14,10 @@ import type { TagCountDTO, VersionListItemDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
 
-/** The parsed `?tag=` of the History page: the tag to filter by, `undefined` for none. */
+/** The `?tag=` to filter by, `undefined` for none; bounded only, the service validates the tag. */
 export function historyTagParam(value: string | string[] | undefined): string | undefined {
-  return searchParamText(value, MAX_TAG_PARAM_LENGTH);
+  return searchParamText(value, 200);
 }
-
-/** Sanity bound for the tag filter; the service normalizes the tag and rejects invalid ones. */
-const MAX_TAG_PARAM_LENGTH = 200;
 
 export interface HistoryContentProps {
   scope: DeckScope;

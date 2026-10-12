@@ -1,11 +1,7 @@
 import clsx from 'clsx';
 import type { ComponentPropsWithoutRef } from 'react';
 
-/**
- * A page of a main column with a sidebar beside it from `lg` up (20rem wide), and one
- * column below. The deck pages and their loading skeleton share it, so the skeleton
- * keeps the shape of the page it stands in for.
- */
+/** A main column and, from `lg` up, a 20rem sidebar; the loading skeleton shares it to keep their shape. */
 export function SidebarLayout({ className, children, ...props }: ComponentPropsWithoutRef<'div'>) {
   return (
     <div

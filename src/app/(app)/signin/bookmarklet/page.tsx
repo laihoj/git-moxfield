@@ -2,7 +2,8 @@ import { Bookmark, LogIn, X } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { AuthPanel } from '@/components/auth/auth-panel';
-import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS } from '@/components/auth/dead-link-panel';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AbsoluteTime, ExpiryTime } from '@/components/ui/relative-time';
@@ -57,9 +58,9 @@ export default async function BookmarkletSignInPage({ searchParams }: PageProps<
           </dd>
         </dl>
         {replaces !== null && (
-          <SignedInAsAlert displayName={replaces.displayName}>
+          <Alert tone="warn" title={`You’re signed in as ${replaces.displayName}`}>
             Signing in as {displayName} signs {replaces.displayName} out of this browser.
-          </SignedInAsAlert>
+          </Alert>
         )}
         <form method="post" action={HANDOFF_PATH} className="flex flex-col gap-2.5">
           <input type="hidden" name="next" value={next} />

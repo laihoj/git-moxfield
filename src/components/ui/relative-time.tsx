@@ -96,10 +96,8 @@ export interface RelativeTimeProps {
 }
 
 /**
- * The `<time>` element all of the time components render: it follows the clock (see
- * {@link Clock}), so its `key` flips when the clock goes live and the text is rendered again
- * from `now`; the server's text and the first client render agree, hence
- * `suppressHydrationWarning`. The tooltip shows the full local date and time.
+ * The `<time>` of every time component: its `key` flips when the {@link Clock} goes live, so
+ * the text is rendered again from `now` (the server's text and the first client render agree).
  */
 function ClockedTime({
   value,
@@ -108,7 +106,6 @@ function ClockedTime({
 }: {
   value: string;
   className?: string;
-  /** The text for the moment `now` (milliseconds since the epoch). */
   text: (now: number) => string;
 }) {
   const clock = useClock();
@@ -172,10 +169,7 @@ export function ExpiryTime({ value, className }: { value: string; className?: st
   );
 }
 
-/**
- * A fact about a moment that may not have happened: `Last used <RelativeTime>`, or the
- * `fallback` (`Never used`) when `value` is `null`.
- */
+/** `Last used <RelativeTime>`, or the `fallback` (`Never used`) when `value` is `null`. */
 export function LabeledTime({
   label,
   value,

@@ -18,7 +18,6 @@ import { routes } from '@/lib/routes';
 import { DiffStatsInline } from './diff-stats';
 import { StatusIndicator } from './status-indicator';
 
-/** Whether the deck's last fetch failed after its latest successful observation. */
 /** A tracked deck in the deck list: name, commanders, status, latest version and Moxfield activity. */
 export function DeckCard({ deck }: { deck: DeckSummaryDTO }) {
   const { label, tone } = describeStatus(deck.status, deck.head);

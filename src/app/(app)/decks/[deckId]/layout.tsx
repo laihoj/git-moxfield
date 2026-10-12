@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
-import { DeckFrame } from '@/components/deck/deck-frame';
 import { DeckHeader } from '@/components/deck/deck-header';
 import { DeckNav } from '@/components/deck/deck-nav';
 import { ShareDeckLink } from '@/components/deck/share-deck-link';
@@ -27,8 +26,8 @@ export default async function DeckLayout({ params, children }: LayoutProps<'/dec
   if (overview === null) notFound();
 
   return (
-    <DeckFrame
-      header={
+    <div className="flex flex-col gap-5 md:gap-6">
+      <div className="flex flex-col gap-3 md:gap-4">
         <DeckHeader
           name={deckTitle(overview)}
           unnamedId={isUnnamedDeck(overview) ? overview.externalId : undefined}
@@ -37,10 +36,9 @@ export default async function DeckLayout({ params, children }: LayoutProps<'/dec
           url={overview.url}
           actions={<ShareDeckLink deckId={overview.id} />}
         />
-      }
-      nav={<DeckNav scope={{ kind: 'owner', deckId: overview.id }} />}
-    >
+        <DeckNav scope={{ kind: 'owner', deckId: overview.id }} />
+      </div>
       {children}
-    </DeckFrame>
+    </div>
   );
 }

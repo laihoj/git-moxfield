@@ -1,9 +1,4 @@
-import {
-  CARD_RESULT_LIMIT,
-  CardsContent,
-  cardQuery,
-  cardResults,
-} from '@/components/deck-pages/cards-content';
+import { CARD_RESULT_LIMIT, CardsContent, cardQuery } from '@/components/deck-pages/cards-content';
 import { sharedDeckRoutes } from '@/lib/routes';
 
 import { findSharedOverview, loadSharedDeck, sharedSectionMetadata } from '../data';
@@ -20,9 +15,10 @@ export default async function SharedCardsPage({ params, searchParams }: PageProp
   const access = await loadSharedDeck(token);
   const overview = access === null ? null : await findSharedOverview(token);
   if (access === null || overview === null) return <SharedPageMissing access={access} />;
-  const results = await cardResults(query, overview.versionCount, (text) =>
-    access.services.searchCards(text, CARD_RESULT_LIMIT),
-  );
+  const results =
+    query === '' || overview.versionCount === 0
+      ? []
+      : await access.services.searchCards(query, CARD_RESULT_LIMIT);
 
   return (
     <CardsContent

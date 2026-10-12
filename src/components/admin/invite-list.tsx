@@ -39,7 +39,7 @@ function InviteRow({ invite }: { invite: InviteDTO }) {
   return (
     <ItemRow
       title={
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        <p className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <Badge tone={status.tone}>{status.label}</Badge>
           {invite.note === '' ? (
             <span className="text-muted italic">No note</span>
@@ -48,7 +48,6 @@ function InviteRow({ invite }: { invite: InviteDTO }) {
           )}
         </p>
       }
-      metaClassName="mt-1"
       meta={
         <>
           <MetaItem>{roleLabel(invite.role)}</MetaItem>

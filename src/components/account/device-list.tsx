@@ -1,6 +1,7 @@
 'use client';
 
 import { LogOut, Monitor, MonitorSmartphone, Smartphone, Tablet } from 'lucide-react';
+import { useState, useTransition } from 'react';
 
 import { revokeSessionAction, signOutOtherDevicesAction } from '@/app/account-actions';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +11,6 @@ import { InlineConfirm } from '@/components/ui/inline-confirm';
 import { ItemList, ItemRow, ItemTitle } from '@/components/ui/item-list';
 import { MetaItem } from '@/components/ui/meta-list';
 import { RelativeTime } from '@/components/ui/relative-time';
-import { useActionRunner } from '@/components/ui/use-action-runner';
 import { describeSessionOrigin } from '@/lib/accounts';
 import { describeDevice, type DeviceKind } from '@/lib/devices';
 import { pluralize } from '@/lib/format';
@@ -86,7 +86,8 @@ function DeviceRow({ session }: { session: SessionDTO }) {
 }
 
 function SignOutDeviceButton({ session, label }: { session: SessionDTO; label: string }) {
-  const { pending, error, run } = useActionRunner();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   return (
     <div className="flex flex-col items-end gap-1">
       <Button
@@ -95,7 +96,10 @@ function SignOutDeviceButton({ session, label }: { session: SessionDTO; label: s
         loading={pending}
         aria-label={`Sign out ${label}`}
         onClick={() => {
-          run(() => revokeSessionAction(session.id));
+          startTransition(async () => {
+            const result = await revokeSessionAction(session.id);
+            setError(result.ok ? null : result.message);
+          });
         }}
       >
         Sign out

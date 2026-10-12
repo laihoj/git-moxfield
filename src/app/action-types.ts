@@ -44,14 +44,11 @@ export type RelinkDeckState =
       trackedBy?: { deckId: string; name: string };
     };
 
-/** The answer to an action that failed: the message to show. */
-export interface ActionFailure {
+/** Result of untracking a deck (on success the action redirects instead of returning). */
+export interface UntrackResult {
   ok: false;
   message: string;
 }
-
-/** Result of untracking a deck (on success the action redirects instead of returning). */
-export type UntrackResult = ActionFailure;
 
 // ---------------------------------------------------------------------------
 // Accounts (ADR 0006): `./auth-actions.ts`, `./account-actions.ts`, `./admin-actions.ts`
@@ -72,7 +69,7 @@ export type SignInFormState =
     };
 
 /** Result of a one-off account or admin action (revoke, sign out a device, disable). */
-export type AccountActionResult = { ok: true } | ActionFailure;
+export type AccountActionResult = { ok: true } | { ok: false; message: string };
 
 /** State of the display name form. */
 export type RenameState =

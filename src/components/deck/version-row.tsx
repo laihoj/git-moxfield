@@ -2,8 +2,8 @@ import clsx from 'clsx';
 import { Crown } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import type { VersionListItemDTO } from '@/server/services/types';
 import { INITIAL_VERSION_MESSAGE } from '@/core/diff/present';
+import type { VersionListItemDTO } from '@/server/services/types';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
 import { RelativeTime } from '@/components/ui/relative-time';
@@ -24,26 +24,6 @@ export function VersionBadge({ sequence, latest = false }: { sequence: number; l
     >
       {versionLabel(sequence)}
     </span>
-  );
-}
-
-/** The title of a version's page: its badge, then the heading (the commit message, or what the page does). */
-export function VersionTitle({
-  sequence,
-  latest = false,
-  children,
-}: {
-  sequence: number;
-  latest?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <VersionBadge sequence={sequence} latest={latest} />
-      <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
-        {children}
-      </h2>
-    </div>
   );
 }
 

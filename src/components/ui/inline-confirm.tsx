@@ -3,9 +3,10 @@
 import clsx from 'clsx';
 import { useId, useState, useTransition, type ReactNode } from 'react';
 
+import type { AccountActionResult } from '@/app/action-types';
+
 import { Button, type ButtonVariant } from './button';
 import { ErrorText } from './field';
-import type { ActionResult } from './use-action-runner';
 
 export interface InlineConfirmProps {
   /** The button that starts the confirmation (`Revoke`). */
@@ -17,7 +18,7 @@ export interface InlineConfirmProps {
   /** Label of the confirming button (`Revoke bookmarklet`). */
   confirmLabel: string;
   /** Runs the action; resolves with whether it worked, and the message to show if it did not. */
-  onConfirm: () => Promise<ActionResult>;
+  onConfirm: () => Promise<AccountActionResult>;
   /** `danger` for destructive actions (default), `primary` otherwise. */
   tone?: 'danger' | 'primary';
   className?: string;

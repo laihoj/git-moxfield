@@ -1,7 +1,6 @@
 import { Ban, CircleCheck, Hourglass, Unlink } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import { Alert } from '@/components/ui/alert';
 import { ButtonLink } from '@/components/ui/button';
 import { routes } from '@/lib/routes';
 import type { OneTimeLinkProblem } from '@/server/auth/types';
@@ -16,15 +15,14 @@ export const LINK_PROBLEM_ICONS: Record<OneTimeLinkProblem, ReactNode> = {
   revoked: <Ban aria-hidden="true" />,
 };
 
-export interface DeadLinkPanelProps {
+interface DeadLinkPanelProps {
   icon: ReactNode;
   title: string;
   description: string;
   /** Whether this browser is signed in: it is sent back to its decks instead of to sign in. */
   signedIn: boolean;
-  /** The button for a browser that is signed out (default: `Other ways to sign in`). */
+  /** The button for a browser that is signed out, and whether it leads the page. */
   signInLabel?: string;
-  /** Whether that button leads the page (default: it is secondary). */
   signInPrimary?: boolean;
 }
 
@@ -51,14 +49,5 @@ export function DeadLinkPanel({
         )}
       </div>
     </AuthPanel>
-  );
-}
-
-/** The warning that using a one-time link changes who this browser is signed in as. */
-export function SignedInAsAlert({ displayName, children }: { displayName: string; children: ReactNode }) {
-  return (
-    <Alert tone="warn" title={`You’re signed in as ${displayName}`}>
-      {children}
-    </Alert>
   );
 }

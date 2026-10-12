@@ -1,10 +1,11 @@
 import { Mail } from 'lucide-react';
 import type { Metadata } from 'next';
 
-import { AuthPanel } from '@/components/auth/auth-panel';
-import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
-import { InviteForm } from '@/components/auth/invite-form';
 import { RoleBadge } from '@/components/account/role-badge';
+import { AuthPanel } from '@/components/auth/auth-panel';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS } from '@/components/auth/dead-link-panel';
+import { InviteForm } from '@/components/auth/invite-form';
+import { Alert } from '@/components/ui/alert';
 import { Card } from '@/components/ui/card';
 import { ExpiryTime } from '@/components/ui/relative-time';
 import { formatDuration } from '@/lib/format';
@@ -50,9 +51,9 @@ export default async function InvitePage({ params }: PageProps<'/invite/[token]'
           </p>
         </div>
         {user !== null && (
-          <SignedInAsAlert displayName={user.displayName}>
+          <Alert tone="warn" title={`You’re signed in as ${user.displayName}`}>
             This invite creates a new account, and this browser switches to it.
-          </SignedInAsAlert>
+          </Alert>
         )}
         <InviteForm token={token} />
       </Card>

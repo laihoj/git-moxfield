@@ -1,8 +1,5 @@
 import clsx from 'clsx';
 
-import type { ReactNode } from 'react';
-
-import { Overline } from '@/components/ui/card';
 import { isCommandZone, zoneLabel, type ZoneId } from '@/core/zones';
 
 /** Stable zone colors (docs/ux.md): commanders amber, mainboard violet, sideboard slate, considering teal. */
@@ -45,25 +42,5 @@ export function ZoneBadge({ zone, quantity, className }: ZoneBadgeProps) {
       {quantity !== undefined && <span className="tabular">{quantity}</span>}
       {zoneLabel(zone)}
     </span>
-  );
-}
-
-/** A group heading with its count (`MAINBOARD 62`), in the zone's color when it is a zone's. */
-export function ZoneOverline({
-  zone,
-  count,
-  id,
-  children,
-}: {
-  zone?: ZoneId;
-  count: number;
-  id?: string;
-  children: ReactNode;
-}) {
-  return (
-    <Overline id={id} className={clsx('mb-1', zone !== undefined && zoneTextClass(zone))}>
-      {children}
-      <span className="ml-1.5 font-medium text-subtle normal-case tabular">{count}</span>
-    </Overline>
   );
 }

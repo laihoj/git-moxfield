@@ -1,16 +1,11 @@
-export interface BrandGlyphProps {
-  /** Stroke color; `currentColor` follows the text color around it. */
+interface BrandGlyphProps {
   stroke?: string;
   /** Explicit size for renderers without CSS (`ImageResponse`); leave out to size it with `className`. */
   size?: number;
   className?: string;
 }
 
-/**
- * The glyph of the git-moxfield mark: two commits and a fork. Drawn on the accent violet by
- * `BrandMark` (the header) and `AppIcon` (the generated PNG icons), and mirrored by the
- * static `app/icon.svg`.
- */
+/** The glyph of the git-moxfield mark (`BrandMark`, `AppIcon`), mirrored by the static `app/icon.svg`. */
 export function BrandGlyph({ stroke = 'currentColor', size, className }: BrandGlyphProps) {
   return (
     <svg

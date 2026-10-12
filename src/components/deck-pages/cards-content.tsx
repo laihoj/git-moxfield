@@ -23,15 +23,6 @@ export function cardQuery(value: string | string[] | undefined): string {
   return searchParamText(value, MAX_CARD_QUERY_LENGTH) ?? '';
 }
 
-/** The results of a card search: none without a query or without versions to search. */
-export async function cardResults(
-  query: string,
-  versionCount: number,
-  search: (query: string) => Promise<CardSearchResultDTO[]>,
-): Promise<CardSearchResultDTO[]> {
-  return query === '' || versionCount === 0 ? [] : search(query);
-}
-
 export interface CardsContentProps {
   scope: DeckScope;
   /** The search (`''` before one). */

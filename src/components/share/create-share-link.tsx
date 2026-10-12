@@ -1,6 +1,6 @@
 'use client';
 
-import { CircleCheck, Link2 } from 'lucide-react';
+import { CircleCheck, Link2, TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useRef, useState, useTransition, type SubmitEvent } from 'react';
 
 import type { CreateShareLinkResult } from '@/app/action-types';
@@ -9,7 +9,7 @@ import { SecretUrl } from '@/components/account/one-time-link';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { CopyButton } from '@/components/ui/copy-button';
-import { Checkbox, Field, fieldControlProps, Input } from '@/components/ui/field';
+import { Field, fieldControlProps, Input } from '@/components/ui/field';
 import { MAX_SHARE_LINK_LABEL_LENGTH } from '@/core/text-limits';
 
 export interface CreateShareLinkProps {
@@ -82,10 +82,12 @@ export function CreateShareLink({ deckId }: CreateShareLinkProps) {
       </Field>
 
       <div className="flex gap-2.5">
-        <Checkbox
+        <input
           id={`${id}-notes`}
+          type="checkbox"
           checked={includeNotes}
           aria-describedby={`${id}-notes-hint`}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)"
           onChange={(event) => {
             setIncludeNotes(event.target.checked);
           }}
@@ -149,10 +151,13 @@ function NewShareLink({ created, onDone }: { created: Created; onDone: () => voi
       </div>
       <SecretUrl url={url} />
       <CopyButton text={url} label="Copy link" subject="Share link" variant="primary" size="lg" block />
-      <Alert tone="warn" title="Copy it now: it won’t be shown again.">
-        git-moxfield keeps only a fingerprint of the link. If you lose it, revoke it below and create a new
-        one.
-      </Alert>
+      <p className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn-bg px-3 py-2.5 text-sm text-pretty text-fg">
+        <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warn" />
+        <span>
+          <span className="font-semibold">Copy it now: it won’t be shown again.</span> git-moxfield keeps only
+          a fingerprint of the link. If you lose it, revoke it below and create a new one.
+        </span>
+      </p>
       <div>
         <Button variant="secondary" onClick={onDone}>
           Done

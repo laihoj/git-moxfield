@@ -1,9 +1,6 @@
 import { MINUS_SIGN } from '@/lib/format';
 
-/**
- * The primer's changed lines as colored counters, worded like the summary chip
- * (`+14 / −6 lines`), with `added` and `removed` spoken for screen readers.
- */
+/** The primer's changed lines, `+14 / −6 lines` as in the summary chip, with the meaning spoken. */
 export function PrimerLineCounts({ added, removed }: { added: number; removed: number }) {
   return (
     <span className="text-sm font-medium tabular">

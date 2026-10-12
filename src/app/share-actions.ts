@@ -21,13 +21,10 @@ import { isServiceError } from '@/server/services';
 import { routes } from '@/lib/routes';
 
 import type { AccountActionResult, CreateShareLinkResult } from './action-types';
-import { failureMessage, idSchema, INVALID_REQUEST } from './action-support';
+import { failureMessage, idSchema, INVALID_REQUEST, MAX_FIELD_LENGTH } from './action-support';
 import { actionAppUrl } from './request-origin';
 
 const log = createLogger('share-actions');
-
-/** Longest label read at all; the service validates the exact rules (1–60 visible characters). */
-const MAX_LABEL_INPUT_LENGTH = 512;
 
 /** The pages that show a deck's links: its Share page, and Account (counts per bookmarklet). */
 function revalidateShareLinks(deckId: string): void {
@@ -56,7 +53,7 @@ export async function createShareLinkAction(
     const shareLinks = await shareLinkServicesFor(user);
     const created = await shareLinks.createShareLink(
       id.data,
-      { label: label.slice(0, MAX_LABEL_INPUT_LENGTH), includeNotes },
+      { label: label.slice(0, MAX_FIELD_LENGTH), includeNotes },
       app.appUrl,
     );
     revalidateShareLinks(id.data);

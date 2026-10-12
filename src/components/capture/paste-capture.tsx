@@ -3,12 +3,13 @@
 import { Download } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
+import { DeckUrlInput } from '@/components/deck/deck-url-input';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ExternalLink } from '@/components/ui/external-link';
-import { DeckUrlInput } from '@/components/deck/deck-url-input';
-import { ErrorText, fieldControlProps, fieldDescriptionIds } from '@/components/ui/field';
+import { fieldControlProps, fieldDescriptionIds } from '@/components/ui/field';
+import type { CaptureFormError } from '@/integrations/moxfield/capture-protocol';
 import {
   MOXFIELD_DECK_PATH_PREFIX,
   MOXFIELD_PRIMER_PATH_PREFIX,
@@ -16,7 +17,6 @@ import {
   moxfieldDeckApiPath,
   moxfieldPrimerApiPath,
 } from '@/integrations/moxfield/constants';
-import type { CaptureFormError } from '@/integrations/moxfield/capture-protocol';
 import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 
 import { CaptureStatus } from './capture-status';
@@ -123,10 +123,11 @@ export function PasteCapture({ apiBaseUrl, siteOrigin, notice }: PasteCapturePro
             }}
             {...fieldControlProps(urlId, { invalid: urlProblem, hint: false })}
           />
+          {/* Not an alert: it comes and goes while the user types. */}
           {urlProblem && (
-            <ErrorText id={fieldDescriptionIds(urlId).error}>
+            <p id={fieldDescriptionIds(urlId).error} className="text-sm text-remove">
               That does not look like a Moxfield deck URL.
-            </ErrorText>
+            </p>
           )}
         </Step>
 

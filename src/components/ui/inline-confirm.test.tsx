@@ -3,12 +3,12 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AccountActionResult } from '@/app/action-types';
 import '@/components/test-utils';
 
 import { InlineConfirm } from './inline-confirm';
-import type { ActionResult } from './use-action-runner';
 
-function renderConfirm(onConfirm: () => Promise<ActionResult>) {
+function renderConfirm(onConfirm: () => Promise<AccountActionResult>) {
   return render(
     <InlineConfirm
       trigger={{ label: 'Revoke', ariaLabel: 'Revoke Laptop Chrome' }}

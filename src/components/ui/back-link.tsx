@@ -4,10 +4,7 @@ import type { ReactNode } from 'react';
 
 import { Link } from './navigation';
 
-/**
- * The link above a page that leads back to where it came from (`Cards`, `Back to v3`).
- * It sits `-ml-2` so its text lines up with the page's edge.
- */
+/** The link above a page back to where it came from; `-ml-2` lines its text up with the page's edge. */
 export function BackLink({ href, icon, children }: { href: Route; icon?: ReactNode; children: ReactNode }) {
   return (
     <Link

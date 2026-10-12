@@ -50,15 +50,10 @@ export function publicAppUrl(headers: HeaderSource): string | null {
   return requestOrigin(headers);
 }
 
-/** What a server action tells the user when the app cannot tell its own address (no `PUBLIC_APP_URL`, no usable `Host`). */
-export const NO_APP_URL_MESSAGE =
+const NO_APP_URL_MESSAGE =
   'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
 
-/**
- * The app's public base URL for the current server action (see {@link publicAppUrl}), or
- * the message to show instead when there is none. Data, not a state: each action answers
- * in its own result shape.
- */
+/** {@link publicAppUrl} for the current server action, or the message to show when there is none. */
 export async function actionAppUrl(): Promise<{ ok: true; appUrl: string } | { ok: false; message: string }> {
   const appUrl = publicAppUrl(await headers());
   return appUrl === null ? { ok: false, message: NO_APP_URL_MESSAGE } : { ok: true, appUrl };

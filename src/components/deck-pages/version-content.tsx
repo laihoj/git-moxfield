@@ -18,7 +18,8 @@ import { changesTitle, DiffView, initialDescription } from '@/components/deck/di
 import { PrimerDiffView } from '@/components/deck/primer-diff-view';
 import { PrimerView } from '@/components/deck/primer-view';
 import { SummaryChips } from '@/components/deck/summary-chips';
-import { VersionTitle } from '@/components/deck/version-row';
+import { VersionBadge } from '@/components/deck/version-row';
+import { BackLink } from '@/components/ui/back-link';
 import { Badge } from '@/components/ui/badge';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -28,15 +29,14 @@ import { Link } from '@/components/ui/navigation';
 import { AbsoluteTime, RelativeTime } from '@/components/ui/relative-time';
 import { SidebarLayout } from '@/components/ui/sidebar-layout';
 import { SegmentedLinks } from '@/components/ui/tabs';
+import { TextLink } from '@/components/ui/text-link';
 import { playedCardCount } from '@/core/canonical';
 import { diffChangeCount } from '@/core/diff';
 import { versionLabel } from '@/lib/format';
 import { describeIngestMethod } from '@/lib/presentation';
 import { deckRoutes, type DeckRoutes, type DeckScope, type VersionTab } from '@/lib/routes';
-import type { SharedVersionDetailDTO } from '@/server/services/types';
-import { TextLink } from '@/components/ui/text-link';
-import { BackLink } from '@/components/ui/back-link';
 import { EMPTY_REF, WORKING_REF } from '@/lib/version-refs';
+import type { SharedVersionDetailDTO } from '@/server/services/types';
 
 export interface VersionContentProps {
   scope: DeckScope;
@@ -87,10 +87,13 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
       </nav>
 
       <header className="flex flex-col gap-3">
-        <VersionTitle sequence={version.sequence} latest={isLatest}>
-          <span className="sr-only">{versionLabel(version.sequence)}: </span>
-          {version.message}
-        </VersionTitle>
+        <div className="flex items-start gap-3">
+          <VersionBadge sequence={version.sequence} latest={isLatest} />
+          <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
+            <span className="sr-only">{versionLabel(version.sequence)}: </span>
+            {version.message}
+          </h2>
+        </div>
         <ul
           className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted"
           aria-label="About this version"

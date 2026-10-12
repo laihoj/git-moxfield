@@ -7,22 +7,9 @@ import { useEffect, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 
-export interface PageErrorStateProps {
-  error: Error & { digest?: string };
-  /** Renders the page again (the boundary's `retry`). */
-  retry: () => void;
-  /** What the user is told besides the title; the error's reference follows it. */
-  description: ReactNode;
-  /** Another way out next to Try again. */
-  secondaryAction?: ReactNode;
-  /** Spacing from the frame around the page (the shared deck's frame needs less). */
-  className?: string;
-}
-
 /**
- * The body of an error boundary (`error.tsx`): logs the error for the console, and shows a
- * calm message with its reference (`digest`), a way to try again and, optionally, another
- * way out.
+ * The body of an error boundary (`error.tsx`): logs the error to the console and shows a
+ * calm message with its reference (`digest`), Try again (`retry`) and another way out.
  */
 export function PageErrorState({
   error,
@@ -30,7 +17,14 @@ export function PageErrorState({
   description,
   secondaryAction,
   className,
-}: PageErrorStateProps) {
+}: {
+  error: Error & { digest?: string };
+  retry: () => void;
+  /** Followed by the error's reference. */
+  description: ReactNode;
+  secondaryAction?: ReactNode;
+  className?: string;
+}) {
   useEffect(() => {
     console.error(error);
   }, [error]);

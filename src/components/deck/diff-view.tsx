@@ -17,15 +17,15 @@ import { isPlayedZone, zoneEntries, zoneLabel, type ZoneId } from '@/core/zones'
 import { Overline } from '@/components/ui/card';
 import { Disclosure } from '@/components/ui/disclosure';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { ArrowLink, TextLink } from '@/components/ui/text-link';
 import { domIdSlug, MINUS_SIGN, pluralize, versionLabel } from '@/lib/format';
 import { formatLabel } from '@/lib/presentation';
-import { type DeckScope } from '@/lib/routes';
-import { ArrowLink, TextLink } from '@/components/ui/text-link';
+import type { DeckScope } from '@/lib/routes';
 
-import { CardRows } from './card-rows';
+import { CardRows } from './deck-list';
 import { DiffRow } from './diff-row';
 import { PrimerLineCounts } from './primer-line-counts';
-import { zoneTextClass, ZoneOverline } from './zone-badge';
+import { zoneTextClass } from './zone-badge';
 
 const COSMETIC_KINDS: ReadonlySet<DiffSection['kind']> = new Set(['printings', 'tags', 'renames']);
 
@@ -137,9 +137,13 @@ function ChangeSection({
   const headingId = `diff-${domIdSlug(section.id)}`;
   return (
     <section aria-labelledby={headingId}>
-      <ZoneOverline id={headingId} zone={section.zone} count={section.changes.length}>
+      <Overline
+        id={headingId}
+        className={clsx('mb-1', section.zone !== undefined && zoneTextClass(section.zone))}
+      >
         {section.title}
-      </ZoneOverline>
+        <span className="ml-1.5 font-medium text-subtle normal-case tabular">{section.changes.length}</span>
+      </Overline>
       <ul className="divide-y divide-border">
         {section.changes.map((change) => (
           <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
@@ -290,9 +294,10 @@ function InitialVersionView({
         <div className="flex flex-col gap-4">
           {zones.map(({ zone, changes, count }) => (
             <section key={zone} aria-label={zoneLabel(zone)}>
-              <ZoneOverline zone={zone} count={count}>
+              <Overline className={clsx('mb-1', zoneTextClass(zone))}>
                 {zoneLabel(zone)}
-              </ZoneOverline>
+                <span className="ml-1.5 font-medium text-subtle normal-case tabular">{count}</span>
+              </Overline>
               <CardRows cards={changes} catalog={catalog} scope={scope} divided />
             </section>
           ))}

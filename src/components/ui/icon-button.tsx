@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
-import { buttonVariantClasses } from './button';
+import { BUTTON_VARIANTS } from './button';
 import { Spinner } from './spinner';
 
 export interface IconButtonProps extends Omit<ComponentPropsWithoutRef<'button'>, 'children' | 'aria-label'> {
@@ -38,7 +38,7 @@ export function IconButton({
       className={clsx(
         "relative inline-flex shrink-0 items-center justify-center rounded-lg transition-colors after:absolute after:left-1/2 after:top-1/2 after:size-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-[''] disabled:cursor-not-allowed disabled:opacity-55 md:after:hidden",
         size === 'sm' ? 'size-8' : 'size-11 md:size-10',
-        buttonVariantClasses(variant),
+        BUTTON_VARIANTS[variant],
         className,
       )}
       {...props}

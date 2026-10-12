@@ -115,7 +115,7 @@ const commitSchema = z.object({
       MAX_COMMIT_MESSAGE_LENGTH * 2,
       `Commit messages can be at most ${MAX_COMMIT_MESSAGE_LENGTH} characters long.`,
     ),
-  expectedObservationId: z.string().trim().min(1).max(128),
+  expectedObservationId: idSchema,
   /** Empty when committing the first version. */
   expectedHeadCommitId: z.string().trim().max(128),
   tags: z.array(tagSchema).max(20, 'Use at most 20 tags.'),

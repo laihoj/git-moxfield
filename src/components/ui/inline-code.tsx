@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import type { ComponentPropsWithoutRef } from 'react';
 
-export interface InlineCodeProps extends ComponentPropsWithoutRef<'code'> {
+interface InlineCodeProps extends ComponentPropsWithoutRef<'code'> {
   /** `tinted` for text on a tinted notice, where the usual chip would not stand out. */
   tone?: 'default' | 'tinted';
 }

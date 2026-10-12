@@ -3,9 +3,7 @@ import type { ComponentPropsWithoutRef } from 'react';
 
 export interface ExternalLinkProps extends Omit<ComponentPropsWithoutRef<'a'>, 'target' | 'rel'> {
   href: string;
-  /** The ↗ after the text. Default: shown. */
-  arrow?: boolean;
-  /** What screen readers are told after the text. Default: `(opens in a new tab)`. */
+  /** What screen readers are told after the text. */
   newTabLabel?: string;
 }
 
@@ -15,7 +13,6 @@ export interface ExternalLinkProps extends Omit<ComponentPropsWithoutRef<'a'>, '
  */
 export function ExternalLink({
   href,
-  arrow = true,
   newTabLabel = '(opens in a new tab)',
   children,
   ...props
@@ -23,7 +20,7 @@ export function ExternalLink({
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
       {children}
-      {arrow && <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />}
+      <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />
       <span className="sr-only">{newTabLabel}</span>
     </a>
   );

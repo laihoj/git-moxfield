@@ -170,7 +170,11 @@ describe('PasteCapture deck data link', () => {
   ])('does not recognize %s as a deck, as the server parser does not', async (typed) => {
     const copyStep = await typeDeck(typed);
     expect(within(copyStep).queryByRole('link')).not.toBeInTheDocument();
-    expect(screen.getByText('That does not look like a Moxfield deck URL.')).toBeInTheDocument();
+    // Described, not announced: the message comes and goes while typing.
+    expect(screen.getByLabelText('Moxfield deck URL')).toHaveAccessibleDescription(
+      'That does not look like a Moxfield deck URL.',
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 

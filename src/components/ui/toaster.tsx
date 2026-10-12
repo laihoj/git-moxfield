@@ -6,7 +6,7 @@ import type { Route } from 'next';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { ALERT_TONES } from './alert';
-import { TextLink } from '@/components/ui/text-link';
+import { TextLink } from './text-link';
 
 export type ToastTone = 'success' | 'info' | 'error';
 

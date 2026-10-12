@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 
 import { SiteChrome } from '@/components/app/site-chrome';
-import { DeckFrame } from '@/components/deck/deck-frame';
 import { DeckHeader } from '@/components/deck/deck-header';
 import { DeckNav } from '@/components/deck/deck-nav';
 import { ReadOnlyBanner } from '@/components/deck/read-only-banner';
@@ -38,18 +37,17 @@ export default async function SharedDeckLayout({ params, children }: LayoutProps
 
   return (
     <SiteChrome homeHref={routes.overview()} banner={<ReadOnlyBanner ownerName={share.ownerDisplayName} />}>
-      <DeckFrame
-        header={
+      <div className="flex flex-col gap-5 md:gap-6">
+        <div className="flex flex-col gap-3 md:gap-4">
           <DeckHeader
             name={sharedDeckTitle(overview)}
             commanders={overview.commanders}
             format={overview.format}
           />
-        }
-        nav={<DeckNav scope={routes.scope} />}
-      >
+          <DeckNav scope={routes.scope} />
+        </div>
         {children}
-      </DeckFrame>
+      </div>
     </SiteChrome>
   );
 }

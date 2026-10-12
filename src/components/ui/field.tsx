@@ -46,26 +46,21 @@ export function fieldControlProps(
   };
 }
 
-/**
- * An error message announced when it appears. `id` is what the control's
- * `aria-describedby` points at; `xs` for the cramped places beside a button.
- */
+/** An error message, announced when it appears; `xs` for the cramped places beside a button. */
 export function ErrorText({
   id,
   size = 'sm',
-  className,
   children,
 }: {
   id?: string;
   size?: 'sm' | 'xs';
-  className?: string;
   children: ReactNode;
 }) {
   return (
     <p
       id={id}
       role="alert"
-      className={clsx(size === 'sm' ? 'text-sm' : 'text-xs', 'text-pretty text-remove', className)}
+      className={clsx(size === 'sm' ? 'text-sm' : 'text-xs', 'text-pretty text-remove')}
     >
       {children}
     </p>
@@ -103,17 +98,6 @@ export function Textarea({ className, ...props }: ComponentPropsWithoutRef<'text
   return (
     <textarea
       className={clsx(CONTROL, 'min-h-28 resize-y px-3 py-2.5 leading-relaxed', className)}
-      {...props}
-    />
-  );
-}
-
-/** A checkbox (the label is the caller's: it sits beside it). */
-export function Checkbox({ className, ...props }: Omit<ComponentPropsWithoutRef<'input'>, 'type'>) {
-  return (
-    <input
-      type="checkbox"
-      className={clsx('mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)', className)}
       {...props}
     />
   );

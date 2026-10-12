@@ -11,13 +11,12 @@ import { RoleBadge } from '@/components/account/role-badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ErrorText } from '@/components/ui/field';
 import { IconButton } from '@/components/ui/icon-button';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
-import { ErrorText } from '@/components/ui/field';
 import { ItemList, ItemTitle } from '@/components/ui/item-list';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { LabeledTime, RelativeTime } from '@/components/ui/relative-time';
-import { useActionRunner } from '@/components/ui/use-action-runner';
 import { pluralize } from '@/lib/format';
 import type { UserDTO } from '@/server/auth/types';
 
@@ -65,7 +64,8 @@ function PersonRow({
   const disabled = person.disabledAt !== null;
   const [recovery, setRecovery] = useState<IssuedLinkState>({ status: 'idle' });
   const [pending, startTransition] = useTransition();
-  const enable = useActionRunner();
+  const [enabling, startEnabling] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <li className="flex gap-3 px-4 py-3.5 md:px-5">
@@ -119,10 +119,13 @@ function PersonRow({
                   variant="secondary"
                   size="sm"
                   icon={<UserRoundCheck aria-hidden="true" className="size-4" />}
-                  loading={enable.pending}
+                  loading={enabling}
                   aria-label={`Enable ${person.displayName}`}
                   onClick={() => {
-                    enable.run(() => setUserDisabledAction(person.id, false));
+                    startEnabling(async () => {
+                      const result = await setUserDisabledAction(person.id, false);
+                      setError(result.ok ? null : result.message);
+                    });
                   }}
                 >
                   Enable
@@ -152,7 +155,7 @@ function PersonRow({
           )}
         </div>
 
-        {enable.error !== null && <ErrorText>{enable.error}</ErrorText>}
+        {error !== null && <ErrorText>{error}</ErrorText>}
         {recovery.status === 'error' && <ErrorText>{recovery.message}</ErrorText>}
         {recovery.status === 'created' && hasPendingRecovery && (
           <div className="relative rounded-lg border border-border bg-surface-2/60 p-4 pr-12">

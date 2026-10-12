@@ -3,15 +3,15 @@
 import { History, Plus } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
-import { foldInlineText } from '@/core/text';
 import { Alert } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, ButtonLink, type ButtonVariant } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
+import { foldInlineText } from '@/core/text';
 import { pluralize } from '@/lib/format';
+import { routes } from '@/lib/routes';
 import type { RelinkCandidateDTO } from '@/server/services/types';
 
-import { CaptureRemedyAction } from './capture-remedy';
 import type { CaptureSubmission } from './use-capture-submission';
 
 export interface CaptureStatusProps {
@@ -202,5 +202,24 @@ export function WaitingPanel({ title, children }: { title: string; children?: Re
       <p className="text-base font-semibold text-fg">{title}</p>
       {children !== undefined && <div className="max-w-md text-sm text-muted">{children}</div>}
     </div>
+  );
+}
+
+/** An Alert action out of a refused capture: a new bookmarklet, or signing in (back to the paste page). */
+export function CaptureRemedyAction({
+  remedy,
+  variant = 'secondary',
+}: {
+  remedy: 'new-bookmarklet' | 'sign-in';
+  variant?: ButtonVariant;
+}) {
+  return remedy === 'new-bookmarklet' ? (
+    <ButtonLink href={routes.setup()} variant={variant} size="sm">
+      Make a new bookmarklet
+    </ButtonLink>
+  ) : (
+    <ButtonLink href={routes.signIn(routes.capturePaste())} variant={variant} size="sm">
+      Sign in
+    </ButtonLink>
   );
 }

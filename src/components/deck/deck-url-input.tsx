@@ -3,16 +3,14 @@ import type { ComponentPropsWithRef } from 'react';
 import { Input } from '@/components/ui/field';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 
-export interface DeckUrlInputProps extends Omit<
-  ComponentPropsWithRef<'input'>,
-  'type' | 'inputMode' | 'autoComplete' | 'autoCapitalize' | 'spellCheck' | 'placeholder'
-> {
-  /** The Moxfield site the placeholder points at; default: Moxfield itself. */
-  siteOrigin?: string;
-}
-
-/** The input for a Moxfield deck URL or id: a URL keyboard on phones, nothing autocorrected. */
-export function DeckUrlInput({ siteOrigin = DEFAULT_MOXFIELD_SITE_ORIGIN, ...props }: DeckUrlInputProps) {
+/**
+ * The input for a Moxfield deck URL or id: a URL keyboard on phones, nothing autocorrected.
+ * `siteOrigin` is the Moxfield site the placeholder points at.
+ */
+export function DeckUrlInput({
+  siteOrigin = DEFAULT_MOXFIELD_SITE_ORIGIN,
+  ...props
+}: ComponentPropsWithRef<'input'> & { siteOrigin?: string }) {
   return (
     <Input
       type="text"

@@ -54,14 +54,12 @@ export function CardHeader({ title, level = 'h2', id, description, actions, clas
   );
 }
 
-export interface ListCardProps {
-  /** Id of the heading; labels the card. */
+interface ListCardProps {
   headingId: string;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   className?: string;
-  /** The list (usually an `ItemList`), or an empty state. */
   children: ReactNode;
 }
 

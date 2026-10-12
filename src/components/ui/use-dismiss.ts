@@ -2,20 +2,17 @@
 
 import { useEffect, type RefObject } from 'react';
 
-export interface UseDismissOptions {
-  /** Listens only while the popover is open. */
+interface UseDismissOptions {
   open: boolean;
   onDismiss: () => void;
-  /** The popover and its button: pointing or tabbing outside it dismisses. */
+  /** The popover and its button. */
   root: RefObject<HTMLElement | null>;
-  /** Takes focus back when Escape dismisses the popover. */
   returnFocus: RefObject<HTMLElement | null>;
 }
 
 /**
- * Dismissal of a popover (a menu, a disclosure panel) while it is open: a pointer press
- * outside `root`, keyboard focus moving outside it (Tab past the last item) and Escape,
- * which also returns focus to `returnFocus`. Choosing an item is the popover's own business.
+ * Dismissal of an open popover (a menu): a pointer press or keyboard focus (Tab past the
+ * last item) outside `root`, and Escape, which also returns focus to `returnFocus`.
  */
 export function useDismiss({ open, onDismiss, root, returnFocus }: UseDismissOptions): void {
   useEffect(() => {

@@ -2,7 +2,7 @@ import { LifeBuoy, MonitorSmartphone } from 'lucide-react';
 import type { Metadata } from 'next';
 
 import { AuthPanel } from '@/components/auth/auth-panel';
-import { DeadLinkPanel, LINK_PROBLEM_ICONS, SignedInAsAlert } from '@/components/auth/dead-link-panel';
+import { DeadLinkPanel, LINK_PROBLEM_ICONS } from '@/components/auth/dead-link-panel';
 import { LoginLinkForm } from '@/components/auth/login-link-form';
 import { Alert } from '@/components/ui/alert';
 import { Card } from '@/components/ui/card';
@@ -53,9 +53,9 @@ export default async function LoginLinkPage({ params }: PageProps<'/signin/[toke
           </Alert>
         )}
         {user !== null && (
-          <SignedInAsAlert displayName={user.displayName}>
+          <Alert tone="warn" title={`You’re signed in as ${user.displayName}`}>
             This browser switches to {link.displayName}’s account.
-          </SignedInAsAlert>
+          </Alert>
         )}
         <LoginLinkForm token={token} />
         <p className="text-center text-xs text-muted">

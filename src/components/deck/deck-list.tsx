@@ -11,9 +11,10 @@ import { groupInto } from '@/core/collections';
 import type { CanonicalCard, CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { isCommandZone, zoneLabel } from '@/core/zones';
 import { domIdSlug } from '@/lib/format';
-import { type DeckScope } from '@/lib/routes';
+import { deckRoutes, type DeckScope } from '@/lib/routes';
 
-import { CardRows } from './card-rows';
+import { CardName } from './card-name';
+import { ManaCost } from './mana-cost';
 import { zoneTextClass } from './zone-badge';
 
 interface TypeGroup {
@@ -89,5 +90,47 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Cards as rows: quantity, name (linked to the card's history, with a preview) and mana
+ * cost. `divided`: looser rows with a rule between them (an initial version's card list).
+ */
+export function CardRows({
+  cards,
+  catalog,
+  scope,
+  divided = false,
+}: {
+  cards: readonly { key: CardKey; name: string; quantity: number }[];
+  catalog: Record<CardKey, CardFacts>;
+  scope: DeckScope;
+  divided?: boolean;
+}) {
+  const routes = deckRoutes(scope);
+  return (
+    <ul className={clsx(divided && 'divide-y divide-border')}>
+      {cards.map((card) => {
+        const facts = catalog[card.key];
+        return (
+          <li
+            key={card.key}
+            className={clsx('flex items-center text-sm', divided ? 'gap-3 py-1.5' : 'min-h-8 gap-2.5 py-0.5')}
+          >
+            <span className={clsx('shrink-0 text-right text-muted tabular', divided ? 'w-6' : 'w-5')}>
+              {card.quantity}
+            </span>
+            <CardName
+              name={card.name}
+              scryfallId={facts?.scryfallId}
+              href={routes.card(card.key)}
+              className="min-w-0 flex-1 text-fg"
+            />
+            {facts !== undefined && <ManaCost cost={facts.manaCost} />}
+          </li>
+        );
+      })}
+    </ul>
   );
 }

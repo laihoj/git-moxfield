@@ -1,10 +1,6 @@
 /**
- * What the server action modules (`actions.ts`, `account-actions.ts`, `admin-actions.ts`,
- * `share-actions.ts`, `auth-actions.ts`) have in common: the messages they answer with,
- * the bounds on what a browser sends, and the one way unexpected failures are handled.
- *
- * A plain `server-only` module, not a `'use server'` one: those may only export async
- * functions, and anything they export becomes an endpoint.
+ * What the server action modules share. A plain `server-only` module, not a `'use server'`
+ * one: those may only export async functions, and each export becomes an endpoint.
  */
 import 'server-only';
 
@@ -28,19 +24,15 @@ export const MAX_FIELD_LENGTH = 1024;
 /** For {@link formString} fields whose own validation bounds them (notes, commit messages, pasted decks). */
 export const UNBOUNDED = Number.POSITIVE_INFINITY;
 
-/**
- * A text field of a submitted form, `''` when it is missing or a file, cut to `maxLength`
- * characters (default {@link MAX_FIELD_LENGTH}).
- */
+/** A text field of a submitted form, cut to `maxLength`; `''` when it is missing or a file. */
 export function formString(formData: FormData, name: string, maxLength = MAX_FIELD_LENGTH): string {
   const value = formData.get(name);
   return typeof value === 'string' ? value.slice(0, maxLength) : '';
 }
 
 /**
- * User-facing message for a failed action: service errors (unknown deck, invalid input,
- * forbidden) carry a message meant for users; anything else is logged to `log`, with
- * `context`, and replaced by {@link GENERIC_ERROR}, so no internal details reach the browser.
+ * User-facing message for a failed action: a service error's own message, else (logged to
+ * `log` with `context`) {@link GENERIC_ERROR}, so no internal details reach the browser.
  */
 export function failureMessage(
   log: Logger,

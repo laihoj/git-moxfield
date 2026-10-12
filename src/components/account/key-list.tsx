@@ -14,7 +14,6 @@ import { theShareLinks } from '@/lib/accounts';
 import { joinList } from '@/lib/format';
 import { routes } from '@/lib/routes';
 import type { BookmarkletKeyDTO } from '@/server/auth/types';
-import { Checkbox } from '@/components/ui/field';
 
 /**
  * The user's bookmarklets: name, when made (and in a browser which bookmarklet signed
@@ -150,9 +149,11 @@ function ConfirmOption({
 }) {
   return (
     <div className="flex gap-2.5 text-sm text-fg">
-      <Checkbox
+      <input
         id={id}
+        type="checkbox"
         checked={checked}
+        className="mt-0.5 size-4 shrink-0 cursor-pointer accent-(--accent)"
         onChange={(event) => {
           onChange(event.target.checked);
         }}

@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { Plus, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-export interface TagChipProps {
+interface TagChipProps {
   tag: string;
   /** `li` in a list of tags, `span` inside a text field. */
   as?: 'li' | 'span';
@@ -15,11 +15,7 @@ export interface TagChipProps {
   children?: ReactNode;
 }
 
-/**
- * A version tag as a chip. The editors and the read-only lists (share link viewers) all
- * show a tag with this one look; the remove button is 24px with a larger hit area on
- * touch screens.
- */
+/** A version tag as a chip, in the editors and the read-only lists alike. */
 export function TagChip({
   tag,
   as: Component = 'li',
@@ -53,11 +49,9 @@ export function TagChip({
   );
 }
 
-/** How many suggestions are offered at most. */
 const SUGGESTION_LIMIT = 8;
 
-export interface TagSuggestionsProps {
-  /** The tags to offer, e.g. those used elsewhere in the deck. */
+interface TagSuggestionsProps {
   tags: readonly string[];
   /** Tags not to offer (the version already has them). */
   exclude: readonly string[];

@@ -20,8 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 
-import { CaptureRemedyAction } from './capture-remedy';
-import { CaptureStatus, WaitingPanel } from './capture-status';
+import { CaptureRemedyAction, CaptureStatus, WaitingPanel } from './capture-status';
 import { FormErrorNotice, PasteCapture } from './paste-capture';
 import { useCaptureSubmission } from './use-capture-submission';
 

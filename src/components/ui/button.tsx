@@ -12,18 +12,14 @@ export type ButtonSize = 'sm' | 'md' | 'lg';
 const BASE =
   'relative inline-flex shrink-0 items-center justify-center rounded-lg font-medium whitespace-nowrap select-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 disabled:cursor-not-allowed disabled:opacity-55 aria-disabled:cursor-not-allowed aria-disabled:opacity-55';
 
-const VARIANTS: Record<ButtonVariant, string> = {
+/** Colors, border and hover states of each variant (the icon buttons share them). */
+export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-fg shadow-card hover:bg-accent-hover active:bg-accent-hover',
   secondary:
     'border border-border-strong bg-surface text-fg shadow-card hover:border-subtle hover:bg-surface-2 active:bg-surface-3',
   ghost: 'text-muted hover:bg-surface-2 hover:text-fg active:bg-surface-3',
   danger: 'bg-remove text-surface shadow-card hover:opacity-90 active:opacity-80',
 };
-
-/** The look of a button variant: colors, border and hover states (the icon buttons share it). */
-export function buttonVariantClasses(variant: ButtonVariant): string {
-  return VARIANTS[variant];
-}
 
 /**
  * Heights follow the touch-target rule: every size is at least 44px tall on small
@@ -49,7 +45,7 @@ export function buttonClasses({
   size = 'md',
   block = false,
 }: ButtonStyleOptions = {}): string {
-  return clsx(BASE, VARIANTS[variant], SIZES[size], block && 'w-full');
+  return clsx(BASE, BUTTON_VARIANTS[variant], SIZES[size], block && 'w-full');
 }
 
 export interface ButtonProps extends ComponentPropsWithoutRef<'button'>, ButtonStyleOptions {
