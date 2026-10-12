@@ -5,9 +5,10 @@
  * Polite by construction: every request (deck, primer, and each retry) first waits for its
  * slot from the installation-wide {@link MoxfieldRequestLimiter} (ADR 0009), which keeps
  * every server instance together under Moxfield's limit of one call per second, and is not
- * sent when the limiter refuses or cannot answer. A 429 slows every instance down, and a
- * 403 or a bot-protection challenge pauses server fetching for every instance until an
- * operator resumes it. The User-Agent is honest (never a spoofed browser) and never logged;
+ * sent when the limiter refuses or cannot answer. A 429 slows every instance down, and
+ * Moxfield's firewall (a 403 that is not JSON, or JSON that looks like a rate limit or
+ * ban, a bot-protection challenge, HTML) pauses server fetching for every instance until
+ * an operator resumes it; a 403 in JSON is a private deck, for that deck only. The User-Agent is honest (never a spoofed browser) and never logged;
  * only URLs built from the configured API base and validated ids are requested.
  */
 import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
@@ -55,12 +56,25 @@ const MAX_RETRY_AFTER_SECONDS = 5;
 /** Generous safety cap for a response body (a large deck is a few MB). */
 const MAX_RESPONSE_BYTES = 16_000_000;
 
+/** How much of a JSON 403 body is read to tell a private deck from a rate limit or a ban. */
+const MAX_REFUSAL_BODY_BYTES = 64_000;
+
+/**
+ * Words in a JSON 403 body that suggest a rate limit, abuse protection or a ban rather than
+ * a private deck. Erring on the side of pausing: a false match only pauses server fetching
+ * until an admin resumes it, a miss could keep calling an API that is refusing the app.
+ */
+const ABUSE_WORDS =
+  /rate|limit|throttl|too many|block|\bban(?:ned)?\b|abuse|firewall|captcha|challenge|cloudflare|suspend|denied/i;
+
 const PAUSED_HINT =
   'Server fetching is paused for everyone until an admin resumes it. Use the bookmarklet meanwhile.';
 
 const BLOCKED_MESSAGE = `Moxfield's bot protection blocked a server-side request. ${PAUSED_HINT}`;
 
-const REFUSED_MESSAGE = `Moxfield refused a server-side request (HTTP 403): the deck may be private, or Moxfield may be refusing this app. ${PAUSED_HINT}`;
+const REFUSED_MESSAGE = `Moxfield refused a server-side request (HTTP 403) in a way that may mean it is refusing this app. ${PAUSED_HINT}`;
+
+const PRIVATE_MESSAGE = 'The deck is private or not accessible without signing in to Moxfield.';
 
 interface Failure {
   error: DeckSourceError;
@@ -220,6 +234,35 @@ export class MoxfieldHttpClient {
     }
   }
 
+  /**
+   * A 403 the API answered in JSON: the deck is private, for this deck only, unless the
+   * body looks like a rate limit, abuse protection or a ban (or cannot be read), which
+   * pauses server fetching for every instance.
+   */
+  private async handleJsonRefusal(path: string, response: Response): Promise<Failure> {
+    const { status } = response;
+    let text: string | null = null;
+    try {
+      const bytes =
+        response.body === null
+          ? new Uint8Array()
+          : await readStreamLimited(response.body, MAX_REFUSAL_BODY_BYTES);
+      if (bytes !== null) {
+        text = new TextDecoder().decode(bytes);
+        JSON.parse(text);
+      }
+    } catch {
+      text = null;
+    }
+    if (text !== null && !ABUSE_WORDS.test(text))
+      return this.failure('forbidden', PRIVATE_MESSAGE, { status });
+    await discardBody(response);
+    await this.limiter.blocked(
+      `Moxfield refused a request (HTTP 403, ${text === null ? 'unreadable JSON' : 'JSON that looks like a rate limit or ban'}) for ${path}.`,
+    );
+    return this.failure('blocked', REFUSED_MESSAGE, { status });
+  }
+
   private async handleResponse(path: string, response: Response): Promise<{ body: unknown } | Failure> {
     const { status } = response;
     const contentType = response.headers.get('content-type') ?? '';
@@ -257,6 +300,7 @@ export class MoxfieldHttpClient {
       }
     }
 
+    if (status === 403 && isJson) return this.handleJsonRefusal(path, response);
     await discardBody(response);
     if (status === 429) {
       // Every instance waits (Retry-After, else an exponential backoff), then slows down.
@@ -270,7 +314,7 @@ export class MoxfieldHttpClient {
       );
     }
     if (status === 403) {
-      // A refusal may be the start of a ban (Moxfield answers 429 first): stop everything.
+      // Not the API answering (no JSON): a firewall, which may be the start of a ban.
       await this.limiter.blocked(`Moxfield refused a request (HTTP 403) for ${path}.`);
       return this.failure('blocked', REFUSED_MESSAGE, { status });
     }
@@ -279,13 +323,7 @@ export class MoxfieldHttpClient {
         status,
       });
     }
-    if (status === 401) {
-      return this.failure(
-        'forbidden',
-        'The deck is private or not accessible without signing in to Moxfield.',
-        { status },
-      );
-    }
+    if (status === 401) return this.failure('forbidden', PRIVATE_MESSAGE, { status });
     const retryAfterSeconds = parseRetryAfter(response.headers.get('retry-after'), this.now());
     const retryable =
       status >= 500 && (retryAfterSeconds === undefined || retryAfterSeconds <= MAX_RETRY_AFTER_SECONDS);

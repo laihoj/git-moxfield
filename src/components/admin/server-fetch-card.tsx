@@ -36,8 +36,8 @@ export function ServerFetchCard({ info }: { info: ServerFetchAdminDTO }) {
           <p>{status.reason}</p>
           <p className="mt-1 text-muted">
             Since <ClockTime value={status.pausedAt} /> (<RelativeTime value={status.pausedAt} />
-            ). Moxfield answers 429 before it refuses, so a refusal may mean the deck is private, or that
-            Moxfield is refusing this app.
+            ). Moxfield answers 429 before it refuses, so its firewall answering may mean that Moxfield is
+            refusing this app. Find out why before you resume.
           </p>
         </Alert>
       )}

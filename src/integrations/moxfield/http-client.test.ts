@@ -129,17 +129,62 @@ describe('MoxfieldHttpClient — error mapping', () => {
     });
   });
 
-  it('pauses server fetching on any 403, also a JSON one: a refusal may start a ban', async () => {
-    const { client, calls, limiter } = setup(() => jsonResponse({ title: 'Forbidden' }, 403));
+  it('maps a 403 with a JSON body to forbidden for that deck only, like a 401', async () => {
+    const { client, calls, limiter } = setup((url) =>
+      url.endsWith('/primer')
+        ? jsonResponse({ ok: 1 })
+        : jsonResponse({ title: 'Forbidden', status: 403 }, 403),
+    );
+    expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
+      code: 'forbidden',
+      status: 403,
+      message: 'The deck is private or not accessible without signing in to Moxfield.',
+    });
+    expect(limiter.blocks).toEqual([]);
+    // Other requests still go out.
+    await expect(client.getPrimerJson('Fx001')).resolves.toEqual({ ok: 1 });
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    ['a rate limit message', { message: 'Rate limit exceeded' }],
+    ['a ban', { error: 'This client has been banned.' }],
+    ['a block', { title: 'Blocked', detail: 'Request blocked' }],
+    ['abuse', { reason: 'abuse detected' }],
+    ['too many requests', { message: 'Too many requests' }],
+    ['a firewall', { message: 'Denied by the firewall' }],
+  ])('pauses every instance on a JSON 403 that looks like %s', async (_label, body) => {
+    const { client, calls, limiter } = setup(() => jsonResponse(body, 403));
     expect(await failure(client.getDeckJson(DECK_ID))).toMatchObject({
       code: 'blocked',
       status: 403,
       message: expect.stringContaining('until an admin resumes it') as unknown,
     });
-    expect(limiter.blocks).toEqual([`Moxfield refused a request (HTTP 403) for /v3/decks/all/${DECK_ID}.`]);
-    // The limiter refuses everything after that, so nothing more is sent.
+    expect(limiter.blocks).toEqual([
+      `Moxfield refused a request (HTTP 403, JSON that looks like a rate limit or ban) for /v3/decks/all/${DECK_ID}.`,
+    ]);
     expect((await failure(client.getPrimerJson('Fx001'))).code).toBe('blocked');
     expect(calls).toHaveLength(1);
+  });
+
+  it('pauses every instance on a 403 whose JSON cannot be read', async () => {
+    const { client, limiter } = setup(
+      () => new Response('{not json', { status: 403, headers: { 'content-type': 'application/json' } }),
+    );
+    expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('blocked');
+    expect(limiter.blocks).toHaveLength(1);
+  });
+
+  it.each([
+    ['without a body', () => new Response(null, { status: 403 })],
+    [
+      'in plain text',
+      () => new Response('Forbidden', { status: 403, headers: { 'content-type': 'text/plain' } }),
+    ],
+  ])('pauses every instance on a 403 %s (not the API answering)', async (_label, response) => {
+    const { client, limiter } = setup(response);
+    expect((await failure(client.getDeckJson(DECK_ID))).code).toBe('blocked');
+    expect(limiter.blocks).toEqual([`Moxfield refused a request (HTTP 403) for /v3/decks/all/${DECK_ID}.`]);
   });
 
   it('maps 401 to forbidden without pausing', async () => {

@@ -432,8 +432,10 @@ together sends at most one request per `MOXFIELD_MIN_REQUEST_INTERVAL_MS` (2 s b
 default, at least 1.5 s against Moxfield), in the database's time. A per-deck cooldown
 also holds back repeated refreshes. A 429 makes every instance wait (its `Retry-After`,
 else an exponential backoff from 30 s) and then run at half speed for 10 min; the UI
-shows until when. A 403 or a bot-protection challenge pauses server fetching for every
-instance until an admin resumes it (Admin page, `pnpm moxfield resume`), and the UI
+shows until when. Moxfield's firewall (a 403 that is not JSON, a bot-protection challenge,
+HTML) pauses server fetching for every instance until an admin resumes it; a 403 in JSON
+is a private deck and fails that deck only. The pause ends from the Admin page or
+`pnpm moxfield resume`, and meanwhile the UI
 switches to browser capture. When the limiter's database cannot be reached, nothing is
 sent.
 
