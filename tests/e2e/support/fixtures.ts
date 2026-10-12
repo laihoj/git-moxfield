@@ -92,10 +92,22 @@ async function isolateNetwork(context: BrowserContext): Promise<void> {
   );
 }
 
+/**
+ * A React development-build bug, not the app's: after a server component throws (every
+ * `notFound()` page, such as a dead share link), React draws its Server Components
+ * performance track and passes `performance.measure` a negative end time when the dev
+ * server's clock is behind the browser's (a `next dev` that lived through a sleep is
+ * enough), so the measure throws a moment after the page has rendered. Production builds
+ * have no such track. `tests/e2e/react-dev-timing.spec.ts` provokes it; when that spec
+ * fails because the error no longer happens, React is fixed: delete both.
+ */
+const REACT_DEV_TIMING_ERROR =
+  /^Uncaught TypeError: Failed to execute 'measure' on 'Performance': '[^']*' cannot have a negative time stamp\.$/;
+
 /** Console errors, warnings and uncaught errors of the test's browser contexts. */
 class BrowserProblems implements ConsoleErrors {
   readonly problems: string[] = [];
-  private readonly allowed: RegExp[] = [];
+  private readonly allowed: RegExp[] = [REACT_DEV_TIMING_ERROR];
 
   allow(pattern: RegExp): void {
     this.allowed.push(pattern);

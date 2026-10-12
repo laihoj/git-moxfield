@@ -659,7 +659,8 @@ that is what it tests. Every test starts with the mock back to its seeded decks 
 app's server-fetch pause cleared (`POST /api/e2e/reset`); the `/api/e2e/*` endpoints
 exist only with `GIT_MOXFIELD_E2E=true`. Tests keep their browsers off the internet
 and fail on browser console errors, hydration warnings and uncaught page errors, in
-every browser context they open (`tests/e2e/support/fixtures.ts`).
+every browser context they open, except one known React development-build timing error
+(`tests/e2e/support/fixtures.ts`).
 
 The remote suite runs the database layer, the migrations and the import against a real
 libSQL server, the way Turso behaves (no extended error codes, rejected `PRAGMA`s, the
