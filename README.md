@@ -267,8 +267,8 @@ normally. git-moxfield never tries to evade this. It supports three honest paths
    API User-Agent (`MOXFIELD_USER_AGENT`; see
    [Turn on server fetching](#turn-on-server-fetching-with-moxfields-user-agent)). All
    servers of an installation together send at most one request every 2 s (Moxfield's
-   terms allow one per second), a 429 slows all of them down, and a refusal pauses
-   server fetching until an admin resumes it
+   terms allow one per second), a 429 slows all of them down, and Moxfield's firewall
+   answering pauses server fetching until an admin resumes it
    ([ADR 0009](docs/adr/0009-global-moxfield-rate-limit.md)); the UI then switches to the
    bookmarklet. On Netlify it is off by default (`MOXFIELD_SERVER_FETCH=off`):
    Cloudflare blocks cloud servers without the User-Agent.
@@ -439,11 +439,12 @@ limit for every function instance together through the database
 2. Open the deck's page and click **Refresh** once. Two requests go out (deck and
    primer, 2 s apart): the page shows "Updated from Moxfield" (or "checked just now").
 3. Do not click again for a minute, and do not test with loops or several tabs.
-4. If the page says "Moxfield asked us to slow down", wait: it ends on its own. If it says
-   "Moxfield blocked the server", server fetching is paused for everyone: do not resume
-   it right away. Read the reason on _Admin_, find out why (is the User-Agent exactly
-   the one Moxfield issued, is the deck public?), then resume on _Admin_ or with
-   `pnpm moxfield resume`.
+4. If the page says "Moxfield asked us to slow down", wait: it ends on its own. "The deck
+   is private" concerns that deck only: make it public or unlisted on Moxfield. If it
+   says "Moxfield blocked the server", Moxfield's firewall answered and server fetching
+   is paused for everyone: do not resume it right away. Read the reason on _Admin_, find
+   out why (is the User-Agent exactly the one Moxfield issued?), then resume on _Admin_
+   or with `pnpm moxfield resume`.
 
 To switch it off again, set `MOXFIELD_SERVER_FETCH` to `off` and deploy. From your
 computer, `pnpm moxfield status` (with `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` of the

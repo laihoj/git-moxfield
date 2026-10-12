@@ -116,9 +116,11 @@ keeps them ([ADR 0009](adr/0009-global-moxfield-rate-limit.md)):
   reached, nothing is sent.
 - **429.** Every instance waits for `Retry-After` (or 30 s, doubling with each 429 in a
   row, at most 15 min), then runs at half speed for 10 min, and recovers on its own.
-- **403, a challenge or HTML.** Server fetching pauses for every instance until an admin
-  resumes it on the Admin page or with `pnpm moxfield resume`. The reason and the time
-  are shown on the deck status panel, Connect Moxfield and the Admin page.
+- **The firewall: a non-JSON 403, a challenge or HTML.** Server fetching pauses for every
+  instance until an admin resumes it on the Admin page or with `pnpm moxfield resume`.
+  The reason and the time are shown on the deck status panel, Connect Moxfield and the
+  Admin page. A 403 in JSON is a private deck (that deck only), unless its body mentions
+  a rate limit, block, ban or the like, or cannot be read: then it pauses too.
 - **The User-Agent** is set only in the production site's Netlify environment variables
   (never in a file), never logged, and never sent anywhere but in requests to Moxfield's
   API. An instance with it configured outside the Netlify production deployment warns
@@ -232,8 +234,8 @@ again, which is accepted. Either way the key is what authenticates.
 | ------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Malformed URL / id       | URL parser                                                                                             | `invalid-ref`, nothing fetched                                                                                                                    |
 | Deleted deck / wrong id  | 404                                                                                                    | `not-found`                                                                                                                                       |
-| Private deck             | 401                                                                                                    | `forbidden`                                                                                                                                       |
-| Refused                  | any other 403 (JSON too: a private deck, or the start of a ban)                                        | `blocked`; server fetching paused for every instance until an admin resumes it                                                                    |
+| Private deck             | 401, or 403 with a JSON body                                                                           | `forbidden`                                                                                                                                       |
+| Refused                  | 403 that is not JSON, or JSON mentioning a rate limit, block, ban…, or unreadable JSON                 | `blocked`; server fetching paused for every instance until an admin resumes it                                                                    |
 | Cloudflare block         | 403 + `text/html` (or `cf-ray`, non-JSON), `cf-mitigated: challenge` at any status, or HTML with a 2xx | `blocked`; server fetching paused for every instance until an admin resumes it                                                                    |
 | Rate limit               | 429                                                                                                    | `rate-limited`; every instance waits for `Retry-After` (else 30 s, doubling per 429 in a row, at most 15 min), then runs at half speed for 10 min |
 | Too many requests queued | the next free slot is more than 10 s away                                                              | `rate-limited` ("busy, try again in N s"), nothing sent                                                                                           |

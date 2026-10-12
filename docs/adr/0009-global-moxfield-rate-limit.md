@@ -70,13 +70,20 @@ exponential backoff (30 s, doubling with each 429 in a row, at most 15 min). For
 after the pause the interval is doubled. A 429 within that slow period continues the
 series; after it, everything is back to normal on its own.
 
-**403 or a challenge: pause until an operator resumes.** Any 403 (a block page, or JSON:
-it may be a private deck, but it may also be the start of a ban), a Cloudflare challenge
-(`cf-mitigated: challenge`) or an HTML answer where JSON belongs pauses server fetching
-for every instance. The row keeps the first reason and when it happened; status panels,
+**The firewall: pause until an operator resumes.** What Moxfield's staff described as
+the firewall (a 403 whose body is not JSON: an HTML block page, a `cf-ray` page, plain
+text or nothing), a Cloudflare challenge (`cf-mitigated: challenge`, at any status) or any
+HTML answer where JSON belongs pauses server fetching for every instance.
+
+A 403 the API answers **in JSON** is the API saying the deck is private: like a 401 it
+fails that deck only ("private or not accessible"), and nothing pauses. Unless the JSON
+looks like a rate limit, abuse protection or a ban (it mentions rate, limit, throttling,
+too many, block, ban, abuse, firewall, captcha, challenge, Cloudflare, suspended or
+denied) or cannot be read: then it pauses everything, erring on the side of stopping,
+since a false alarm only costs an admin's click. The row keeps the first reason and when it happened; status panels,
 Connect Moxfield and the Admin page show them. It ends only when an operator resumes it:
 the Admin page's **Resume** button, or `pnpm moxfield resume` against the production
-database. A 401 stays "private deck" and pauses nothing.
+database.
 
 **No background fetching.** Deck pages no longer refresh themselves
 (`AUTO_REFRESH_AFTER_SECONDS` is gone). The server asks Moxfield only when a user
