@@ -24,7 +24,7 @@
 import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
-import { deckReference, isContentAddressed } from '@/core/hash';
+import { deckReference, isContentAddressed, sha256Hex } from '@/core/hash';
 import {
   branches,
   cardCatalog,
@@ -42,25 +42,22 @@ import {
 import { isSqlErrorKind } from '@/server/db/sql-errors';
 
 import { catalogUpserts } from './catalog';
+import { corruptData } from './codec';
 import {
+  assertStorableSize,
   batches,
   distinct,
-  selectInBatches,
   excluded,
   isUniqueViolation,
+  selectInBatches,
   withTransaction,
   writeAll,
   type LibsqlExecutor,
   type RepositoryContext,
 } from './context';
 import { RepositoryError } from './errors';
-import { assertRawBlobStorable, inflateRawBlob } from './raw-blobs';
-import {
-  assertSnapshotStorable,
-  snapshotCardRows,
-  snapshotWriteStatements,
-  verifiedSnapshot,
-} from './snapshots';
+import { inflateRawBlob } from './raw-blobs';
+import { decodeSnapshot, snapshotCardRows, snapshotWriteStatements } from './snapshots';
 
 export type DeckRow = typeof decks.$inferSelect;
 export type BranchRow = typeof branches.$inferSelect;
@@ -299,7 +296,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
       const rows = await selectInBatches(hashes, (batch) =>
         ctx.db.select().from(snapshots).where(inArray(snapshots.hash, batch)).all(),
       );
-      for (const row of rows) verifiedSnapshot(row);
+      for (const row of rows) verifySnapshot(row);
       return rows;
     },
 
@@ -384,8 +381,8 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
 
     async insertSnapshots(rows) {
       const [first, ...rest] = rows.map((row) => {
-        const snapshot = verifiedSnapshot(row);
-        assertSnapshotStorable(row.hash, row.canonicalJson);
+        const snapshot = verifySnapshot(row);
+        assertStorableSize(`Snapshot ${row.hash}`, Buffer.byteLength(row.canonicalJson, 'utf8'));
         return { row, cards: snapshotCardRows(row.hash, snapshot) };
       });
       if (first === undefined) return;
@@ -399,7 +396,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
       if (rows.length === 0) return;
       for (const row of rows) {
         await inflateRawBlob(row);
-        assertRawBlobStorable(row.hash, row.data);
+        assertStorableSize(`Raw payload ${row.hash} (compressed)`, row.data.byteLength);
       }
       await writeAll(ctx, (db) => [
         db
@@ -465,6 +462,14 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
       );
     },
   };
+}
+
+/** Verifies a snapshot row against its hash and decodes it. */
+function verifySnapshot(row: SnapshotRow): ReturnType<typeof decodeSnapshot> {
+  if (sha256Hex(row.canonicalJson) !== row.hash) {
+    throw corruptData(`Snapshot ${row.hash}`, 'content does not match its hash');
+  }
+  return decodeSnapshot(row);
 }
 
 /**

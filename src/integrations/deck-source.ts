@@ -39,7 +39,7 @@ export interface RawSourcePayload {
  * source API), `browser-capture` (the user's browser fetched it on the source site, via the
  * bookmarklet, and handed it over) or `manual-paste` (the user pasted raw JSON).
  */
-export const INGEST_METHODS = ['server', 'browser-capture', 'manual-paste'] as const;
+const INGEST_METHODS = ['server', 'browser-capture', 'manual-paste'] as const;
 
 export type IngestMethod = (typeof INGEST_METHODS)[number];
 
@@ -58,7 +58,7 @@ export function isIngestMethod(value: string): value is IngestMethod {
  * `timeout`, `network` and `schema` (the response could not be understood: schema
  * changed, not JSON, ...).
  */
-export const DECK_SOURCE_ERROR_CODES = [
+const DECK_SOURCE_ERROR_CODES = [
   'invalid-ref',
   'not-found',
   'forbidden',
@@ -122,10 +122,7 @@ export class DeckSourceError extends Error {
   }
 }
 
-/**
- * Whole seconds from `nowMs` until `untilMs` (epoch milliseconds), rounded up and at least
- * 0: the `retryAfterSeconds` of a pause that lasts until a deadline. `NaN` in, `NaN` out.
- */
+/** The `retryAfterSeconds` of a pause until `untilMs`: whole seconds rounded up, at least 0 (`NaN` stays). */
 export function retryAfterSecondsUntil(untilMs: number, nowMs: number): number {
   return Math.max(0, Math.ceil((untilMs - nowMs) / 1000));
 }
@@ -140,10 +137,8 @@ export function isDeckSourceError(value: unknown): value is DeckSourceError {
 }
 
 /**
- * How a section is restored on the source site: `paste` it into a Bulk Edit board (the
- * primary action), `manual` when the source sets it with an action of its own (the
- * command zone), `reference` when the source cannot restore it by pasting at all (the list
- * is only there to read).
+ * How a section is restored on the source site: `paste` it into a Bulk Edit board, set it
+ * by hand (`manual`, the command zone), or read it only (`reference`, cannot be pasted).
  */
 export type RestoreSectionKind = 'paste' | 'manual' | 'reference';
 

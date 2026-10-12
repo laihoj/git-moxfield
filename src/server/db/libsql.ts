@@ -43,12 +43,7 @@ import type { LibSQLDatabase } from 'drizzle-orm/libsql/driver-core';
 import { drizzle } from 'drizzle-orm/libsql/http';
 import type { BaseSQLiteDatabase, SQLiteTransaction } from 'drizzle-orm/sqlite-core';
 
-import {
-  databaseUrlScheme,
-  isRemoteDatabaseScheme,
-  MEMORY_DATABASE_URL,
-  SUPPORTED_DATABASE_URLS_HINT,
-} from './database-location';
+import { databaseUrlKind, databaseUrlScheme, SUPPORTED_DATABASE_URLS_HINT } from './database-location';
 import * as schema from './schema';
 import { guardClient } from './transaction';
 import { sharedWriteLock, WriteLock } from './write-lock';
@@ -178,20 +173,21 @@ function parseFile(url: string): LocalTarget {
 
 function parseDatabaseUrl(url: string): DatabaseTarget {
   const trimmed = url.trim();
-  if (trimmed === MEMORY_DATABASE_URL) {
-    return {
-      kind: 'local',
-      clientUrl: trimmed,
-      file: undefined,
-      lockKey: undefined,
-      description: 'in-memory database',
-    };
+  switch (databaseUrlKind(trimmed)) {
+    case 'memory':
+      return {
+        kind: 'local',
+        clientUrl: trimmed,
+        file: undefined,
+        lockKey: undefined,
+        description: 'in-memory database',
+      };
+    case 'file':
+      return parseFile(trimmed);
+    case 'remote':
+      return parseRemote(trimmed.replace(/^ws(s?):/i, (_, secure: string) => `http${secure}:`));
   }
   const scheme = databaseUrlScheme(trimmed);
-  if (scheme === 'file') return parseFile(trimmed);
-  if (isRemoteDatabaseScheme(scheme)) {
-    return parseRemote(trimmed.replace(/^ws(s?):/i, (_, secure: string) => `http${secure}:`));
-  }
   // Never echo the URL: it may carry credentials.
   throw new DatabaseConfigError(
     `Unsupported database URL${scheme === undefined ? '' : ` scheme "${scheme}:"`}. Use ${SUPPORTED_DATABASE_URLS_HINT}.`,

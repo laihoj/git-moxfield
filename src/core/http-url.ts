@@ -1,4 +1,4 @@
-/** Absolute http(s) URLs, as the app's base URLs (itself, Moxfield's API and site) are written. Dependency-free. */
+/** Absolute http(s) URLs: the app's base URLs (its own, Moxfield's API and site). Dependency-free. */
 
 /** The absolute http(s) URL `value` names; `null` for unparseable text and for any other scheme. */
 export function parseHttpUrl(value: string): URL | null {
@@ -10,10 +10,7 @@ export function parseHttpUrl(value: string): URL | null {
   }
 }
 
-/**
- * `path` on the app at `appUrl`, as an absolute URL.
- * @throws {TypeError} when `appUrl` is not an absolute http(s) URL.
- */
+/** `path` on the app at `appUrl`. @throws {TypeError} unless `appUrl` is an absolute http(s) URL. */
 export function absoluteAppUrl(path: string, appUrl: string): string {
   const base = parseHttpUrl(appUrl);
   if (base === null) throw new TypeError('The app URL must be an absolute http(s) URL');
@@ -25,9 +22,4 @@ export function stripTrailingSlashes(text: string): string {
   let end = text.length;
   while (end > 0 && text[end - 1] === '/') end--;
   return text.slice(0, end);
-}
-
-/** The origin and path of `url` without trailing slashes, query or fragment: a base to append paths to. */
-export function httpBaseUrl(url: URL): string {
-  return `${url.origin}${stripTrailingSlashes(url.pathname)}`;
 }

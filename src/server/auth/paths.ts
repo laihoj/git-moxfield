@@ -53,10 +53,7 @@ export function sharedDeckPath(token: string): string {
   return `${SHARED_DECK_PATH}/${token}`;
 }
 
-/**
- * The token at the end of a link path (the inverse of {@link loginLinkPath},
- * {@link invitePath} and {@link sharedDeckPath}); a path without a `/` is returned as is.
- */
+/** The token at the end of a link path: the inverse of {@link loginLinkPath} and the like. */
 export function tokenOfLinkPath(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }

@@ -1,8 +1,4 @@
-/**
- * The structured logger the app logs through (`createLogger` in `src/server/logger.ts`
- * implements it). Only the contract lives here, so adapters that must not import the
- * server can accept a logger all the same.
- */
+/** The contract of `createLogger` (`src/server/logger.ts`), for code that must not import the server. */
 export interface Logger {
   debug(message: string, context?: Record<string, unknown>): void;
   info(message: string, context?: Record<string, unknown>): void;

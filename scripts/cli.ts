@@ -1,13 +1,15 @@
 /**
  * Plumbing shared by the command-line scripts: where their output goes, how they read
- * their arguments, running only as the main module (tests import the scripts), and
- * turning the result of `main` into the process exit code.
+ * their arguments and the base URL of the links they print, running only as the main
+ * module (tests import the scripts), and turning the result of `main` into the exit code.
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
 
+import { parseHttpUrl } from '@/core/http-url';
 import type { Logger } from '@/core/logger';
+import type { AppConfig } from '@/server/config';
 import { createLogger } from '@/server/logger';
 
 /** Where a command writes: tests collect the lines, the scripts print them. */
@@ -72,6 +74,15 @@ export function isEntryPoint(moduleUrl: string): boolean {
 export function quietLogger(scope: string): Logger {
   const logger = createLogger(scope);
   return { ...logger, debug: () => undefined, info: () => undefined };
+}
+
+/** The base URL when neither `--base-url` nor `PUBLIC_APP_URL` is set. */
+export const DEFAULT_APP_URL = 'http://localhost:3000';
+
+/** The base URL to print links with (`--base-url`, else `PUBLIC_APP_URL`); `null` unless absolute http(s). */
+export function resolveBaseUrl(option: unknown, config: Pick<AppConfig, 'PUBLIC_APP_URL'>): string | null {
+  const value = typeof option === 'string' ? option : (config.PUBLIC_APP_URL ?? DEFAULT_APP_URL);
+  return parseHttpUrl(value)?.href ?? null;
 }
 
 /**

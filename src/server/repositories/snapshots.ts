@@ -6,7 +6,7 @@ import { eq, sql, type SQL } from 'drizzle-orm';
 
 import { canonicalizeSnapshot, stableStringify } from '@/core/canonical';
 import { isRecord } from '@/core/guards';
-import { sha256Hex, snapshotHash } from '@/core/hash';
+import { snapshotHash } from '@/core/hash';
 import { SNAPSHOT_SCHEMA_VERSION, type CanonicalSnapshot } from '@/core/model';
 import { snapshotCards, snapshots } from '@/server/db/schema';
 
@@ -50,7 +50,7 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
       assertCanonical(snapshot);
       const canonicalJson = stableStringify(snapshot);
       const hash = snapshotHash(snapshot);
-      assertSnapshotStorable(hash, canonicalJson);
+      assertStorableSize(`Snapshot ${hash}`, Buffer.byteLength(canonicalJson, 'utf8'));
       const createdAt = ctx.now();
       const known = await ctx.db
         .select({ hash: snapshots.hash })
@@ -120,11 +120,7 @@ export function snapshotCardRows(
   );
 }
 
-/**
- * The statements that store snapshot rows and their card index rows (see
- * {@link snapshotCardRows}) as one atomic write set. Rows that exist already are left as
- * they are.
- */
+/** Stores snapshot rows with their card index rows as one write set; existing rows are kept. */
 export function snapshotWriteStatements(
   db: LibsqlExecutor,
   rows: readonly [typeof snapshots.$inferInsert, ...(typeof snapshots.$inferInsert)[]],
@@ -137,27 +133,6 @@ export function snapshotWriteStatements(
       .onConflictDoNothing(),
     ...batches(cards).map((batch) => db.insert(snapshotCards).values(batch).onConflictDoNothing()),
   ];
-}
-
-/**
- * @throws {RepositoryError} `invalid-input` when the canonical JSON of the snapshot stored
- * under `hash` is too large to store (see `MAX_STORED_VALUE_BYTES`).
- */
-export function assertSnapshotStorable(hash: string, canonicalJson: string): void {
-  assertStorableSize(`Snapshot ${hash}`, Buffer.byteLength(canonicalJson, 'utf8'));
-}
-
-/**
- * Decodes a snapshot row that was not written by this module, after checking its content
- * against its hash.
- * @throws {RepositoryError} `corrupt-data` when the content does not match the hash; see
- * {@link decodeSnapshot}.
- */
-export function verifiedSnapshot(row: typeof snapshots.$inferSelect): CanonicalSnapshot {
-  if (sha256Hex(row.canonicalJson) !== row.hash) {
-    throw corruptData(`Snapshot ${row.hash}`, 'content does not match its hash');
-  }
-  return decodeSnapshot(row);
 }
 
 function assertCanonical(snapshot: CanonicalSnapshot): void {
@@ -195,10 +170,8 @@ export function decodeSnapshot(row: typeof snapshots.$inferSelect): CanonicalSna
 }
 
 /**
- * Decodes the snapshot a statement joined to `owner` (e.g. `Commit abc`): the foreign key
- * keeps the snapshot while the owner exists, and one statement reads both from the same
- * state of the database, so a missing row is damage.
- * @throws {RepositoryError} `corrupt-data` when `row` is missing; see {@link decodeSnapshot}.
+ * Decodes the snapshot one statement read joined to `owner` (`Commit abc`): the foreign
+ * key keeps it while the owner exists, so a missing row is `corrupt-data`.
  */
 export function requireJoinedSnapshot(
   owner: string,

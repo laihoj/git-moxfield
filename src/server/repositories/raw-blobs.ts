@@ -79,7 +79,7 @@ export function createRawBlobRepository(ctx: RepositoryContext): RawBlobReposito
         .get();
       if (known) return hash;
       const compressed = await gzip(bytes, { level: constants.Z_BEST_COMPRESSION });
-      assertRawBlobStorable(hash, compressed);
+      assertStorableSize(`Raw payload ${hash} (compressed)`, compressed.byteLength);
       const values = {
         hash,
         mediaType,
@@ -140,14 +140,6 @@ export async function inflateRawBlob(row: typeof rawBlobs.$inferSelect): Promise
 }
 
 /** `JSON.stringify` typed honestly: it returns `undefined` for `undefined`, functions and symbols. */
-/**
- * @throws {RepositoryError} `invalid-input` when the compressed payload stored under
- * `hash` is too large to store (see `MAX_STORED_VALUE_BYTES`).
- */
-export function assertRawBlobStorable(hash: string, compressed: Uint8Array): void {
-  assertStorableSize(`Raw payload ${hash} (compressed)`, compressed.byteLength);
-}
-
 const stringify: (value: unknown) => string | undefined = JSON.stringify;
 
 function serialize(data: unknown): string {

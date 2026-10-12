@@ -20,7 +20,7 @@ import { allCards, cardName, cardZoneIndex, emptySnapshot } from '@/core/canonic
 import { cardKey } from '@/core/card-key';
 import { diffSnapshots, renamedKeys } from '@/core/diff';
 import { deriveCardHistory, traceCardPoints } from '@/core/history/card-history';
-import type { CardHistory, CardVersionPoint, ZoneQuantity } from '@/core/history/types';
+import type { CardHistory, VersionMeta, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { primerLineDiff } from '@/core/primer/primer-diff';
 import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
@@ -120,10 +120,7 @@ export class DeckHistory {
     private readonly sources: DeckSourceRegistry,
   ) {}
 
-  /**
-   * A primer as portable markdown, converted by the deck's source (the primer itself for a
-   * source that is not registered); `null` for no primer.
-   */
+  /** A primer as markdown, by the deck's source (as is for an unknown source); `null` without one. */
   primerMarkdown(source: string, primer: string | null): string | null {
     if (primer === null || primer === '') return null;
     return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
@@ -348,7 +345,7 @@ export class DeckHistory {
     const inputs = new CardHistoryInputs(this.repos, deckId, lineage, working?.snapshot ?? null);
     const [, keyFacts] = await Promise.all([inputs.prefetch(key), this.repos.catalog.getMany([key])]);
 
-    const versions: Omit<CardVersionPoint, 'zones' | 'renamedFrom'>[] = lineage.map((commit) => ({
+    const versions: VersionMeta[] = lineage.map((commit) => ({
       commitId: commit.id,
       sequence: commit.sequence,
       at: commit.createdAt,
@@ -365,7 +362,7 @@ export class DeckHistory {
           const [before, after] = inputs.snapshotPair(index - 1, index);
           return renamedKeys(before, after);
         },
-        nameAt: (pointKey, index) => cardName(inputs.snapshotAt(index), pointKey) ?? pointKey,
+        nameAt: (pointKey, index) => cardName(inputs.snapshotAt(index), pointKey),
       });
       const newest = points.findLastIndex((point) => point.zones.length > 0);
       if (newest === -1) return null;

@@ -6,7 +6,6 @@ import {
   BOOKMARKLET_KEY_PATTERN,
   CAPTURE_API_PATH,
   CAPTURE_ENVELOPE_KIND,
-  CAPTURE_FORM_ERRORS,
   CAPTURE_FORM_TOKEN_FIELD,
   CAPTURE_MESSAGE_TYPES,
   CAPTURE_PROTOCOL_VERSION,
@@ -90,7 +89,7 @@ describe('capture protocol', () => {
   });
 
   it('parses the ?error= codes of the capture page, and nothing else', () => {
-    for (const code of CAPTURE_FORM_ERRORS) expect(parseCaptureFormError(code)).toBe(code);
+    for (const code of ['invalid', 'too-large', 'failed']) expect(parseCaptureFormError(code)).toBe(code);
     for (const other of ['', 'unknown', 'INVALID', null, undefined, 5, ['invalid']]) {
       expect(parseCaptureFormError(other)).toBeNull();
     }

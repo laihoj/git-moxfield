@@ -13,7 +13,6 @@
  */
 import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from '@/core/model';
-import { formatCardLines, linesText, type LineFormat } from '@/core/printing-line';
 import { joinList, pluralize } from '@/core/text';
 import { isKnownZone, sortZones, zoneLabel, type KnownZone, type ZoneId } from '@/core/zones';
 
@@ -61,16 +60,24 @@ export function moxfieldAsciiName(name: string): string {
     .replace(/Æ/g, 'Ae');
 }
 
-/** What Moxfield's Bulk Edit understands: no unknown finishes, no languages, no flags. */
-const MOXFIELD_LINES: LineFormat = { unknownFinish: 'omit', lang: false, flags: false };
+function finishMarker(finish: string): string {
+  if (finish === 'foil') return ' *F*';
+  if (finish === 'etched') return ' *E*';
+  return '';
+}
 
 /** Import lines of one card: one per printing, or `<qty> <Name>` without printings. */
 export function moxfieldCardLines(card: Pick<CanonicalCard, 'name' | 'quantity' | 'printings'>): string[] {
-  return formatCardLines(card, MOXFIELD_LINES, moxfieldAsciiName(card.name));
+  const name = moxfieldAsciiName(card.name);
+  if (card.printings.length === 0) return [`${card.quantity} ${name}`];
+  return card.printings.map(
+    (p) => `${p.quantity} ${name} (${p.set.toUpperCase()}) ${p.collectorNumber}${finishMarker(p.finish)}`,
+  );
 }
 
 function zoneText(snapshot: CanonicalSnapshot, zone: ZoneId): string {
-  return linesText(zoneCards(snapshot, zone).flatMap(moxfieldCardLines));
+  const lines = zoneCards(snapshot, zone).flatMap(moxfieldCardLines);
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }
 
 function bulkEditTab(zone: ZoneId): string | undefined {

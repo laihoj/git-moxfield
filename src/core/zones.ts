@@ -48,15 +48,8 @@ const ZONE_LABELS: Record<KnownZone, string> = {
   tokens: 'Tokens',
 };
 
-/**
- * The command zone: the zones whose cards are set with deck-page actions rather than
- * listed in the deck itself, and shown flat (few cards) wherever zones are listed.
- */
-export const COMMAND_ZONES = [
-  'commanders',
-  'companions',
-  'signatureSpells',
-] as const satisfies readonly KnownZone[];
+/** The command zone: set with deck-page actions rather than listed, and shown flat (few cards). */
+const COMMAND_ZONES = ['commanders', 'companions', 'signatureSpells'] as const satisfies readonly KnownZone[];
 
 /** True for the zones of the command zone (see {@link COMMAND_ZONES}). */
 export function isCommandZone(zone: ZoneId): boolean {

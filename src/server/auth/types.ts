@@ -139,10 +139,7 @@ export interface IssuedLink {
   expiresAt: string;
 }
 
-/**
- * Why a one-time link (an invite, a device or recovery link) cannot be used: `invalid`
- * for a token that names nothing usable, else the link's state.
- */
+/** Why an invite, device or recovery link cannot be used (`invalid`: the token names nothing usable). */
 export type OneTimeLinkProblem = 'invalid' | 'expired' | 'used' | 'revoked';
 
 /** What a device or recovery link would do, for the page that asks before signing in. */
@@ -218,13 +215,6 @@ export interface RevokeKeyOptions {
   includeDerived?: boolean;
   /** Also revoke the share links made in the browsers it signed in. */
   includeShareLinks?: boolean;
-}
-
-/** An invite to create (see `AuthService.createInvite`). */
-export interface InviteInput {
-  role: UserRole;
-  /** A reminder for admins; never shown to the invitee. */
-  note?: string;
 }
 
 export type InviteStatus = 'pending' | Exclude<OneTimeLinkProblem, 'invalid'>;

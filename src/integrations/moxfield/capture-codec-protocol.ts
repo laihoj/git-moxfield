@@ -125,32 +125,27 @@ export type CapturePayloadFailure =
   /** Tagged with an encoding this version does not know. */
   | 'unsupported-encoding';
 
-/** What {@link parseCapturePayload} found: how the payload is encoded, or why it is refused. */
-export type ParsedCapturePayload =
-  /** Untagged: the text itself, as received. */
-  | { kind: 'plain'; text: string }
-  /** Tagged as gzip: the base64url `data` after the tag (not yet checked). */
+/** What {@link parseCapturePayload} found: a plain payload, a gzip one's unchecked data, or a refusal. */
+type ParsedCapturePayload =
+  | { kind: 'plain' }
   | { kind: 'compressed'; data: string }
-  | { kind: 'rejected'; reason: CapturePayloadFailure };
+  | { kind: 'rejected'; reason: 'unsupported-encoding' | 'too-large' };
 
 /**
- * The first steps of reading a capture payload, the same for the server's decoder
- * (`./capture-codec`) and the paste form's preview, in this order: surrounding whitespace
- * is ignored; text in the {@link CAPTURE_TAG_NAMESPACE} must carry a known tag; and a
- * compressed payload must fit `maxEncodedChars` (tag included). Plain payloads are
- * returned unchanged (their size is the caller's business); the base64url data of a
- * compressed one still has to be decoded ({@link base64UrlToBytes}, or the server's own).
+ * The first steps of every decoder (the server's and the paste form's preview), in this
+ * order: surrounding whitespace is ignored, a tagged payload must use a known tag and fit
+ * `maxEncodedChars` (tag included). A plain payload's size is the caller's business.
  */
 export function parseCapturePayload(input: string, maxEncodedChars: number): ParsedCapturePayload {
   const text = input.trim();
-  if (!text.startsWith(CAPTURE_TAG_NAMESPACE)) return { kind: 'plain', text: input };
+  if (!text.startsWith(CAPTURE_TAG_NAMESPACE)) return { kind: 'plain' };
   if (!text.startsWith(CAPTURE_GZIP_TAG)) return { kind: 'rejected', reason: 'unsupported-encoding' };
   if (text.length > maxEncodedChars) return { kind: 'rejected', reason: 'too-large' };
   return { kind: 'compressed', data: text.slice(CAPTURE_GZIP_TAG.length) };
 }
 
 /** `bytes` as base64url without padding (RFC 4648 §5), in {@link BASE64_CHUNK_BYTES} chunks. */
-export function bytesToBase64Url(bytes: Uint8Array): string {
+function bytesToBase64Url(bytes: Uint8Array): string {
   let base64 = '';
   for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
     base64 += btoa(String.fromCharCode(...bytes.subarray(start, start + BASE64_CHUNK_BYTES)));
@@ -159,10 +154,8 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 /**
- * The bytes of canonical base64url `data`, or `null` when it is not: characters outside the
- * alphabet, a length that cannot end a group, or an encoding that is not the canonical one
- * of its bytes (unused trailing bits set), which `atob` would silently accept. The same
- * text is accepted here and by the server's decoder.
+ * The bytes of `data`, or `null` unless it is the canonical base64url of its bytes (no
+ * stray characters, no unused trailing bits set, which `atob` accepts): as the server reads it.
  */
 export function base64UrlToBytes(data: string): Uint8Array<ArrayBuffer> | null {
   // A single character in the last group carries no whole byte: never valid.
@@ -197,10 +190,8 @@ export function isEncodedCapturePayload(payload: string): boolean {
 }
 
 /**
- * Whether `text` takes more than `maxBytes` bytes as UTF-8, counted without encoding it:
- * the UTF-16 length is a lower bound (every code unit takes at least a byte), so the exact
- * count only runs for text that might fit. A lone surrogate counts as the 3 bytes of U+FFFD,
- * as encoders write it.
+ * Whether `text` takes more than `maxBytes` bytes as UTF-8, counted without encoding it (a
+ * lone surrogate counts as the 3 bytes of U+FFFD, as encoders write it).
  */
 export function exceedsUtf8Bytes(text: string, maxBytes: number): boolean {
   if (text.length > maxBytes) return true;

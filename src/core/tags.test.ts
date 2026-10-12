@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  MAX_VERSION_TAG_LENGTH,
-  normalizeTagInput,
-  normalizeVersionTag,
-  parseTagDraft,
-  tagProblem,
-} from './tags';
+import { MAX_VERSION_TAG_LENGTH, normalizeVersionTag, parseTagDraft } from './tags';
 
 describe('normalizeVersionTag', () => {
   it.each([
@@ -38,28 +32,27 @@ describe('normalizeVersionTag', () => {
   });
 });
 
-describe('normalizeTagInput and tagProblem (what the editors preview)', () => {
-  it('previews the stored form without judging it', () => {
-    expect(normalizeTagInput('  Pre   Ban ')).toBe('pre ban');
-    expect(normalizeTagInput('   ')).toBe('');
-  });
-
-  it('agrees with normalizeVersionTag about every input', () => {
-    for (const input of ['tournament', '', '  ', 'x'.repeat(41), 'a/b', '🔥', 'Top 8']) {
-      const result = normalizeVersionTag(input);
-      expect(tagProblem(normalizeTagInput(input))).toBe(result.ok ? null : result.reason);
-    }
-  });
-});
-
-describe('parseTagDraft', () => {
+describe('parseTagDraft (what the editors preview)', () => {
   it('normalizes a tag the way it will be stored', () => {
     expect(parseTagDraft('  Pre   Ban ')).toEqual({ kind: 'ok', tag: 'pre ban' });
   });
 
+  it('agrees with normalizeVersionTag about every input but the empty one', () => {
+    for (const input of ['tournament', 'x'.repeat(41), 'a/b', '🔥', 'Top 8']) {
+      const result = normalizeVersionTag(input);
+      const draft = parseTagDraft(input);
+      expect(
+        result.ok ? { kind: 'ok', tag: result.name } : { kind: 'invalid', problem: result.reason },
+      ).toEqual(draft);
+    }
+  });
+
   it('tells nothing from a tag that cannot be used', () => {
     expect(parseTagDraft('   ')).toEqual({ kind: 'empty' });
-    expect(parseTagDraft('#!?')).toEqual({ kind: 'invalid', problem: tagProblem('#!?') });
+    expect(parseTagDraft('#!?')).toEqual({
+      kind: 'invalid',
+      problem: 'Tags may contain letters, digits, spaces, ".", "-" and "_".',
+    });
     expect(parseTagDraft('x'.repeat(MAX_VERSION_TAG_LENGTH + 1))).toMatchObject({ kind: 'invalid' });
   });
 });

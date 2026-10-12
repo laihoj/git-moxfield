@@ -36,11 +36,7 @@ import { moxfieldRestoreExport } from './restore-text';
 import { parseMoxfieldPayloadData, type MoxfieldPayloadData } from './schema';
 import { isValidMoxfieldPublicId, moxfieldDeckUrl, parseMoxfieldDeckInput } from './url';
 
-/**
- * Options of the adapter: those of its HTTP client, all optional (defaults: the
- * `DEFAULT_MOXFIELD_*` constants and an honest `git-moxfield/<version>` User-Agent), and
- * the two it decides itself.
- */
+/** The HTTP client's options, all optional (defaults: `DEFAULT_MOXFIELD_*`), and the adapter's own. */
 export interface MoxfieldDeckSourceOptions extends Partial<MoxfieldHttpClientOptions> {
   /** Defaults to `https://moxfield.com`. */
   siteOrigin?: string;

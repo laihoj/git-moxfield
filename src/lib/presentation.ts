@@ -43,11 +43,7 @@ export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): 
   }
 }
 
-/**
- * The deck's last fetch error while it is current: it happened after the latest
- * successful observation (or there is none). An error at the very instant of the
- * observation is not current.
- */
+/** The deck's last fetch error while it is newer than its latest observation (not at the same instant). */
 export function currentFetchError(deck: {
   lastFetchError: FetchErrorDTO | null;
   working: { fetchedAt: string } | null;
@@ -146,10 +142,7 @@ export function noteText(data: unknown): string {
   return isRecord(data) && typeof data.text === 'string' ? data.text : '';
 }
 
-/**
- * The free-text note among a version's notes (those of `kind`): its text, `''` without
- * one, and when it was last changed.
- */
+/** The text (`''` without one) and last change of the version's free-text note, the note of `kind`. */
 export function freeTextNote(
   notes: readonly CommitNoteDTO[],
   kind: string,

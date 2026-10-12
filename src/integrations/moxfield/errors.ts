@@ -1,7 +1,4 @@
-/**
- * Construction of the {@link DeckSourceError}s the Moxfield adapter throws: every one
- * names Moxfield as its source.
- */
+/** The {@link DeckSourceError}s the Moxfield adapter throws, all naming Moxfield as their source. */
 import { DeckSourceError, type DeckSourceErrorCode } from '../deck-source';
 
 import { MOXFIELD_SOURCE_ID } from './constants';

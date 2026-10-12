@@ -37,7 +37,7 @@ import 'server-only';
 
 import { groupInto } from '@/core/collections';
 import { absoluteAppUrl } from '@/core/http-url';
-import { USER_ROLES } from '@/core/roles';
+import { USER_ROLES, type UserRole } from '@/core/roles';
 import { buildBookmarklet } from '@/integrations/moxfield/capture';
 import type { AppConfig } from '@/server/config';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
@@ -76,7 +76,6 @@ import type {
   InviteDTO,
   InviteLinkStatusDTO,
   InviteStatus,
-  InviteInput,
   IssuedInvite,
   IssuedLink,
   KeyRefDTO,
@@ -290,7 +289,7 @@ export interface AuthService {
    * (or the command line) only.
    * @throws {ServiceError} `forbidden` for non-admins; `invalid-input` for an invalid note or role.
    */
-  createInvite(actor: Actor, input: InviteInput): Promise<IssuedInvite>;
+  createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite>;
   /** What an invite link would do (for the invite page). Changes nothing. */
   getInvite(token: unknown): Promise<InviteLinkStatusDTO>;
   /**
@@ -814,7 +813,7 @@ class DefaultAuthService implements AuthService {
   // Invites
   // -------------------------------------------------------------------------
 
-  async createInvite(actor: Actor, input: InviteInput): Promise<IssuedInvite> {
+  async createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite> {
     // Checked at runtime too: callers may pass a role straight from a form.
     if (!(USER_ROLES as readonly string[]).includes(input.role)) {
       throw new ServiceError('invalid-input', 'An invite is for a member or an admin.');
@@ -1085,12 +1084,7 @@ class DefaultAuthService implements AuthService {
     return repos.sessions.findPendingHandoffByTokenHash(hashToken(parsed), now.toISOString());
   }
 
-  /**
-   * When the browser is signed in as `ownerId` already (`current`, found with
-   * `currentToken`): keeps that session, ending `handoff` first if there is one, and
-   * returns it. `null` when the browser is signed out or signed in as someone else.
-   */
-  /** Ends the user's sessions (all, or all but `except`) and their unused device links; logs `message`. */
+  /** Ends the user's sessions (but `exceptSessionId`) and unused device links, and logs `message`. */
   private async endSessions(
     user: SessionUser,
     message: string,
@@ -1107,6 +1101,11 @@ class DefaultAuthService implements AuthService {
     return sessions;
   }
 
+  /**
+   * When the browser is signed in as `ownerId` already (`current`, found with
+   * `currentToken`): keeps that session, ending `handoff` first if there is one, and
+   * returns it. `null` when the browser is signed out or signed in as someone else.
+   */
   private async keepSessionOf(
     repos: Repositories,
     ownerId: string,
@@ -1211,9 +1210,8 @@ class DefaultAuthService implements AuthService {
   }
 
   /**
-   * Runs `fn` in a transaction that first checks that `actor` may administer users and
-   * invites ({@link requireAdmin}); `adminId` is the admin's user id, `null` for the
-   * command line. Log outside `fn`: a transaction may run again.
+   * Runs `fn` in a transaction that first checks {@link requireAdmin}; `adminId` is `null`
+   * for the command line. Log outside `fn`: a transaction may run again.
    */
   private adminTransaction<T>(
     actor: Actor,

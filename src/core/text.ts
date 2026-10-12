@@ -1,9 +1,4 @@
-/**
- * Small, dependency-free text helpers shared by the core, the adapters, the server and
- * the browser: plurals and lists for running text, capitalization, and the normalization
- * every comparison and every stored label goes through. Pure, so output is deterministic
- * and can be asserted exactly.
- */
+/** Dependency-free text helpers for running text and the normalization every label goes through. */
 
 /** U+2212 MINUS SIGN, typographically matching `+` in counters. */
 export const MINUS_SIGN = '−';
@@ -41,11 +36,7 @@ export function foldInlineText(text: string): string {
   return normalizeInlineText(text.toLowerCase());
 }
 
-/**
- * `text` itself when it is at most `max` UTF-16 units long, otherwise its first
- * `max - 1` units (without trailing whitespace and without half of a surrogate pair)
- * followed by `…`.
- */
+/** `text` cut to at most `max` UTF-16 units, ending in `…` (never half a surrogate pair) when cut. */
 export function truncateWithEllipsis(text: string, max: number): string {
   if (text.length <= max) return text;
   let end = max - 1;

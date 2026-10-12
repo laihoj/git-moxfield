@@ -15,7 +15,6 @@ import { formatBytes } from '@/core/text';
 import { DeckSourceError, hasBrand } from '../deck-source';
 
 import {
-  decodeUtf8Strict,
   DEFAULT_CAPTURE_CODEC_LIMITS,
   exceedsUtf8Bytes,
   isBase64Url,
@@ -27,9 +26,6 @@ import { NEW_BOOKMARKLET_HINT } from './capture-protocol';
 import { MOXFIELD_SOURCE_ID } from './constants';
 
 const gunzipAsync = promisify(gunzip);
-
-/** Why a capture payload was refused (the failures every decoder of the wire format reports). */
-export type CapturePayloadErrorReason = CapturePayloadFailure;
 
 /**
  * Brand for {@link isCapturePayloadError}, a registered symbol like `DeckSourceError`'s, so
@@ -45,9 +41,9 @@ const CAPTURE_PAYLOAD_ERROR_BRAND: unique symbol = Symbol.for('git-moxfield.Capt
  */
 export class CapturePayloadError extends DeckSourceError {
   readonly [CAPTURE_PAYLOAD_ERROR_BRAND] = true;
-  readonly reason: CapturePayloadErrorReason;
+  readonly reason: CapturePayloadFailure;
 
-  constructor(reason: CapturePayloadErrorReason, message: string, options: { cause?: unknown } = {}) {
+  constructor(reason: CapturePayloadFailure, message: string, options: { cause?: unknown } = {}) {
     super('schema', message, { source: MOXFIELD_SOURCE_ID, cause: options.cause });
     this.reason = reason;
   }
@@ -125,15 +121,12 @@ export async function decodeCapturePayload(
   const parsed = parseCapturePayload(input, limits.maxEncodedChars);
   if (parsed.kind === 'plain') return decodePlain(input, limits);
   if (parsed.kind === 'rejected') {
-    throw parsed.reason === 'unsupported-encoding'
-      ? new CapturePayloadError(
-          'unsupported-encoding',
-          'The deck data is encoded in a format this version of git-moxfield does not support.',
-        )
-      : new CapturePayloadError(
-          'too-large',
-          `The deck data is too large (limit ${formatBytes(limits.maxEncodedChars)} compressed).`,
-        );
+    throw new CapturePayloadError(
+      parsed.reason,
+      parsed.reason === 'too-large'
+        ? `The deck data is too large (limit ${formatBytes(limits.maxEncodedChars)} compressed).`
+        : 'The deck data is encoded in a format this version of git-moxfield does not support.',
+    );
   }
 
   const { data } = parsed;
@@ -144,9 +137,11 @@ export async function decodeCapturePayload(
     throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid base64url).`);
   }
 
-  const text = decodeUtf8Strict(await inflate(compressed, limits.maxDecodedBytes));
-  if (text === null) {
-    throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid UTF-8 text).`);
+  const inflated = await inflate(compressed, limits.maxDecodedBytes);
+  try {
+    // Strict like the paste form's `decodeUtf8Strict`; a byte order mark is kept, as sent.
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(inflated);
+  } catch (error) {
+    throw new CapturePayloadError('malformed', `${DAMAGED} (it is not valid UTF-8 text).`, { cause: error });
   }
-  return text;
 }

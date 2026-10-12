@@ -3,16 +3,19 @@ import { describe, expect, it } from 'vitest';
 
 import { buildSnapshot, type SnapshotSpec } from '@tests/support/builders';
 
+import { cardName, findCard, snapshotZones } from '../canonical';
+import { renamedKeys } from '../diff/deck-diff';
+import type { CanonicalSnapshot, CardKey } from '../model';
 import { isPlayedZone, type ZoneId } from '../zones';
-import {
-  cardPointsFromSnapshots,
-  deriveCardHistory,
-  traceCardKeys,
-  traceCardPoints,
-  type CardPointSource,
-  type VersionedSnapshot,
-} from './card-history';
-import type { CardHistory, CardHistoryEntry, CardTransition, CardVersionPoint, ZoneQuantity } from './types';
+import { deriveCardHistory, traceCardKeys, traceCardPoints, type CardPointSource } from './card-history';
+import type {
+  CardHistory,
+  CardHistoryEntry,
+  CardTransition,
+  CardVersionPoint,
+  VersionMeta,
+  ZoneQuantity,
+} from './types';
 
 const KEY = 'dress down';
 const NAME = 'Dress Down';
@@ -558,6 +561,37 @@ describe('deriveCardHistory', () => {
   });
 });
 
+/** A deck version with its full snapshot. */
+type VersionedSnapshot = VersionMeta & { snapshot: CanonicalSnapshot };
+
+/**
+ * One card's points from full snapshots: the reference the server's lazy, index-based
+ * inputs (`DeckHistory.cardHistory`) must agree with.
+ */
+function cardPointsFromSnapshots(key: CardKey, versions: readonly VersionedSnapshot[]): CardVersionPoint[] {
+  const snapshotAt = (index: number): CanonicalSnapshot | undefined => versions[index]?.snapshot;
+  return traceCardPoints(key, {
+    points: versions,
+    zonesAt: (cardKey, index) => {
+      const snapshot = snapshotAt(index);
+      if (!snapshot) return [];
+      return snapshotZones(snapshot).flatMap((zone) => {
+        const card = findCard(snapshot, zone, cardKey);
+        return card ? [{ zone, quantity: card.quantity }] : [];
+      });
+    },
+    renames: (index) => {
+      const before = snapshotAt(index - 1);
+      const after = snapshotAt(index);
+      return before && after ? renamedKeys(before, after) : new Map<CardKey, CardKey>();
+    },
+    nameAt: (cardKey, index) => {
+      const snapshot = snapshotAt(index);
+      return snapshot && cardName(snapshot, cardKey);
+    },
+  }).points;
+}
+
 /** A version of the deck as `cardPointsFromSnapshots` takes it: committed as `sequence`, or the working state when `null`. */
 function versioned(sequence: number | null, spec: Parameters<typeof buildSnapshot>[0]): VersionedSnapshot {
   return {
@@ -731,7 +765,7 @@ describe('traceCardPoints', () => {
       },
       nameAt: (key, index) => {
         calls.push(`name:${key}@${index}`);
-        return names[key] ?? key;
+        return names[key];
       },
     };
     return { src, calls };
@@ -758,6 +792,23 @@ describe('traceCardPoints', () => {
     const { points, keys } = traceCardPoints('missing', src);
     expect(keys).toEqual(['missing', 'missing']);
     expect(points.map((point) => point.zones)).toEqual([[], []]);
+  });
+
+  it('names a renamed card by its key when the source has no name for it, and calls the source as an object', () => {
+    class Source implements CardPointSource {
+      readonly points = source([{ old: 1 }, { new: 1 }]).src.points;
+      readonly #renames = new Map([['old', 'new']]);
+      zonesAt(key: string, index: number): ZoneQuantity[] {
+        return (index === 0 ? key === 'old' : key === 'new') ? [{ zone: 'mainboard', quantity: 1 }] : [];
+      }
+      renames(): ReadonlyMap<string, string> {
+        return this.#renames;
+      }
+      nameAt(): string | undefined {
+        return undefined;
+      }
+    }
+    expect(traceCardPoints('new', new Source()).points[1]?.renamedFrom).toEqual({ key: 'old', name: 'old' });
   });
 
   it('asks for renames and names only where the card was renamed', () => {

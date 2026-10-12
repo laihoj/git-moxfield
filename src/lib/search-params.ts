@@ -1,11 +1,6 @@
 /**
- * Reading the query string of a page, client-safe and pure. Next.js hands a search
- * parameter over as a string, or an array when it is repeated, or `undefined`.
- */
-
-/**
- * The text of a search parameter: trimmed, cut to `maxLength` characters, `undefined`
- * when it is absent, blank or repeated.
+ * The text of a page's search parameter (Next.js passes a string, an array when it is
+ * repeated, or `undefined`): trimmed, cut to `maxLength`, `undefined` when absent, blank or repeated.
  */
 export function searchParamText(value: string | string[] | undefined, maxLength: number): string | undefined {
   const text = typeof value === 'string' ? value.trim() : '';

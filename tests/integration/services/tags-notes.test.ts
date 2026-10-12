@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { FREE_TEXT_NOTE_KIND, MAX_NOTE_LENGTH } from '@/server/services';
+import { MAX_NOTE_LENGTH } from '@/core/text-limits';
+import { FREE_TEXT_NOTE_KIND } from '@/server/services';
 import {
   createServiceHarness,
   defined,

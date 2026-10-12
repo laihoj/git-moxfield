@@ -125,10 +125,7 @@ export function expiredHandoffCookie(secure: boolean): CookieSpec {
   return cookie(cookieNames(secure).handoff, '', 0, secure);
 }
 
-/**
- * The cookies that make `session` a browser's session: the session cookie, and the
- * freshness marker (it was set just now, so the proxy need not refresh it).
- */
+/** The cookies that make `session` a browser's session: the session cookie and the freshness marker. */
 export function establishedSessionCookies(
   session: { token: string; expiresAt: string },
   now: Date,

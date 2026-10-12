@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { absoluteAppUrl, httpBaseUrl, parseHttpUrl, stripTrailingSlashes } from './http-url';
+import { absoluteAppUrl, parseHttpUrl, stripTrailingSlashes } from './http-url';
 
 describe('parseHttpUrl', () => {
   it.each([
@@ -39,15 +39,6 @@ describe('stripTrailingSlashes', () => {
   it('is linear on a long run of slashes inside the text', () => {
     const text = `a${'/'.repeat(200_000)}b`;
     expect(stripTrailingSlashes(text)).toBe(text);
-  });
-});
-
-describe('httpBaseUrl', () => {
-  it('keeps origin and path, drops trailing slashes, query and fragment', () => {
-    expect(httpBaseUrl(new URL('https://tools.example/git-moxfield/?a=1#b'))).toBe(
-      'https://tools.example/git-moxfield',
-    );
-    expect(httpBaseUrl(new URL('http://localhost:3000/'))).toBe('http://localhost:3000');
   });
 });
 

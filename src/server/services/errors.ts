@@ -4,7 +4,7 @@
  * (`notFound()`), `invalid-input` to a 400 / form error, `forbidden` to a 404 or 403.
  * Every other outcome is returned as data (see `./types`, `@/server/auth/types`).
  */
-import { CodedError, codedErrorGuard } from '@/core/coded-error';
+import { CodedError } from '@/core/coded-error';
 
 export type ServiceErrorCode =
   /** The deck, version or user does not exist (e.g. it was untracked in another tab). */
@@ -19,7 +19,9 @@ export class ServiceError extends CodedError<ServiceErrorCode> {
 }
 
 /** Type guard, optionally narrowing to one error code. */
-export const isServiceError = codedErrorGuard(ServiceError);
+export function isServiceError(value: unknown, code?: ServiceErrorCode): value is ServiceError {
+  return value instanceof ServiceError && (code === undefined || value.code === code);
+}
 
 /** The `not-found` message for a deck id that is not one of the user's tracked decks. */
 export const DECK_NOT_TRACKED = 'This deck is not tracked (it may have been removed).';

@@ -178,6 +178,7 @@ describe('login link repository', () => {
       () => repos.loginLinks.create({ ...input, tokenHash: 'e'.repeat(64), userId: 'nope' }),
       'not-found',
     );
+    await expectRepositoryError(repos.loginLinks.create({ ...input, tokenHash: '' }), 'invalid-input');
   });
 });
 
@@ -235,6 +236,20 @@ describe('invite repository', () => {
     // The failed acceptance changed nothing: the invite is still usable.
     expect((await repos.invites.getByTokenHash('f'.repeat(64)))?.usedAt).toBeNull();
     expect(await countRows(db, 'users')).toBe(2);
+  });
+
+  it('refuses an empty token hash', async () => {
+    const { repos } = await setup();
+    await expectRepositoryError(
+      repos.invites.create({
+        tokenHash: '',
+        role: 'member',
+        note: '',
+        createdByUserId: null,
+        expiresAt: EXPIRY,
+      }),
+      'invalid-input',
+    );
   });
 
   it('is refused when expired, revoked or given an empty name, without being used up', async () => {

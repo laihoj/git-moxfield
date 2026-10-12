@@ -1,10 +1,6 @@
 /**
- * The card type groups a deck list is split into (Moxfield's groups) and the order in
- * which a card's type line is classified. The adapter stores the group of a card as its
- * `primary_type` (`CardFacts.primaryType`); the deck list groups by it, so both ends
- * share this vocabulary. The two orders differ on purpose: precedence decides which
- * type wins for a card with several (`Artifact Land` is a Land), display order is the
- * order of the groups on a page (Land last).
+ * Moxfield's card type groups: the adapter stores a card's group as `CardFacts.primaryType`
+ * and the deck list groups by it. Precedence (which type wins) and display order differ on purpose.
  */
 
 /** The groups in display order. Cards of any other primary type go to `Other`. */

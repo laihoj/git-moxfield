@@ -29,9 +29,7 @@
  *
  * Pure and deterministic; input points are never mutated.
  */
-import { cardName, cardZones } from '../canonical';
-import { renamedKeys } from '../diff/deck-diff';
-import type { CanonicalSnapshot, CardKey } from '../model';
+import type { CardKey } from '../model';
 import { isPlayedZone, zoneEntries, type ZoneId } from '../zones';
 import type {
   CardHistory,
@@ -54,9 +52,6 @@ export interface DeriveCardHistoryInput {
    */
   points: readonly CardVersionPoint[];
 }
-
-/** A deck version with its full snapshot, as accepted by {@link cardPointsFromSnapshots}. */
-export type VersionedSnapshot = VersionMeta & { snapshot: CanonicalSnapshot };
 
 type RestoredZone = NonNullable<CardHistoryEntry['restoredFrom']>[number];
 
@@ -127,52 +122,23 @@ function isCut(entry: CardHistoryEntry): boolean {
 }
 
 /**
- * Extracts one card's {@link CardVersionPoint}s from full snapshots, preserving the
- * order and version metadata of `versions`. The card is followed across reconciled
- * renames (see {@link traceCardKeys}), so `key` may be any of its names; a point's
- * zones are empty when the snapshot does not contain the card.
- */
-export function cardPointsFromSnapshots(
-  key: CardKey,
-  versions: readonly VersionedSnapshot[],
-): CardVersionPoint[] {
-  const snapshotAt = (index: number): CanonicalSnapshot | undefined => versions[index]?.snapshot;
-  return traceCardPoints(key, {
-    points: versions.map(({ commitId, sequence, at, message }) => ({ commitId, sequence, at, message })),
-    zonesAt: (cardKey, index) => {
-      const snapshot = snapshotAt(index);
-      return snapshot ? cardZones(snapshot, cardKey) : [];
-    },
-    renames: (index) => {
-      const before = snapshotAt(index - 1);
-      const after = snapshotAt(index);
-      return before && after ? renamedKeys(before, after) : new Map<CardKey, CardKey>();
-    },
-    nameAt: (cardKey, index) => cardNameIn(snapshotAt(index), cardKey),
-  }).points;
-}
-
-/**
- * Where the points of one card's history get their data. The callbacks may be lazy
- * (the server loads inputs on demand and aborts a run that misses one, by throwing, to
- * run again once they are loaded): {@link traceCardPoints} is pure and synchronous, and
- * asks for each input only where it needs it.
+ * Where {@link traceCardPoints} gets its data. The callbacks may be lazy (the server aborts
+ * a run that misses an input by throwing, and runs it again once it is loaded).
  */
 export interface CardPointSource {
   /** The version metadata of every point, oldest → newest (the working state last). */
-  readonly points: readonly Omit<CardVersionPoint, 'zones' | 'renamedFrom'>[];
+  readonly points: readonly VersionMeta[];
   /** The zones of the card `key` at point `index` (empty when the point does not contain it). */
   zonesAt: (key: CardKey, index: number) => ZoneQuantity[];
-  /** Renames from the point at `index - 1` to the point at `index` (see {@link TraceCardKeysInput.renames}). */
+  /** See {@link TraceCardKeysInput.renames}. */
   renames: (index: number) => ReadonlyMap<CardKey, CardKey>;
-  /** The display name of the card `key` at point `index`, or the key when the point has no such card. */
-  nameAt: (key: CardKey, index: number) => string;
+  /** The display name of the card `key` at point `index`, if the point has the card. */
+  nameAt: (key: CardKey, index: number) => string | undefined;
 }
 
 /**
- * One card's {@link CardVersionPoint}s, following it across renames (see
- * {@link traceCardKeys}), and the key it had at every point. A point where the key changed
- * carries `renamedFrom`: the previous point's key and the name the card had there.
+ * One card's {@link CardVersionPoint}s and its key at every point, following it across
+ * renames (see {@link traceCardKeys}); a point where the key changed carries `renamedFrom`.
  */
 export function traceCardPoints(
   key: CardKey,
@@ -182,7 +148,7 @@ export function traceCardPoints(
     key,
     length: source.points.length,
     contains: (cardKey, index) => source.zonesAt(cardKey, index).length > 0,
-    renames: source.renames,
+    renames: (index) => source.renames(index),
   });
   const points = source.points.map(({ commitId, sequence, at, message }, index) => {
     const pointKey = keys[index] ?? key;
@@ -195,7 +161,7 @@ export function traceCardPoints(
     };
     const previousKey = keys[index - 1];
     if (previousKey !== undefined && previousKey !== pointKey) {
-      point.renamedFrom = { key: previousKey, name: source.nameAt(previousKey, index - 1) };
+      point.renamedFrom = { key: previousKey, name: source.nameAt(previousKey, index - 1) ?? previousKey };
     }
     return point;
   });
@@ -211,7 +177,7 @@ export interface TraceCardKeysInput {
   contains: (key: CardKey, index: number) => boolean;
   /**
    * Renames from the point at `index - 1` to the point at `index` (old key → new key),
-   * as {@link renamedKeys} reconciles them. Called only where a tracked key appears or
+   * as `renamedKeys` (`../diff/deck-diff`) reconciles them. Called only where a tracked key appears or
    * disappears, so callers can load snapshots for these boundaries alone.
    */
   renames: (index: number) => ReadonlyMap<CardKey, CardKey>;
@@ -258,11 +224,6 @@ export function traceCardKeys(input: TraceCardKeysInput): CardKey[] {
     keys[index] = current;
   }
   return keys;
-}
-
-/** Display name of a card in a snapshot (first zone in canonical order), or its key. */
-function cardNameIn(snapshot: CanonicalSnapshot | undefined, key: CardKey): string {
-  return (snapshot && cardName(snapshot, key)) ?? key;
 }
 
 /** Canonical zone list: positive quantities only, one entry per zone, canonical zone order. */

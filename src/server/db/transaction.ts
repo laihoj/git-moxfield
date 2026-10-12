@@ -59,6 +59,7 @@ import { CodedError } from '@/core/coded-error';
 import { SerialQueue } from '@/core/serial-queue';
 
 import { createLogger } from '../logger';
+import { processSingleton } from '../process-singleton';
 import type { LibsqlDb, LibsqlExecutor, LibsqlTx } from './libsql';
 import {
   classifySqlError,
@@ -66,7 +67,6 @@ import {
   isSqlErrorKind,
   type SqlErrorClassification,
 } from './sql-errors';
-import { processSingleton } from '../process-singleton';
 import type { WriteLock } from './write-lock';
 
 const log = createLogger('db');

@@ -37,8 +37,7 @@ import { ManualClock } from '@tests/support/clock';
 import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
 import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
-import { resolveBaseUrl } from './app-url';
-import { consoleIO, isEntryPoint, quietLogger, runMain } from './cli';
+import { consoleIO, isEntryPoint, quietLogger, resolveBaseUrl, runMain } from './cli';
 import { describeConfiguredDatabase, loadConfigOrReport, openConfiguredDatabaseOrReport } from './database';
 
 /** Moxfield-style public id of the demo deck (not a real Moxfield deck). */

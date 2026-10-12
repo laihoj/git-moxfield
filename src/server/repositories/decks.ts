@@ -251,7 +251,7 @@ export function createDeckRepository(ctx: RepositoryContext): DeckRepository {
       return updateDeck(id, { lastFetchAttemptAt: at });
     },
 
-    recordFetchError(id, error) {
+    async recordFetchError(id, error) {
       return updateDeck(id, {
         lastFetchErrorJson: error === null ? null : encodeJson(error, 'Fetch error'),
       });
@@ -361,7 +361,9 @@ function decodeFetchError(text: string, deckId: string): FetchErrorRecord {
   ) {
     throw corruptData(what, 'does not match the fetch error shape');
   }
-  return value as unknown as FetchErrorRecord;
+  // Only these fields: the record is passed to the client as it is (`FetchErrorDTO`).
+  const { code, message, at, retryAfterSeconds } = value;
+  return { code, message, at, retryAfterSeconds };
 }
 
 function toDeckRecord(row: typeof decks.$inferSelect): DeckRecord {

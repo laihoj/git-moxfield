@@ -169,6 +169,11 @@ describe('decks repository', () => {
 
     await expectRepositoryError(repos.decks.recordFetchAttempt('missing', error.at), 'not-found');
     await expectRepositoryError(repos.decks.recordFetchError('missing', null), 'not-found');
+    // An error that cannot be stored is a rejected promise, never a synchronous throw.
+    await expectRepositoryError(
+      repos.decks.recordFetchError(deck.id, { ...error, retryAfterSeconds: 10n as unknown as number }),
+      'invalid-input',
+    );
   });
 
   it('reports a damaged fetch error column as corrupt data', async () => {
@@ -176,6 +181,20 @@ describe('decks repository', () => {
     const deck = await createTestDeck(repos);
     await db.run(sql`UPDATE decks SET last_fetch_error_json = ${'{"code":"teapot"}'} WHERE id = ${deck.id}`);
     await expectRepositoryError(() => repos.decks.getById(deck.id), 'corrupt-data');
+  });
+
+  it('reads only the fields of a fetch error from the stored JSON (the record reaches the client)', async () => {
+    const { db, repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const error: FetchErrorRecord = {
+      code: 'timeout',
+      message: 'Timed out',
+      at: deck.createdAt,
+      retryAfterSeconds: null,
+    };
+    const stored = JSON.stringify({ ...error, debug: 'stack trace', status: 504 });
+    await db.run(sql`UPDATE decks SET last_fetch_error_json = ${stored} WHERE id = ${deck.id}`);
+    expect((await repos.decks.getById(deck.id))?.lastFetchError).toStrictEqual(error);
   });
 
   it('keeps content that a commit of another deck still references when a deck is deleted', async () => {

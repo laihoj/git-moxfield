@@ -1,8 +1,4 @@
-/**
- * Decks as the operator names them on the command line (`pnpm export:git`, `pnpm
- * import:local`): by git-moxfield deck id, Moxfield public deck id or Moxfield deck URL,
- * on the configured Moxfield site or the default one.
- */
+/** Decks as an operator names them on the command line: by git-moxfield id, Moxfield deck id or URL. */
 import type { DeckRef } from '@/integrations/deck-source';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
 import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
@@ -15,17 +11,14 @@ export function operatorSiteOrigins(config: Pick<AppConfig, 'moxfieldSiteOrigin'
 }
 
 /** What a typed deck reference can name. */
-export interface DeckReference {
+interface DeckReference {
   /** The trimmed input, which may be a git-moxfield deck id. */
   id: string;
   /** The Moxfield deck the input names (a public id or a URL on one of the origins), if it does. */
   moxfield: DeckRef | null;
 }
 
-/**
- * Reads what an operator typed. `null` for blank input. The Moxfield deck is the same
- * whichever origin parses the input, so the first that does decides.
- */
+/** Reads what an operator typed; `null` for blank input. The first origin that parses it decides. */
 export function parseDeckReference(input: string, siteOrigins: readonly string[]): DeckReference | null {
   const id = input.trim();
   if (id === '') return null;

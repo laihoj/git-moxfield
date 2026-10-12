@@ -130,11 +130,8 @@ function assertDurableLocation(location: DatabaseLocation): void {
 }
 
 /**
- * Opens the database the configuration names (see the module documentation), as
- * {@link openDatabase} does; the caller closes the handle. Default: the app's configuration.
- *
- * @throws {DatabaseConfigError} on Netlify without `TURSO_DATABASE_URL`, and as
- *   {@link openDatabase} does.
+ * Opens the database `config` names, as {@link openDatabase} does; the caller closes it.
+ * @throws {DatabaseConfigError} also on Netlify without `TURSO_DATABASE_URL`.
  */
 export async function openConfiguredDatabase(
   config: AppConfig = getConfig(),

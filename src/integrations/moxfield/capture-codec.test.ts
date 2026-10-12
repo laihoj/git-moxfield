@@ -18,15 +18,9 @@ import { formatBytes } from '@/core/text';
 
 import { DeckSourceError, isDeckSourceError } from '../deck-source';
 
-import {
-  CapturePayloadError,
-  decodeCapturePayload,
-  isCapturePayloadError,
-  type CapturePayloadErrorReason,
-} from './capture-codec';
+import { CapturePayloadError, decodeCapturePayload, isCapturePayloadError } from './capture-codec';
 import {
   base64UrlToBytes,
-  bytesToBase64Url,
   CAPTURE_GZIP_TAG,
   decodeUtf8Strict,
   DEFAULT_CAPTURE_CODEC_LIMITS,
@@ -40,6 +34,7 @@ import {
   MAX_PLAIN_CAPTURE_BYTES,
   parseCapturePayload,
   type CaptureCodecLimits,
+  type CapturePayloadFailure,
 } from './capture-codec-protocol';
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD, MAX_CAPTURE_BYTES } from './capture-protocol';
 import { compactBookmarkletSource } from './capture';
@@ -61,7 +56,7 @@ async function rejection(promise: Promise<unknown>): Promise<CapturePayloadError
 
 async function expectRejected(
   input: string,
-  reason: CapturePayloadErrorReason,
+  reason: CapturePayloadFailure,
   limits?: CaptureCodecLimits,
 ): Promise<CapturePayloadError> {
   const error = await rejection(decodeCapturePayload(input, limits));
@@ -161,7 +156,7 @@ describe('exceedsUtf8Bytes', () => {
 
 describe('the shared steps of reading a payload', () => {
   it('parseCapturePayload tells plain from compressed, and refuses in the order the decoders do', () => {
-    expect(parseCapturePayload('  {"a":1} ', 100)).toEqual({ kind: 'plain', text: '  {"a":1} ' });
+    expect(parseCapturePayload('  {"a":1} ', 100)).toEqual({ kind: 'plain' });
     expect(parseCapturePayload(` \n${CAPTURE_GZIP_TAG}QUJD `, 100)).toEqual({
       kind: 'compressed',
       data: 'QUJD',
@@ -180,15 +175,13 @@ describe('the shared steps of reading a payload', () => {
     expect(parseCapturePayload(`${atLimit}A`, 100)).toEqual({ kind: 'rejected', reason: 'too-large' });
   });
 
-  it('bytesToBase64Url and base64UrlToBytes are each other’s inverse, for canonical data only', () => {
+  it('base64UrlToBytes reads canonical base64url only', () => {
     for (const bytes of [
       new Uint8Array(),
       new Uint8Array([0xfb, 0xff, 0xfe]),
       new Uint8Array(100_000).fill(0xab),
     ]) {
-      const data = bytesToBase64Url(bytes);
-      expect(data).toBe(Buffer.from(bytes).toString('base64url'));
-      expect(base64UrlToBytes(data)).toEqual(bytes);
+      expect(base64UrlToBytes(Buffer.from(bytes).toString('base64url'))).toEqual(bytes);
     }
     for (const invalid of ['A', 'AAAAA', 'AA==', 'a+b/', 'AB', 'ABC', 'AAAA\n']) {
       expect(base64UrlToBytes(invalid), JSON.stringify(invalid)).toBeNull();
@@ -291,6 +284,7 @@ describe('decodeCapturePayload: malformed payloads', () => {
     for (const bytes of [[0xff, 0xfe], [0xc3], [0xed, 0xa0, 0x80] /* an encoded surrogate */]) {
       const error = await expectRejected(gzipPayload(new Uint8Array(bytes)), 'malformed');
       expect(error.message).toBe('The compressed deck data is damaged (it is not valid UTF-8 text).');
+      expect(error.cause).toBeInstanceOf(TypeError);
     }
   });
 

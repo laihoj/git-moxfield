@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_DISPLAY_NAME_LENGTH, MAX_SHARE_LINK_LABEL_LENGTH } from '@/core/text-limits';
+
 import {
   cleanUserAgent,
-  MAX_DISPLAY_NAME_LENGTH,
-  MAX_SHARE_LINK_LABEL_LENGTH,
   MAX_USER_AGENT_LENGTH,
   validateDisplayName,
   validateInviteNote,

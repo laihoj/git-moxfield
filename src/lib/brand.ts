@@ -1,29 +1,14 @@
 /**
- * What identifies the app, written once for the places that cannot read the stylesheet:
- * the page metadata, the web app manifest, the generated PNG icons and the constant HTML
- * page of a rejected capture. Pure and client-safe.
- *
- * `src/app/globals.css` and the static `src/app/icon.svg` cannot import this module and
- * stay the sources of the colors; `brand.test.ts` checks that {@link THEME} and the icon
- * still agree with them.
+ * What identifies the app, for the places that cannot read the stylesheet (metadata,
+ * manifest, PNG icons, the rejected-capture page). `src/app/globals.css` and
+ * `src/app/icon.svg` stay the sources of the colors; `brand.test.ts` keeps them in step.
  */
 
 export const APP_NAME = 'git-moxfield';
 export const APP_DESCRIPTION = 'Version control, semantic diffs and history for Moxfield decks.';
 
-/** The core design tokens of a theme (the custom properties of the same name in `globals.css`). */
-export interface ThemeTokens {
-  bg: string;
-  surface: string;
-  border: string;
-  fg: string;
-  muted: string;
-  accent: string;
-  accentHover: string;
-  accentFg: string;
-}
-
-export const THEME: { light: ThemeTokens; dark: ThemeTokens } = {
+/** The core design tokens of each theme (the custom properties of the same name in `globals.css`). */
+export const THEME = {
   light: {
     bg: '#f6f6f8',
     surface: '#ffffff',
@@ -45,6 +30,8 @@ export const THEME: { light: ThemeTokens; dark: ThemeTokens } = {
     accentFg: '#120a24',
   },
 };
+
+export type ThemeTokens = (typeof THEME)['light'];
 
 /**
  * The generated PNG icons (`/icons/<name>`). `rounded` ones draw their own rounded square;

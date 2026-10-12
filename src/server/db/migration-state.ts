@@ -162,7 +162,7 @@ export async function checkMigrationState(
   return { status, applied: rows.length, expected: journal.length, pending, unknown };
 }
 
-export interface AssertMigrationsOptions {
+interface AssertMigrationsOptions {
   /** The migrations the database must have. Default: the ones this build ships. */
   journal?: readonly MigrationJournalEntry[];
   /** Accept a database a newer build migrated, when nothing is pending. Default: true. */

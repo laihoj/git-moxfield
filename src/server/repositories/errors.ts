@@ -6,7 +6,7 @@
  * service layer can map failures to user-facing outcomes without parsing SQLite
  * messages. Raw driver errors only escape for genuinely unexpected conditions.
  */
-import { CodedError, codedErrorGuard } from '@/core/coded-error';
+import { CodedError } from '@/core/coded-error';
 
 export type RepositoryErrorCode =
   /** The caller violated a documented precondition (invalid tag, non-canonical snapshot, bad commit id, ...). */
@@ -25,4 +25,6 @@ export class RepositoryError extends CodedError<RepositoryErrorCode> {
 }
 
 /** Type guard, optionally narrowing to a specific error code. */
-export const isRepositoryError = codedErrorGuard(RepositoryError);
+export function isRepositoryError(value: unknown, code?: RepositoryErrorCode): value is RepositoryError {
+  return value instanceof RepositoryError && (code === undefined || value.code === code);
+}

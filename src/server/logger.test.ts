@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { openRawDatabase } from '@tests/support/libsql';
 
@@ -33,6 +33,21 @@ async function failedQuery(): Promise<unknown> {
 }
 
 describe('logger', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(['constructor', 'toString', 'verbose'])(
+    'takes LOG_LEVEL=%s, which names no level, as the default info level',
+    (level) => {
+      vi.stubEnv('LOG_LEVEL', level);
+      const lines = capture();
+      createLogger('test').debug('hidden');
+      createLogger('test').info('shown');
+      expect(lines().map((entry) => entry.message)).toEqual(['shown']);
+    },
+  );
+
   it('never logs the SQL or the bound parameters of a failed query', async () => {
     const error = await failedQuery();
     // The premise: the driver error's message and properties do carry them.

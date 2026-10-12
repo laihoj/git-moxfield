@@ -159,13 +159,8 @@ export const CAPTURE_PASTE_MODE = 'paste';
 /** Query string (without `?`) of the capture page's manual paste mode. */
 export const CAPTURE_PASTE_QUERY = `${CAPTURE_MODE_PARAM}=${CAPTURE_PASTE_MODE}`;
 
-/**
- * What the capture page says went wrong with a same-tab capture (`?error=` of the page
- * `POST {@link CAPTURE_FORM_PATH}` redirects to): the data could not be read (`invalid`), was
- * too large (`too-large`) or could not be imported for another reason (`failed`). Never the
- * payload itself.
- */
-export const CAPTURE_FORM_ERRORS = ['invalid', 'too-large', 'failed'] as const;
+/** The `?error=` codes `POST {@link CAPTURE_FORM_PATH}` sends the capture page (never the payload). */
+const CAPTURE_FORM_ERRORS = ['invalid', 'too-large', 'failed'] as const;
 
 export type CaptureFormError = (typeof CAPTURE_FORM_ERRORS)[number];
 
@@ -307,15 +302,13 @@ export function isCaptureMessage(value: unknown): value is CaptureMessage {
 }
 
 /**
- * What a captured or pasted JSON object is: a bookmarklet `envelope`, a `wrapper`
- * (`{ deck, primer? }`, as the paste form builds it, where `deck` and `primer` may be JSON
- * strings), a `primer` (the primer endpoint's JSON, which is not a deck) or `other` (taken
- * to be a deck, which the schema then validates). The server and the paste form's preview
- * classify with the same rules.
+ * What a captured or pasted JSON object is, for the server and the paste form's preview
+ * alike: a bookmarklet `envelope`, a `wrapper` (`{ deck, primer? }`, as the paste form
+ * builds it), the primer endpoint's JSON, or `other` (taken to be a deck).
  */
-export type CaptureJsonKind = 'envelope' | 'wrapper' | 'primer' | 'other';
-
-export function classifyCaptureJson(value: Record<string, unknown>): CaptureJsonKind {
+export function classifyCaptureJson(
+  value: Record<string, unknown>,
+): 'envelope' | 'wrapper' | 'primer' | 'other' {
   if (value.kind === CAPTURE_ENVELOPE_KIND) return 'envelope';
   if (Object.hasOwn(value, 'deck') && !Object.hasOwn(value, 'publicId')) return 'wrapper';
   if (
@@ -328,11 +321,7 @@ export function classifyCaptureJson(value: Record<string, unknown>): CaptureJson
   return 'other';
 }
 
-/**
- * Shallow check that a parsed value is a {@link CaptureEnvelope} of this protocol version
- * (a strict check, for what the bookmarklet builds; parsing a capture classifies with
- * {@link classifyCaptureJson} and reports an outdated version itself).
- */
+/** Strict shallow check that a parsed value is a {@link CaptureEnvelope} of this protocol version. */
 export function isCaptureEnvelope(value: unknown): value is CaptureEnvelope {
   return (
     isRecord(value) &&

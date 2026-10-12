@@ -1,11 +1,7 @@
-/**
- * Version sequences: the 1-based number of a committed version (`12`, written `v12`).
- * Routes, server actions and the version reference parser all accept the same range and
- * the same text form, defined here.
- */
+/** Version sequences (`12`, written `v12`): the range and text form routes, actions and refs accept. */
 
 /** Most digits a sequence may have; far beyond any real deck history. */
-export const MAX_SEQUENCE_DIGITS = 9;
+const MAX_SEQUENCE_DIGITS = 9;
 
 /** The largest sequence (999,999,999). */
 export const MAX_SEQUENCE = 10 ** MAX_SEQUENCE_DIGITS - 1;
@@ -15,7 +11,7 @@ export function isSequence(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 1 && value <= MAX_SEQUENCE;
 }
 
-export interface SequenceText {
+interface SequenceText {
   /** The digits as written, without the `v`. */
   digits: string;
   /** Whether the text started with `v`. */

@@ -41,6 +41,15 @@ describe('parseConfig — CAPTURE_ALLOWED_ORIGINS', () => {
       /CAPTURE_ALLOWED_ORIGINS: expected origins such as https:\/\/moxfield\.com, got "moxfield\.org"/,
     );
   });
+
+  it.each(['moxfield.com:443', 'foo:bar'])(
+    'refuses %j, a URL without an http(s) origin, instead of allowing the origin "null"',
+    (entry) => {
+      expect(() => parseConfig({ CAPTURE_ALLOWED_ORIGINS: `https://moxfield.com, ${entry}` })).toThrow(
+        new RegExp(`Invalid git-moxfield configuration[\\s\\S]*CAPTURE_ALLOWED_ORIGINS: .*got "${entry}"`),
+      );
+    },
+  );
 });
 
 describe('parseConfig — base URLs', () => {

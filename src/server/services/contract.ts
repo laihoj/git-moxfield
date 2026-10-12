@@ -188,12 +188,6 @@ export interface DeckServices {
   getSetupInfo(): SetupInfoDTO;
 }
 
-/**
- * The owner's read-only share links of their decks (ADR 0007), bound to the signed-in
- * user's workspace and the session asking (a link records the bookmarklet key that
- * session descends from, so revoking a stolen key can revoke the links made with it).
- * A deck or link of another workspace behaves like one that does not exist.
- */
 /** A share link to create (see {@link ShareLinkServices.createShareLink}). */
 export interface ShareLinkInput {
   /** The owner's name for the link. */
@@ -202,6 +196,12 @@ export interface ShareLinkInput {
   includeNotes: boolean;
 }
 
+/**
+ * The owner's read-only share links of their decks (ADR 0007), bound to the signed-in
+ * user's workspace and the session asking (a link records the bookmarklet key that
+ * session descends from, so revoking a stolen key can revoke the links made with it).
+ * A deck or link of another workspace behaves like one that does not exist.
+ */
 export interface ShareLinkServices {
   /**
    * Creates a read-only link to one of the workspace's decks, for git-moxfield at `appUrl`

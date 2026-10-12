@@ -20,7 +20,6 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 
 import { sha256Hex } from '@/core/hash';
-
 import { TOKEN_PREFIXES, type TokenKind } from '@/core/token-format';
 
 export { parseToken, TOKEN_PREFIXES, type TokenKind } from '@/core/token-format';

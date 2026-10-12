@@ -160,10 +160,7 @@ export function ownDeck(ctx: Pick<RepositoryContext, 'workspaceId'>, deckId: str
   return allOf(eq(schema.decks.workspaceId, ctx.workspaceId), eq(schema.decks.id, deckId));
 }
 
-/**
- * Throws `not-found` unless the deck exists in the context's workspace: one primary-key
- * probe of the deck row, like {@link ownDeck}.
- */
+/** Throws `not-found` unless the deck exists in the context's workspace (a primary-key probe). */
 export async function requireDeckInWorkspace(
   ctx: Pick<RepositoryContext, 'db' | 'workspaceId'>,
   deckId: string,
@@ -232,9 +229,8 @@ export function commitInWorkspace(
 }
 
 /**
- * Runs `UPDATE table SET ... WHERE ...` as one write and returns how many rows it changed.
- * `where` must name a condition: Drizzle's `and()` returns `undefined` when all its
- * arguments are `undefined`, which would update every row of the table.
+ * `UPDATE table SET ... WHERE ...` as one write; returns how many rows it changed. Refuses
+ * an `undefined` condition (`and()` of only `undefined`s), which would update every row.
  */
 export async function updateRows<T extends SQLiteTable>(
   ctx: RepositoryContext,
@@ -248,35 +244,25 @@ export async function updateRows<T extends SQLiteTable>(
   return result.rowsAffected;
 }
 
-export interface InsertWithUniqueHashOptions<V, T> {
+interface InsertWithUniqueHashOptions<V, T> {
   /** The unique column holding the token or secret hash, e.g. `sessions.tokenHash`. */
   hashColumn: SQLiteColumn;
-  /** The hash to insert. An empty hash is refused. */
   hash: string;
-  /** Message of the `invalid-input` error for an empty hash. */
   emptyHashMessage: string;
-  /** Message of the `conflict` error when the hash is stored already. */
   duplicateMessage: string;
   /** What the row references, for the `not-found` of a dangling reference (see {@link referencing}). */
   references: string;
-  /**
-   * Another check, run in parallel with the probe of the hash; if it throws, that error is
-   * reported rather than a conflict (share links: the deck exists in the workspace).
-   */
+  /** Runs alongside the probe of the hash; its error wins over a conflict (share links: the deck exists). */
   precheck?: () => Promise<unknown>;
-  /** The values of the new row, built once the hash is known to be free (new ids and timestamps come from here). */
+  /** The new row's values, built once the hash is known to be free. */
   values: () => V;
   /** Inserts the row and returns it; may run again after a transient failure, with the same values. */
   insert: (db: LibsqlExecutor, values: V) => Promise<T>;
 }
 
 /**
- * Inserts a row of a table keyed by a unique token hash: refuses an empty hash, looks for
- * the hash first (a clear `conflict` without a failed write), and also turns a unique
- * violation of a racing insert into the same `conflict`.
- *
- * @throws {RepositoryError} `invalid-input` for an empty hash; `conflict` for a stored
- * hash; `not-found` for a dangling reference.
+ * Inserts a row keyed by a unique token hash: `invalid-input` for an empty hash, `conflict`
+ * for a stored one (probed first, and for a racing insert's unique violation too).
  */
 export async function insertWithUniqueHash<V, T>(
   ctx: RepositoryContext,
@@ -343,9 +329,8 @@ export function batches<T>(items: readonly T[], size = BATCH_SIZE): T[][] {
 }
 
 /**
- * Reads rows for many keys: runs `query` for each batch of the distinct `values` (see
- * {@link BATCH_SIZE}), in parallel, and concatenates the pages in batch order. For reads
- * only; writes go through {@link sumInBatches}.
+ * Runs `query` for each {@link batches batch} of the distinct `values`, in parallel, and
+ * concatenates the pages in batch order. For reads only: writes must run one at a time.
  */
 export async function selectInBatches<T>(
   values: Iterable<string>,
@@ -353,20 +338,6 @@ export async function selectInBatches<T>(
 ): Promise<T[]> {
   const pages = await Promise.all(batches(distinct(values)).map((batch) => query(batch)));
   return pages.flat();
-}
-
-/**
- * Runs a write for each batch of the distinct `values`, one after another (they share a
- * transaction or the write lock), and returns the sum of the rows changed that `run`
- * reports per batch.
- */
-export async function sumInBatches(
-  values: Iterable<string>,
-  run: (batch: string[]) => PromiseLike<number>,
-): Promise<number> {
-  let changed = 0;
-  for (const batch of batches(distinct(values))) changed += await run(batch);
-  return changed;
 }
 
 /**

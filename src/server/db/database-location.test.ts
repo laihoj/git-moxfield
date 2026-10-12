@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DATABASE_PATH,
   databaseLocationFromEnv,
+  databaseUrlKind,
   databaseUrlScheme,
-  isSupportedDatabaseUrl,
 } from './database-location';
 
 describe('database URLs', () => {
@@ -22,21 +22,21 @@ describe('database URLs', () => {
   });
 
   it.each([
-    'libsql://db-org.turso.io',
-    'https://db.example.com',
-    'http://127.0.0.1:8080',
-    'wss://db.example.com',
-    'ws://127.0.0.1:8080',
-    'FILE:data/x.db',
-    ':memory:',
-  ])('supports %s', (url) => {
-    expect(isSupportedDatabaseUrl(url)).toBe(true);
+    ['libsql://db-org.turso.io', 'remote'],
+    ['https://db.example.com', 'remote'],
+    ['http://127.0.0.1:8080', 'remote'],
+    ['wss://db.example.com', 'remote'],
+    ['ws://127.0.0.1:8080', 'remote'],
+    ['FILE:data/x.db', 'file'],
+    [':memory:', 'memory'],
+  ])('opens %s as a %s database', (url, kind) => {
+    expect(databaseUrlKind(url)).toBe(kind);
   });
 
   it.each(['postgres://user:secret@db/app', 'data/x.db', 'ftp://host/db', ':MEMORY:', ''])(
     'does not support %j',
     (url) => {
-      expect(isSupportedDatabaseUrl(url)).toBe(false);
+      expect(databaseUrlKind(url)).toBeUndefined();
     },
   );
 });

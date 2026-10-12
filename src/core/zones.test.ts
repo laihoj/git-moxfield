@@ -2,7 +2,6 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import {
-  COMMAND_ZONES,
   compareZones,
   isCommandZone,
   isKnownZone,
@@ -222,11 +221,9 @@ describe('zoneEntries', () => {
 
 describe('the command zone', () => {
   it('is commanders, companions and signature spells, all of them played', () => {
-    expect(COMMAND_ZONES).toEqual(['commanders', 'companions', 'signatureSpells']);
-    for (const zone of KNOWN_ZONES) {
-      expect(isCommandZone(zone)).toBe((COMMAND_ZONES as readonly string[]).includes(zone));
-    }
-    expect(COMMAND_ZONES.every((zone) => isPlayedZone(zone))).toBe(true);
+    const commandZones = KNOWN_ZONES.filter((zone) => isCommandZone(zone));
+    expect(commandZones).toEqual(['commanders', 'companions', 'signatureSpells']);
+    expect(commandZones.every((zone) => isPlayedZone(zone))).toBe(true);
     expect(isPlayedZone('mainboard')).toBe(true);
     expect(isCommandZone('mainboard')).toBe(false);
     expect(isCommandZone('other:contraptions')).toBe(false);

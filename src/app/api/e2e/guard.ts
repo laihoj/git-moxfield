@@ -16,9 +16,8 @@ import 'server-only';
 import { getConfig } from '@/server/config';
 import { plainText } from '@/server/http/responses';
 import { createLogger } from '@/server/logger';
-import { firstTimeInProcess } from '@/server/process-singleton';
 
-const E2E_ANNOUNCED = Symbol.for('git-moxfield.e2eAnnounced');
+const globalForE2e = globalThis as unknown as { __gitMoxfieldE2eAnnounced?: boolean };
 
 function notFound(): Response {
   return plainText(404, 'Not found.');
@@ -29,7 +28,8 @@ export function e2eDisabledResponse(): Response | null {
   // First, before any configuration is read: compiled away in production builds.
   if (process.env.NODE_ENV === 'production') return notFound();
   if (getConfig().GIT_MOXFIELD_E2E !== true) return notFound();
-  if (firstTimeInProcess(E2E_ANNOUNCED)) {
+  if (globalForE2e.__gitMoxfieldE2eAnnounced !== true) {
+    globalForE2e.__gitMoxfieldE2eAnnounced = true;
     createLogger('api/e2e').warn(
       'The end-to-end test endpoints (/api/e2e/*) are enabled: they sign anyone in. Never set GIT_MOXFIELD_E2E outside the test suite.',
     );

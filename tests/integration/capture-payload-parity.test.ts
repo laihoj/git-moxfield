@@ -1,8 +1,11 @@
 /**
  * The server's decoder (`decodeCapturePayload`) and the paste form's preview
- * (`inflateCapturePayload`) read the same wire format (ADR 0008) and must agree on what a
- * payload is: the same text for a good one, the same reason for a refused one. They share
- * the validation steps of `capture-codec-protocol`; only the inflate step is their own.
+ * (`inflateCapturePayload`) read the same wire format (ADR 0008): for every vector here,
+ * the same text for a good payload and the same reason for a refused one. They share the
+ * first steps (`parseCapturePayload`); inflating is their own. Known divergences: the
+ * preview leaves a plain payload's size to its caller (the server refuses one over
+ * `MAX_PLAIN_CAPTURE_BYTES`), and zlib ignores zero bytes after the gzip member, which a
+ * browser's `DecompressionStream` need not.
  */
 import { gzipSync } from 'node:zlib';
 
@@ -10,7 +13,11 @@ import { describe, expect, it } from 'vitest';
 
 import { inflateCapturePayload } from '@/components/capture/capture-payload';
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
-import { CAPTURE_GZIP_TAG, MAX_ENCODED_CAPTURE_CHARS } from '@/integrations/moxfield/capture-codec-protocol';
+import {
+  CAPTURE_GZIP_TAG,
+  MAX_DECODED_CAPTURE_BYTES,
+  MAX_ENCODED_CAPTURE_CHARS,
+} from '@/integrations/moxfield/capture-codec-protocol';
 import { gzipPayload, UNICODE_SAMPLE } from '@tests/support/capture-codec';
 
 const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -26,6 +33,24 @@ function withNonCanonicalTrailingBits(): string {
   }
   throw new Error('No payload with unused trailing bits');
 }
+
+/** A compressed payload of exactly `length` characters (stored, not deflated) and its text. */
+function payloadOfLength(length: number): { payload: string; text: string } {
+  const encode = (size: number) =>
+    CAPTURE_GZIP_TAG + gzipSync(Buffer.alloc(size, 'x'), { level: 0 }).toString('base64url');
+  let low = 0;
+  let high = length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (encode(middle).length < length) low = middle + 1;
+    else high = middle;
+  }
+  const payload = encode(low);
+  if (payload.length !== length) throw new Error(`No stored gzip payload is ${length} characters long`);
+  return { payload, text: 'x'.repeat(low) };
+}
+
+const AT_ENCODED_LIMIT = payloadOfLength(MAX_ENCODED_CAPTURE_CHARS);
 
 /** Payloads both read as `text`: `payload` as received. */
 const GOOD: [name: string, payload: string, text: string][] = [
@@ -47,6 +72,13 @@ const GOOD: [name: string, payload: string, text: string][] = [
     '\ufeff{"a":1}',
   ],
   ['the empty text, compressed', gzipPayload(''), ''],
+  ['a compressed capture with surrounding whitespace', ` \n${gzipPayload('{"a":1}')}\n `, '{"a":1}'],
+  ['a compressed payload of exactly the most characters', AT_ENCODED_LIMIT.payload, AT_ENCODED_LIMIT.text],
+  [
+    'a compressed payload that inflates to exactly the most bytes',
+    gzipPayload('x'.repeat(MAX_DECODED_CAPTURE_BYTES)),
+    'x'.repeat(MAX_DECODED_CAPTURE_BYTES),
+  ],
 ];
 
 const REFUSED: [string, string, 'too-large' | 'malformed' | 'unsupported-encoding'][] = [
@@ -55,6 +87,12 @@ const REFUSED: [string, string, 'too-large' | 'malformed' | 'unsupported-encodin
   [
     'more characters than a compressed payload may have',
     `${CAPTURE_GZIP_TAG}${'A'.repeat(MAX_ENCODED_CAPTURE_CHARS)}`,
+    'too-large',
+  ],
+  ['one character more than a compressed payload may have', `${AT_ENCODED_LIMIT.payload}A`, 'too-large'],
+  [
+    'a compressed payload that inflates to one byte more than the most',
+    gzipPayload('x'.repeat(MAX_DECODED_CAPTURE_BYTES + 1)),
     'too-large',
   ],
   ['characters outside the base64url alphabet', `${CAPTURE_GZIP_TAG}ab+/`, 'malformed'],

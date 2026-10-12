@@ -22,8 +22,6 @@ import {
 import { RepositoryError } from './errors';
 import { newWorkspaceRow } from './workspaces';
 
-export type { UserRole };
-
 export type UserRecord = typeof users.$inferSelect;
 
 /** A user as listed for admins. */
@@ -40,7 +38,7 @@ export interface NewUser {
 }
 
 /** `role = 'admin' AND disabled_at IS NULL`: an admin who is not disabled. */
-export const activeAdmin: SQL = allOf(eq(users.role, 'admin'), isNull(users.disabledAt));
+const activeAdmin: SQL = allOf(eq(users.role, 'admin'), isNull(users.disabledAt));
 
 /** `SELECT id FROM users WHERE <active admin>`, for `id IN (...)`. */
 export function activeAdminIds(db: LibsqlExecutor) {
@@ -261,10 +259,7 @@ function newUserRow(
   };
 }
 
-/**
- * The display name trimmed.
- * @throws {RepositoryError} `invalid-input` for an empty one.
- */
+/** The display name trimmed. @throws {RepositoryError} `invalid-input` for an empty one. */
 export function requireDisplayName(displayName: string): string {
   const name = displayName.trim();
   if (name === '') throw new RepositoryError('invalid-input', 'A user needs a display name');

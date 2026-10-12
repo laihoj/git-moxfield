@@ -1,12 +1,8 @@
-/**
- * Host names, client-safe and pure: the cookie rules of the server and the bookmarklet
- * instructions in the browser both need to know whether an address only works on the
- * computer that runs git-moxfield.
- */
+/** Host names, client-safe: for the server's cookie rules and the browser's bookmarklet instructions. */
 
 /**
- * Whether `hostname` (as in `URL.hostname`: lower case, IPv6 literals in brackets) is
- * the loopback host: `localhost`, `*.localhost`, `127.0.0.1` or `[::1]`.
+ * Whether `hostname` (a `URL.hostname`: lower case, IPv6 in brackets) is the loopback host:
+ * `localhost`, `*.localhost`, `127.0.0.1` or `[::1]`.
  */
 export function isLoopbackHostname(hostname: string): boolean {
   return (

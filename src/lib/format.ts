@@ -156,11 +156,7 @@ export function versionRangeLabel(first: number, last: number): string {
   return first === last ? versionLabel(first) : `${versionLabel(first)}–${versionLabel(last)}`;
 }
 
-/**
- * A length of time in the largest unit that holds it exactly: `7 days` (from two days
- * on), `24 hours`, `15 minutes`; otherwise rounded to whole minutes. For lifetimes of links
- * and the like, which pages state next to the constants that set them.
- */
+/** A lifetime in the largest unit that holds it exactly (`7 days` from 2 days, `24 hours`), else minutes. */
 export function formatDuration(ms: number): string {
   if (ms >= 2 * DAY && ms % DAY === 0) return pluralize(ms / DAY, 'day');
   if (ms >= HOUR && ms % HOUR === 0) return pluralize(ms / HOUR, 'hour');

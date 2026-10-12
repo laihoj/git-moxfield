@@ -16,7 +16,6 @@
 import 'server-only';
 
 import { absoluteAppUrl } from '@/core/http-url';
-
 import { sharedDeckPath } from '@/server/auth/paths';
 import { requireActiveSession } from '@/server/auth/require-session';
 import { generateToken, hashToken } from '@/server/auth/tokens';

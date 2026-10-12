@@ -7,7 +7,7 @@
  * Cloudflare block pauses all further requests for `blockBackoffSeconds`, and a 429
  * pauses them for its `Retry-After` (at most `blockBackoffSeconds`).
  */
-import { httpBaseUrl, parseHttpUrl } from '@/core/http-url';
+import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
 import type { Logger } from '@/core/logger';
 import { SerialQueue } from '@/core/serial-queue';
 import { readStreamLimited } from '@/core/streams';
@@ -136,7 +136,7 @@ export class MoxfieldHttpClient {
   constructor(options: MoxfieldHttpClientOptions) {
     const base = parseHttpUrl(options.apiBaseUrl);
     if (base === null) throw new TypeError('Moxfield apiBaseUrl must be an absolute http(s) URL');
-    this.baseUrl = httpBaseUrl(base);
+    this.baseUrl = `${base.origin}${stripTrailingSlashes(base.pathname)}`;
     this.userAgent = options.userAgent ?? DEFAULT_MOXFIELD_USER_AGENT;
     this.timeoutMs = options.timeoutMs;
     this.minRequestIntervalMs = options.minRequestIntervalMs;

@@ -20,11 +20,12 @@ import { and, desc, eq, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-o
 import { decks, shareLinks, users } from '@/server/db/schema';
 
 import {
+  batches,
   deckInWorkspace,
+  distinct,
   insertWithUniqueHash,
   requireDeckInWorkspace,
   selectInBatches,
-  sumInBatches,
   updateRows,
   type RepositoryContext,
 } from './context';
@@ -235,8 +236,9 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
     },
 
     async revokeByCredential(userId, credentialIds, at) {
-      return sumInBatches(credentialIds, (batch) =>
-        updateRows(
+      let revoked = 0;
+      for (const batch of batches(distinct(credentialIds))) {
+        revoked += await updateRows(
           ctx,
           shareLinks,
           { revokedAt: at },
@@ -245,8 +247,9 @@ export function createShareLinkRepository(ctx: RepositoryContext): ShareLinkRepo
             inArray(shareLinks.credentialId, batch),
             isNull(shareLinks.revokedAt),
           ),
-        ),
-      );
+        );
+      }
+      return revoked;
     },
 
     revokeAllForWorkspace(workspaceId, at) {

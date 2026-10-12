@@ -72,7 +72,7 @@ export function deckReference(deck: { source: string; externalId: string }): str
 }
 
 /** What a stored commit contributes to its commit object besides the deck reference (and its own id). */
-export type CommitContent = Pick<
+type CommitContent = Pick<
   CommitObject,
   'snapshotHash' | 'parentId' | 'createdAt' | 'sourceVersion' | 'message'
 >;

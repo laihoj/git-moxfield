@@ -7,7 +7,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { stripTrailingSlashes } from '@/core/http-url';
+import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
 import { LOG_LEVELS } from '@/core/logger';
 import {
   DEFAULT_MOXFIELD_API_BASE_URL,
@@ -20,7 +20,7 @@ import {
 import {
   DEFAULT_DATABASE_PATH,
   databaseLocationFromEnv,
-  isSupportedDatabaseUrl,
+  databaseUrlKind,
   SUPPORTED_DATABASE_URLS_HINT,
   type DatabaseLocationSource,
 } from './db/database-location';
@@ -48,7 +48,7 @@ const schema = z.object({
     .trim()
     .min(1)
     .optional()
-    .refine((value) => value === undefined || isSupportedDatabaseUrl(value), {
+    .refine((value) => value === undefined || databaseUrlKind(value) !== undefined, {
       message: `expected a URL using ${SUPPORTED_DATABASE_URLS_HINT}`,
     }),
   /** Auth token for `TURSO_DATABASE_URL` (Turso). Secret: only reachable through {@link AppConfig.database}. */
@@ -93,7 +93,8 @@ const schema = z.object({
     .string()
     .optional()
     .superRefine((value, ctx) => {
-      const invalid = splitList(value).filter((entry) => !URL.canParse(entry));
+      // Only http(s) URLs have an origin: `moxfield.com:443` would be the opaque origin `null`.
+      const invalid = splitList(value).filter((entry) => parseHttpUrl(entry) === null);
       if (invalid.length > 0) {
         ctx.addIssue({
           code: 'custom',

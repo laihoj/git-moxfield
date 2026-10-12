@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { concatBytes, readStreamLimited } from './streams';
+import { readStreamLimited } from './streams';
 
 function streamOf(...chunks: number[][]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -11,21 +11,9 @@ function streamOf(...chunks: number[][]): ReadableStream<Uint8Array> {
   });
 }
 
-describe('concatBytes', () => {
-  it('joins chunks in order', () => {
-    expect(concatBytes([Uint8Array.of(1, 2), Uint8Array.of(), Uint8Array.of(3)], 3)).toEqual(
-      Uint8Array.of(1, 2, 3),
-    );
-  });
-
-  it('is empty without chunks', () => {
-    expect(concatBytes([], 0)).toEqual(new Uint8Array());
-  });
-});
-
 describe('readStreamLimited', () => {
   it('reads a stream that fits the limit', async () => {
-    expect(await readStreamLimited(streamOf([1, 2], [3, 4, 5]), 5)).toEqual(Uint8Array.of(1, 2, 3, 4, 5));
+    expect(await readStreamLimited(streamOf([1, 2], [], [3, 4, 5]), 5)).toEqual(Uint8Array.of(1, 2, 3, 4, 5));
   });
 
   it('reads an empty stream', async () => {

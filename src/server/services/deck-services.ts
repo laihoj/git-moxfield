@@ -109,10 +109,7 @@ import type {
 /** Note kind of the free-text note managed by {@link DeckServices.setNote}; data is `{ text }`. */
 export const FREE_TEXT_NOTE_KIND = 'note';
 
-/**
- * Number of versions in {@link DeckOverviewDTO.recentVersions}: the Recent versions card
- * lists them all, and the compare page's defaults need the newest two.
- */
+/** Number of versions in {@link DeckOverviewDTO.recentVersions} (the compare defaults need two). */
 export const RECENT_VERSION_COUNT = 5;
 
 /**
@@ -153,11 +150,7 @@ type RelinkFailure = Extract<RelinkDeckOutcome, { ok: false }>;
 
 type FetchResult = ({ ok: true } & Ingested) | { ok: false; error: FetchErrorDTO };
 
-/**
- * Points `deck` at another source deck inside `tx`. Its working state is the old source
- * deck's: it must not be committed as the new one, so the observations go too (the
- * caller then records the new deck's state).
- */
+/** Points `deck` at another source deck; its observations (the old deck's state) go too. */
 async function relinkInTx(tx: Repositories, deck: DeckRecord, to: IngestRelink): Promise<void> {
   await tx.decks.relink(deck.id, {
     expectedExternalId: deck.externalId,
@@ -414,16 +407,16 @@ class DefaultDeckServices implements DeckServices {
     return { status: 'ingested', deckId, changedSinceLastObservation: changed };
   }
 
-  /**
-   * "Continue an existing deck's history": points the workspace's deck `deckId` at the
-   * captured source deck (unless it follows it already) and ingests the capture as its
-   * working state, in one transaction (see {@link ingest}).
-   */
   /** A first fetch of `deckId`, when its source can be fetched from the server; `null` otherwise. */
   private async refreshIfAvailable(source: DeckSource, deckId: string): Promise<FetchOutcome | null> {
     return source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
   }
 
+  /**
+   * "Continue an existing deck's history": points the workspace's deck `deckId` at the
+   * captured source deck (unless it follows it already) and ingests the capture as its
+   * working state, in one transaction (see {@link ingest}).
+   */
   private async ingestContinuing(
     deckId: string,
     source: DeckSource,

@@ -175,7 +175,8 @@ export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';
 export type { DeckLocation, WorkspaceRecord, WorkspaceRepository } from './workspaces';
 export { foldName, isActiveAdminRecord } from './users';
-export type { NewUser, UserListItem, UserRecord, UserRepository, UserRole } from './users';
+export type { NewUser, UserListItem, UserRecord, UserRepository } from './users';
+export type { UserRole } from '@/core/roles';
 export type {
   CredentialKind,
   CredentialRecord,

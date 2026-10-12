@@ -10,6 +10,7 @@
  */
 import { and, desc, eq, gt, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 
+import type { UserRole } from '@/core/roles';
 import { invites } from '@/server/db/schema';
 
 import { allOf, insertWithUniqueHash, updateRows, withTransaction, type RepositoryContext } from './context';
@@ -20,7 +21,6 @@ import {
   isActiveAdmin,
   requireDisplayName,
   type UserRecord,
-  type UserRole,
 } from './users';
 
 export interface InviteRecord {

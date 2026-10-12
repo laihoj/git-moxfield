@@ -40,11 +40,7 @@ export const MOXFIELD_PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 /** Internal deck ids (`deck.id`, e.g. `A0j00`), used only for the primer endpoint. */
 export const MOXFIELD_INTERNAL_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
-/**
- * Moxfield API paths (relative to the API base URL): `/v3/decks/all/{publicId}` and
- * `/v1/decks/{internalId}/primer`. The parts are exported for the bookmarklet, which
- * builds the same paths in the user's browser from its configuration.
- */
+/** Parts of the API paths `/v3/decks/all/{publicId}` and `/v1/decks/{internalId}/primer`. */
 export const MOXFIELD_DECK_PATH_PREFIX = '/v3/decks/all/';
 export const MOXFIELD_PRIMER_PATH_PREFIX = '/v1/decks/';
 export const MOXFIELD_PRIMER_PATH_SUFFIX = '/primer';

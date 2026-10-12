@@ -16,7 +16,6 @@
  */
 import { cardNames, compareStrings, snapshotZones, zoneCards } from './canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from './model';
-import { formatCardLines, formatPrintingLine, linesText, type LineFormat } from './printing-line';
 import { isKnownZone, type ZoneId } from './zones';
 
 /** Relative path → file contents (LF line endings, trailing newline). */
@@ -38,16 +37,24 @@ export function zoneFileName(zone: ZoneId): string {
     : `${zone.replace(':', '-')}.txt`;
 }
 
-/** The export is lossless: unknown finishes, languages and flags are written too. */
-const LOSSLESS_LINES: LineFormat = { unknownFinish: 'verbatim', lang: true, flags: true };
+function finishMarker(finish: string): string {
+  if (finish === 'nonfoil') return '';
+  if (finish === 'foil') return ' *F*';
+  if (finish === 'etched') return ' *E*';
+  return ` *${finish}*`;
+}
 
 /** One line per printing: `<qty> <name> (<SET>) <collector number>[ *F*][ [lang]][ {flags}]`. */
 export function printingLine(card: Pick<CanonicalCard, 'name'>, p: CanonicalPrinting): string {
-  return formatPrintingLine(card.name, p, LOSSLESS_LINES);
+  let line = `${p.quantity} ${card.name} (${p.set.toUpperCase()}) ${p.collectorNumber}${finishMarker(p.finish)}`;
+  if (p.lang !== 'en') line += ` [${p.lang}]`;
+  if (p.flags && p.flags.length > 0) line += ` {${p.flags.join(',')}}`;
+  return line;
 }
 
 export function cardLines(card: CanonicalCard): string[] {
-  return formatCardLines(card, LOSSLESS_LINES);
+  if (card.printings.length === 0) return [`${card.quantity} ${card.name}`];
+  return card.printings.map((p) => printingLine(card, p));
 }
 
 /**
@@ -85,7 +92,7 @@ export function snapshotToFileTree(snapshot: CanonicalSnapshot, options: FileTre
 
   for (const zone of snapshotZones(snapshot)) {
     const lines = zoneCards(snapshot, zone).flatMap(cardLines);
-    if (lines.length > 0) tree[zoneFileName(zone)] = linesText(lines);
+    if (lines.length > 0) tree[zoneFileName(zone)] = `${lines.join('\n')}\n`;
   }
 
   const names = cardNames(snapshot);

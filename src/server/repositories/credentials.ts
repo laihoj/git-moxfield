@@ -83,7 +83,7 @@ export const credentialRecordColumns = {
 
 export function createCredentialRepository(ctx: RepositoryContext): CredentialRepository {
   return {
-    createKey(input) {
+    async createKey(input) {
       const label = input.label.trim();
       if (label === '') throw new RepositoryError('invalid-input', 'A key needs a label');
       return insertWithUniqueHash(ctx, {

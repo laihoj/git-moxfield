@@ -24,7 +24,6 @@ import { KeyedMutex } from './mutex';
 
 export type * from './contract';
 export type * from './types';
-export { MAX_COMMIT_MESSAGE_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
 export { FREE_TEXT_NOTE_KIND, RECENT_VERSION_COUNT } from './deck-services';
 export { MAX_CARD_SEARCH_LIMIT } from './history';
 export { ServiceError, isServiceError, type ServiceErrorCode } from './errors';

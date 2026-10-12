@@ -21,7 +21,6 @@ import {
   type Repositories,
 } from '@/server/repositories';
 
-import { countsOf, type ImportCounts } from './counts';
 import { HistoryImportError } from './errors';
 import { batchBySize } from './run';
 
@@ -35,8 +34,6 @@ export interface ImportEndpoints {
   targetWorkspaceId: string;
 }
 
-export type { ImportCounts };
-
 /** A source deck, as the plan names it. */
 export interface ImportDeck {
   /** The deck's id in the source. */
@@ -44,6 +41,16 @@ export interface ImportDeck {
   source: string;
   externalId: string;
   name: string;
+}
+
+/** What a deck's history holds. */
+export interface ImportCounts {
+  versions: number;
+  tags: number;
+  notes: number;
+  observations: number;
+  /** Recorded changes of Moxfield deck. */
+  relinks: number;
 }
 
 /** Content-addressed rows the target lacks, to copy before the deck's history. */
@@ -98,6 +105,16 @@ export interface ImportPlan {
 export interface PlanImportOptions {
   /** Id generator for rows whose id is taken in the target. Default: `crypto.randomUUID`. */
   newId?: () => string;
+}
+
+function countsOf(rows: DeckHistoryRows): ImportCounts {
+  return {
+    versions: rows.commits.length,
+    tags: rows.versionTags.length,
+    notes: rows.commitNotes.length,
+    observations: rows.observations.length,
+    relinks: rows.relinks.length,
+  };
 }
 
 /** Hashes of the snapshots and raw payloads the history references. */

@@ -34,12 +34,13 @@ import type { Db } from '@/server/db/client';
 import { foldName } from '@/server/repositories';
 import { isServiceError } from '@/server/services/errors';
 
-import { DEFAULT_APP_URL, resolveBaseUrl } from './app-url';
 import {
   consoleIO,
+  DEFAULT_APP_URL,
   isEntryPoint,
   parseArgsOrUsage,
   quietLogger,
+  resolveBaseUrl,
   runMain,
   scriptArgs,
   UsageError,

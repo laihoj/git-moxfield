@@ -126,11 +126,8 @@ export function catalogLookupQuery(workspaceId: string, keys: readonly string[])
 }
 
 /**
- * Upserts `rows` into the catalog in batches, as a write set for `writeAll`: a new key is
- * inserted, an existing one takes every fact column and `updated_at` of the row, provided
- * `setWhere` holds (over `card_catalog` and `excluded`, see {@link excluded}). The facts are
- * the table's columns but the workspace, the key and `updated_at`, so a column added to the
- * table is carried along. `rows` must not be empty.
+ * Upserts non-empty `rows` in batches (a write set for `writeAll`): an existing key takes every
+ * fact column (see `FACT_COLUMNS`) and `updated_at` of the row where `setWhere` holds.
  */
 export function catalogUpserts(
   db: LibsqlExecutor,
