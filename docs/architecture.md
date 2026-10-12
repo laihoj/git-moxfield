@@ -424,14 +424,18 @@ query is a round trip.
 
 ### Fetch policy
 
-No polling. Fetch on: explicit refresh, deck page load when the latest observation is
-older than `AUTO_REFRESH_AFTER_SECONDS` (client-triggered after render), and commit.
-A per-deck cooldown and a global minimum interval between Moxfield requests protect
-against bursts. A 429 response pauses every server request (any deck, the primer,
-fetch on commit) for its `Retry-After` (60 s without one, at most the block backoff),
-and the UI shows how long; meanwhile the deck page suggests no background refresh. A
-Cloudflare block pauses server fetches for a while and switches the UI to browser
-capture.
+No polling and no background fetching: the server asks Moxfield only when a user
+refreshes, tracks or relinks a deck, and before a commit (fetch-on-commit). Every request
+first reserves a slot in the installation-wide limiter, one row of the shared database
+(`moxfield_rate`, [ADR 0009](adr/0009-global-moxfield-rate-limit.md)): every instance
+together sends at most one request per `MOXFIELD_MIN_REQUEST_INTERVAL_MS` (2 s by
+default, at least 1.5 s against Moxfield), in the database's time. A per-deck cooldown
+also holds back repeated refreshes. A 429 makes every instance wait (its `Retry-After`,
+else an exponential backoff from 30 s) and then run at half speed for 10 min; the UI
+shows until when. A 403 or a bot-protection challenge pauses server fetching for every
+instance until an admin resumes it (Admin page, `pnpm moxfield resume`), and the UI
+switches to browser capture. When the limiter's database cannot be reached, nothing is
+sent.
 
 ## Restore
 
@@ -546,9 +550,10 @@ browser ──HTTPS──► Netlify CDN ─────────── stati
   deploy runs on migrations newer than itself, which is why migrations are written to
   stay backward compatible. A local database file on Netlify is refused
   (`DatabaseConfigError`): a function's disk is temporary and per instance.
-- **Per-instance state.** The database handle, the per-deck locks, the Moxfield throttle
-  and block backoff, and the "setup code printed" flag live per process, so per function
-  instance. Correctness never depends on them: the database's compare-and-set on the
+- **Per-instance state.** The database handle, the per-deck locks and the "setup code
+  printed" flag live per process, so per function instance. The Moxfield request limit,
+  its 429 backoff and its pause do not: they live in the database, shared by every
+  instance (ADR 0009). Correctness never depends on them: the database's compare-and-set on the
   branch head and its unique constraints decide between instances.
 - **Cost shape.** Turso bills rows read (including rows scanned) and rows written, and
   each statement is a round trip from Ohio, so queries are index-driven, independent

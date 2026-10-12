@@ -14,8 +14,9 @@
  *   another workspace behaves like an unknown id, and card facts one workspace captures
  *   never reach another. Snapshots and raw payloads are content-addressed (keyed by the
  *   hash of what they hold) and shared by all workspaces.
- * - **Accounts** (workspaces, users, credentials, sessions, login links, invites) and
- *   settings are installation-wide; the bound workspace does not affect them.
+ * - **Accounts** (workspaces, users, credentials, sessions, login links, invites),
+ *   settings and the Moxfield rate limiter are installation-wide; the bound workspace does
+ *   not affect them.
  * - **Share links** are both: the owner creates, lists and revokes them for decks of the
  *   bound workspace only, while resolving a link's token is installation-wide (the token
  *   is its own authorization; see `./share-links`).
@@ -42,6 +43,7 @@ import { createDeckRepository, type DeckRepository } from './decks';
 import { createHistoryTransferRepository, type HistoryTransferRepository } from './history-transfer';
 import { createInviteRepository, type InviteRepository } from './invites';
 import { createLoginLinkRepository, type LoginLinkRepository } from './login-links';
+import { createMoxfieldRateRepository, type MoxfieldRateRepository } from './moxfield-rate';
 import { createCommitNoteRepository, type CommitNoteRepository } from './notes';
 import { createObservationRepository, type ObservationRepository } from './observations';
 import { createRawBlobRepository, type RawBlobRepository } from './raw-blobs';
@@ -65,6 +67,8 @@ export interface Repositories {
   readonly notes: CommitNoteRepository;
   readonly catalog: CatalogRepository;
   readonly settings: SettingsRepository;
+  /** The installation-wide limiter of server-side requests to Moxfield (ADR 0009). */
+  readonly moxfieldRate: MoxfieldRateRepository;
   readonly workspaces: WorkspaceRepository;
   readonly users: UserRepository;
   readonly credentials: CredentialRepository;
@@ -123,6 +127,7 @@ function bind(ctx: RepositoryContext): Repositories {
     notes: createCommitNoteRepository(ctx),
     catalog: createCatalogRepository(ctx),
     settings: createSettingsRepository(ctx),
+    moxfieldRate: createMoxfieldRateRepository(ctx),
     workspaces: createWorkspaceRepository(ctx),
     users: createUserRepository(ctx),
     credentials: createCredentialRepository(ctx),
@@ -173,6 +178,13 @@ export type { TagCount, VersionTagRepository } from './tags';
 export type { CommitNoteRecord, CommitNoteRepository } from './notes';
 export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';
+export type {
+  MoxfieldRateRepository,
+  MoxfieldRateState,
+  MoxfieldReservation,
+  RecordRateLimitOptions,
+  ReserveOptions,
+} from './moxfield-rate';
 export type { DeckLocation, WorkspaceRecord, WorkspaceRepository } from './workspaces';
 export { foldName, isActiveAdminRecord } from './users';
 export type { NewUser, UserListItem, UserRecord, UserRepository } from './users';

@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { CaptureClient } from '@/components/capture/capture-client';
 import { CAPTURE_PASTE_MODE, parseCaptureFormError } from '@/integrations/moxfield/capture-protocol';
 import { routes } from '@/lib/routes';
-import { getSetupInfo } from '@/server/access';
+import { getMoxfieldOrigins } from '@/server/access';
 import { getCurrentUser, requireUser } from '@/server/auth/current-user';
 
 export const dynamic = 'force-dynamic';
@@ -27,7 +27,7 @@ export default async function CapturePage({ searchParams }: PageProps<'/capture'
     mode === CAPTURE_PASTE_MODE || formError !== null
       ? await requireUser({ next: routes.capturePaste() })
       : await getCurrentUser();
-  const setup = getSetupInfo();
+  const setup = getMoxfieldOrigins();
   return (
     <CaptureClient
       allowedOrigins={setup.captureAllowedOrigins}

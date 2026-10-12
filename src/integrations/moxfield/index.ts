@@ -13,6 +13,7 @@ export * from './http-client';
 export * from './moxfield-deck-source';
 export * from './normalize';
 export * from './primer-markup';
+export * from './request-limiter';
 export * from './restore-text';
 export * from './schema';
 export * from './url';

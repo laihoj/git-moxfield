@@ -11,6 +11,7 @@ import { parseConfig } from '@/server/config';
 import { LOCAL_WORKSPACE_ID, type Db } from '@/server/db/client';
 import type { Logger } from '@/server/logger';
 import { createServices, type CommitOutcome, type DeckServices } from '@/server/services';
+import { DatabaseMoxfieldLimiter } from '@/server/moxfield-limiter';
 import { createDeckSourceRegistry } from '@/server/sources';
 
 import {
@@ -80,6 +81,11 @@ export function captureOnlyServices(
   return createServices({
     db,
     sources: createDeckSourceRegistry(config, {
+      moxfieldLimiter: new DatabaseMoxfieldLimiter({
+        db: () => Promise.resolve(db),
+        intervalMs: config.MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+        logger: deps.logger,
+      }),
       logger: deps.logger,
       ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     }),

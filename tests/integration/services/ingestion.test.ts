@@ -21,7 +21,7 @@ import {
 const OTHER_DECK = blueFarmSpec({ publicId: 'OtherDeckForCapture0001', name: 'Other Deck' });
 
 describe('deck services: server fetch failures', () => {
-  it('pauses server fetches after a Cloudflare block and keeps browser capture working', async () => {
+  it('pauses server fetches after a Cloudflare block until resumed, and keeps browser capture working', async () => {
     const harness = await createServiceHarness();
     const { services, api, clock } = harness;
     api.setDeck(blueFarmSpec());
@@ -33,9 +33,9 @@ describe('deck services: server fetch failures', () => {
       ok: false,
       error: {
         code: 'blocked',
-        message: expect.stringContaining('blocking server-side requests') as unknown,
+        message: expect.stringContaining('paused for everyone until an admin resumes it') as unknown,
         at: clock.iso(),
-        retryAfterSeconds: 3600,
+        retryAfterSeconds: null,
       },
     });
     expect(api.requests).toHaveLength(1);
@@ -46,9 +46,12 @@ describe('deck services: server fetch failures', () => {
       status: 'never-fetched',
       diff: null,
       working: null,
-      lastFetchError: { code: 'blocked', retryAfterSeconds: 3600 },
-      serverFetch: { state: 'blocked', retryAt: new Date(clock.epochMs() + 3_600_000).toISOString() },
-      autoRefreshSuggested: false,
+      lastFetchError: { code: 'blocked', retryAfterSeconds: null },
+      serverFetch: {
+        state: 'paused',
+        reason: expect.stringContaining("Moxfield's bot protection answered a request (HTTP 403") as unknown,
+        pausedAt: expect.any(String) as unknown,
+      },
       suggestedMessage: '',
     });
     expect(harness.logger.entries).toContainEqual(
@@ -59,15 +62,15 @@ describe('deck services: server fetch failures', () => {
       }),
     );
 
-    // During the backoff, refreshing answers without any request.
-    clock.advance(20);
-    expect(await services.refresh(deckId, 'manual')).toEqual({
+    // While paused, refreshing answers without any request, however much later.
+    clock.advance(86_400);
+    expect(await services.refresh(deckId)).toEqual({
       ok: false,
       error: {
         code: 'blocked',
-        message: expect.stringContaining('bookmarklet') as unknown,
+        message: expect.stringMatching(/bot protection.*until an admin resumes it.*bookmarklet/) as unknown,
         at: clock.iso(),
-        retryAfterSeconds: 3580,
+        retryAfterSeconds: null,
       },
     });
     expect(api.requests).toHaveLength(1);
@@ -139,11 +142,12 @@ describe('deck services: server fetch failures', () => {
     expect(await services.listDecks()).toHaveLength(2);
     expect(api.requests).toHaveLength(1);
 
-    // After the backoff, server fetches resume and a success clears the stored error.
-    clock.advance(3600);
+    // Once an admin resumes, server fetches run again and a success clears the stored error.
     api.mode = 'ok';
-    expect(services.getSetupInfo().serverFetch).toEqual({ state: 'available' });
-    expect(await services.refresh(deckId, 'manual')).toMatchObject({
+    expect((await services.getSetupInfo()).serverFetch).toMatchObject({ state: 'paused' });
+    expect(await harness.moxfieldLimiter.resume()).toBe(true);
+    expect((await services.getSetupInfo()).serverFetch).toEqual({ state: 'available' });
+    expect(await services.refresh(deckId)).toMatchObject({
       ok: true,
       changedSinceLastObservation: false,
     });
@@ -161,7 +165,7 @@ describe('deck services: server fetch failures', () => {
     const tracked = await services.trackDeck(BLUE_FARM_URL);
     expect(tracked).toMatchObject({ ok: true, alreadyTracked: false, fetch: null });
     if (!tracked.ok) return;
-    expect(await services.refresh(tracked.deckId, 'manual')).toMatchObject({
+    expect(await services.refresh(tracked.deckId)).toMatchObject({
       ok: false,
       error: {
         code: 'blocked',
@@ -176,9 +180,8 @@ describe('deck services: server fetch failures', () => {
       lastFetchError: null,
       name: BLUE_FARM_PUBLIC_ID,
       serverFetch: { state: 'disabled' },
-      autoRefreshSuggested: false,
     });
-    expect(services.getSetupInfo()).toMatchObject({
+    expect(await services.getSetupInfo()).toMatchObject({
       serverFetch: { state: 'disabled' },
       userAgentConfigured: false,
     });
@@ -191,12 +194,12 @@ describe('deck services: server fetch failures', () => {
     harness.api.mode = 'rate-limited';
     harness.clock.advance(60);
 
-    const outcome = await harness.services.refresh(deckId, 'manual');
+    const outcome = await harness.services.refresh(deckId);
     expect(outcome).toEqual({
       ok: false,
       error: {
         code: 'rate-limited',
-        message: expect.stringContaining('rate limiting') as unknown,
+        message: expect.stringContaining('slow down (HTTP 429)') as unknown,
         at: harness.clock.iso(),
         retryAfterSeconds: 30,
       },
@@ -207,32 +210,36 @@ describe('deck services: server fetch failures', () => {
     });
   });
 
-  it('sends nothing to Moxfield until its Retry-After has passed', async () => {
-    const harness = await createServiceHarness();
-    const { services, api, clock } = harness;
+  it('sends nothing to Moxfield while its Retry-After lasts, for any deck or commit', async () => {
+    // The services compare their clock with the limiter's database time here, so it stays
+    // at the real time (no cooldown to wait out).
+    const harness = await createServiceHarness({
+      clockStart: Date.now(),
+      env: { REFRESH_COOLDOWN_SECONDS: '0' },
+    });
+    const { services, api } = harness;
     const deckA = await trackDeck(harness);
     const deckB = await trackDeck(harness, OTHER_DECK);
     const reviewed = defined(await services.getOverview(deckA));
     api.mode = 'rate-limited'; // 429 with Retry-After: 30
-    clock.advance(60);
-    expect(await services.refresh(deckA, 'manual')).toMatchObject({
+    expect(await services.refresh(deckA)).toMatchObject({
       ok: false,
       error: { code: 'rate-limited', retryAfterSeconds: 30 },
     });
     const requests = api.requests.length;
+    expect(defined(await services.getOverview(deckB)).serverFetch).toMatchObject({
+      state: 'rate-limited',
+      reason: expect.stringContaining('HTTP 429') as unknown,
+    });
 
-    // Within the window: a refresh of the same deck (past its cooldown), of another
-    // deck, and a commit's fetch-on-commit all answer without a request.
-    clock.advance(11);
-    expect(await services.refresh(deckA, 'manual')).toMatchObject({
-      ok: false,
-      error: { code: 'rate-limited', retryAfterSeconds: 19 },
-    });
-    expect(await services.refresh(deckB, 'auto')).toMatchObject({
-      ok: false,
-      error: { code: 'rate-limited', retryAfterSeconds: 19 },
-    });
-    expect(defined(await services.getOverview(deckA)).autoRefreshSuggested).toBe(false);
+    // Within the window: a refresh of the same deck, of another deck, and a commit's
+    // fetch-on-commit all answer without a request.
+    expect(await services.refresh(deckA)).toMatchObject({ ok: false, error: { code: 'rate-limited' } });
+    const other = await services.refresh(deckB);
+    expect(other).toMatchObject({ ok: false, error: { code: 'rate-limited' } });
+    // The database's 30 s, seen from the services' (here: the real) clock.
+    expect(other.ok ? null : other.error.retryAfterSeconds).toBeGreaterThanOrEqual(28);
+    expect(other.ok ? null : other.error.retryAfterSeconds).toBeLessThanOrEqual(31);
     expect(
       committed(
         await services.commit(deckA, {
@@ -243,26 +250,6 @@ describe('deck services: server fetch failures', () => {
       ).sequence,
     ).toBe(1);
     expect(api.requests).toHaveLength(requests);
-
-    // Afterwards, Moxfield is asked again.
-    clock.advance(20);
-    api.mode = 'ok';
-    expect(await services.refresh(deckB, 'manual')).toMatchObject({ ok: true });
-    expect(api.requests).toHaveLength(requests + 2);
-  });
-
-  it('suggests no background refresh while Moxfield asked to wait', async () => {
-    const harness = await createServiceHarness({ env: { AUTO_REFRESH_AFTER_SECONDS: '15' } });
-    const { services, api, clock } = harness;
-    const deckId = await trackDeck(harness);
-    api.mode = 'rate-limited'; // Retry-After: 30
-    clock.advance(60);
-    await services.refresh(deckId, 'manual');
-    // Due for a background refresh, but Moxfield's 30 s have not passed yet.
-    clock.advance(20);
-    expect(defined(await services.getOverview(deckId)).autoRefreshSuggested).toBe(false);
-    clock.advance(10);
-    expect(defined(await services.getOverview(deckId)).autoRefreshSuggested).toBe(true);
   });
 
   it('enforces the per-deck refresh cooldown without network requests', async () => {
@@ -272,7 +259,7 @@ describe('deck services: server fetch failures', () => {
     const requests = api.requests.length;
 
     clock.advance(2);
-    expect(await services.refresh(deckId, 'manual')).toEqual({
+    expect(await services.refresh(deckId)).toEqual({
       ok: false,
       error: {
         code: 'rate-limited',
@@ -282,7 +269,7 @@ describe('deck services: server fetch failures', () => {
       },
     });
     clock.advance(7.5);
-    expect(await services.refresh(deckId, 'auto')).toMatchObject({
+    expect(await services.refresh(deckId)).toMatchObject({
       ok: false,
       error: { message: 'Checked Moxfield moments ago. Try again in 1 s.', retryAfterSeconds: 1 },
     });
@@ -291,7 +278,7 @@ describe('deck services: server fetch failures', () => {
     expect(defined(await services.getOverview(deckId)).lastFetchError).toBeNull();
 
     clock.advance(0.5);
-    expect(await services.refresh(deckId, 'manual')).toMatchObject({ ok: true });
+    expect(await services.refresh(deckId)).toMatchObject({ ok: true });
     expect(api.requests).toHaveLength(requests + 2);
   });
 
@@ -470,7 +457,7 @@ describe('deck services: server fetch failures', () => {
 
     api.mode = 'down';
     clock.advance(60);
-    expect(await services.refresh(deckId, 'manual')).toMatchObject({
+    expect(await services.refresh(deckId)).toMatchObject({
       ok: false,
       error: { code: 'unavailable', message: 'Moxfield answered HTTP 502.' },
     });

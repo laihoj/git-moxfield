@@ -92,9 +92,38 @@ headless browsers, no spoofed User-Agents). Instead:
 1. **Server fetch** with `MOXFIELD_USER_AGENT` (a Moxfield-issued UA) when configured.
    Without it, the server sends an honest `git-moxfield/<version>` User-Agent; a
    Cloudflare block is detected (403 + HTML) and reported as `blocked`, and server
-   fetches pause for `MOXFIELD_BLOCK_BACKOFF_SECONDS`. On Netlify server fetching is off
-   by default (`MOXFIELD_SERVER_FETCH=off`): requests from cloud servers are blocked, so
-   every attempt would only cost a request and a backoff.
+   fetching pauses for every instance until an admin resumes it. On Netlify server
+   fetching is off by default (`MOXFIELD_SERVER_FETCH=off`): requests from cloud servers
+   are blocked without the issued UA. Server fetches happen only when a user refreshes,
+   tracks or relinks a deck, and before a commit; never in the background.
+
+## Terms of the issued User-Agent, and how the server keeps them
+
+Moxfield issued git-moxfield a User-Agent on these terms: **at most 1 API call per
+second**, no profit, never share the User-Agent, no support. Moxfield also said that a 429
+always comes before a 403, and that a ban only follows continued abuse. How git-moxfield
+keeps them ([ADR 0009](adr/0009-global-moxfield-rate-limit.md)):
+
+- **One limit for every instance.** `src/integrations/moxfield/http-client.ts` is the
+  only code that sends requests to Moxfield (a test enforces it), and before every
+  request (deck, primer, each retry) it asks the request limiter, which reserves the next
+  slot in one row of the shared database (`moxfield_rate`) with one atomic statement on
+  the database's clock. Slots are `MOXFIELD_MIN_REQUEST_INTERVAL_MS` apart (2,000 ms by
+  default, never less than 1,500 against Moxfield); a request that might start more than
+  `interval - 1,250 ms` late gives its slot up. Two requests of the installation start at
+  least 1.25 s apart, whichever instances send them and whatever their clocks say. A slot
+  more than 10 s away is refused ("busy, try again in N s"). When the database cannot be
+  reached, nothing is sent.
+- **429.** Every instance waits for `Retry-After` (or 30 s, doubling with each 429 in a
+  row, at most 15 min), then runs at half speed for 10 min, and recovers on its own.
+- **403, a challenge or HTML.** Server fetching pauses for every instance until an admin
+  resumes it on the Admin page or with `pnpm moxfield resume`. The reason and the time
+  are shown on the deck status panel, Connect Moxfield and the Admin page.
+- **The User-Agent** is set only in the production site's Netlify environment variables
+  (never in a file), never logged, and never sent anywhere but in requests to Moxfield's
+  API. An instance with it configured outside the Netlify production deployment warns
+  loudly: another database would keep a second, separate limit.
+
 2. **Browser capture**: the "Send to git-moxfield" bookmarklet runs on a Moxfield deck
    page, fetches the two endpoints above as the user's own browser (exactly what the
    Moxfield page itself does), compresses the result and hands it to git-moxfield.
@@ -199,16 +228,19 @@ again, which is accepted. Either way the key is what authenticates.
 
 ## Failure handling
 
-| Situation                | Detection                                                                            | Result                                                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Malformed URL / id       | URL parser                                                                           | `invalid-ref`, nothing fetched                                                                                                        |
-| Deleted deck / wrong id  | 404                                                                                  | `not-found`                                                                                                                           |
-| Private deck             | 401/403 JSON                                                                         | `forbidden`                                                                                                                           |
-| Cloudflare block         | 403 + `text/html` (or `cf-ray`, non-JSON), or `cf-mitigated: challenge`              | `blocked`, server fetch paused                                                                                                        |
-| Rate limit               | 429                                                                                  | `rate-limited` with `Retry-After`; every server request waits that long (60 s without the header)                                     |
-| Moxfield down            | 5xx (including an HTML maintenance page behind Cloudflare) / network error / timeout | `unavailable` / `network` / `timeout`; one retry for 5xx/network, after `Retry-After` when that is at most 5 s (no retry when longer) |
-| Schema change            | zod validation                                                                       | `schema` error listing the failing paths; partial fields produce warnings                                                             |
-| Primer missing / failing | primer request fails                                                                 | deck still ingested, primer `null` + warning                                                                                          |
-| Capture too large        | capture route body limit or codec limit                                              | 413 (`/api/capture`) or paste form with `error=too-large` (same-tab); nothing stored                                                  |
-| Capture damaged          | codec (bad tag, alphabet, gzip, UTF-8) or JSON/zod parsing                           | 400 (`/api/capture`) or paste form with `error=invalid` (same-tab); nothing stored                                                    |
-| Deck deleted, made again | new public id; the old one answers 404                                               | `not-found` on refresh; the owner changes the deck's Moxfield deck (history kept), see the README                                     |
+| Situation                | Detection                                                                                              | Result                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Malformed URL / id       | URL parser                                                                                             | `invalid-ref`, nothing fetched                                                                                                                    |
+| Deleted deck / wrong id  | 404                                                                                                    | `not-found`                                                                                                                                       |
+| Private deck             | 401                                                                                                    | `forbidden`                                                                                                                                       |
+| Refused                  | any other 403 (JSON too: a private deck, or the start of a ban)                                        | `blocked`; server fetching paused for every instance until an admin resumes it                                                                    |
+| Cloudflare block         | 403 + `text/html` (or `cf-ray`, non-JSON), `cf-mitigated: challenge` at any status, or HTML with a 2xx | `blocked`; server fetching paused for every instance until an admin resumes it                                                                    |
+| Rate limit               | 429                                                                                                    | `rate-limited`; every instance waits for `Retry-After` (else 30 s, doubling per 429 in a row, at most 15 min), then runs at half speed for 10 min |
+| Too many requests queued | the next free slot is more than 10 s away                                                              | `rate-limited` ("busy, try again in N s"), nothing sent                                                                                           |
+| Limiter unavailable      | the database cannot be reached                                                                         | `unavailable`, nothing sent (fails closed)                                                                                                        |
+| Moxfield down            | 5xx (including an HTML maintenance page behind Cloudflare) / network error / timeout                   | `unavailable` / `network` / `timeout`; one retry for 5xx/network, after `Retry-After` when that is at most 5 s (no retry when longer)             |
+| Schema change            | zod validation                                                                                         | `schema` error listing the failing paths; partial fields produce warnings                                                                         |
+| Primer missing / failing | primer request fails                                                                                   | deck still ingested, primer `null` + warning                                                                                                      |
+| Capture too large        | capture route body limit or codec limit                                                                | 413 (`/api/capture`) or paste form with `error=too-large` (same-tab); nothing stored                                                              |
+| Capture damaged          | codec (bad tag, alphabet, gzip, UTF-8) or JSON/zod parsing                                             | 400 (`/api/capture`) or paste form with `error=invalid` (same-tab); nothing stored                                                                |
+| Deck deleted, made again | new public id; the old one answers 404                                                                 | `not-found` on refresh; the owner changes the deck's Moxfield deck (history kept), see the README                                                 |

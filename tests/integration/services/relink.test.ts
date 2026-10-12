@@ -48,7 +48,7 @@ describe('deck services: changing the Moxfield deck', () => {
     const { services, repos, clock } = harness;
     const { deckId, v1 } = await lostDeck(harness);
     // The old deck is gone: fetching it fails.
-    const missing = await services.refresh(deckId, 'manual');
+    const missing = await services.refresh(deckId);
     expect(missing).toMatchObject({ ok: false, error: { code: 'not-found' } });
     clock.advance(60);
 

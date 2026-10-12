@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildSnapshot } from '@tests/support/builders';
 import { expectRejection } from '@tests/support/errors';
+import { FakeMoxfieldLimiter } from '@tests/support/request-limiter';
 
 import { DeckSourceError, type DeckRef, type DeckSource, type RawSourcePayload } from '../deck-source';
 
@@ -25,8 +26,9 @@ const START = Date.parse('2026-10-09T12:00:00.000Z');
 
 type Route = () => Response;
 
-function setup(routes: Record<string, Route> = {}, options: MoxfieldDeckSourceOptions = {}) {
+function setup(routes: Record<string, Route> = {}, options: Partial<MoxfieldDeckSourceOptions> = {}) {
   let now = START;
+  const limiter = new FakeMoxfieldLimiter();
   const table: Record<string, Route> = {
     [DECK_PATH]: () => jsonResponse(v3Deck()),
     [PRIMER_PATH]: () => jsonResponse(v1Primer()),
@@ -37,6 +39,7 @@ function setup(routes: Record<string, Route> = {}, options: MoxfieldDeckSourceOp
     return route ? route() : jsonResponse({ title: 'Not Found' }, 404);
   });
   const source = new MoxfieldDeckSource({
+    limiter,
     fetchImpl,
     now: () => now,
     sleep: (ms) => {
@@ -45,13 +48,7 @@ function setup(routes: Record<string, Route> = {}, options: MoxfieldDeckSourceOp
     },
     ...options,
   });
-  return {
-    source,
-    paths: () => fetchImpl.calls.map((call) => new URL(call.url).pathname),
-    advance: (ms: number) => {
-      now += ms;
-    },
-  };
+  return { source, limiter, paths: () => fetchImpl.calls.map((call) => new URL(call.url).pathname) };
 }
 
 function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
@@ -59,11 +56,11 @@ function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
 }
 
 describe('MoxfieldDeckSource', () => {
-  it('implements the DeckSource contract', () => {
-    const source: DeckSource = new MoxfieldDeckSource();
+  it('implements the DeckSource contract', async () => {
+    const source: DeckSource = new MoxfieldDeckSource({ limiter: new FakeMoxfieldLimiter() });
     expect(source.id).toBe('moxfield');
     expect(source.displayName).toBe('Moxfield');
-    expect(source.serverFetchStatus()).toEqual({ state: 'available' });
+    expect(await source.serverFetchStatus()).toEqual({ state: 'available' });
   });
 
   it('parses deck URLs and builds deck URLs for the configured site', () => {
@@ -148,40 +145,23 @@ describe('MoxfieldDeckSource', () => {
     expect(paths()).toEqual([]);
   });
 
-  it('pauses server fetches after a block and reports it', async () => {
-    let blocked = true;
-    const { source, paths, advance } = setup({
-      [DECK_PATH]: () => (blocked ? cloudflareBlockResponse() : jsonResponse(v3Deck())),
-    });
-    expect((await failure(source.getDeck(REF))).code).toBe('blocked');
-    expect(source.serverFetchStatus()).toEqual({
-      state: 'blocked',
-      reason: expect.stringContaining('bot protection') as unknown,
-      retryAt: '2026-10-09T13:00:00.000Z',
-    });
-
-    advance(60_000);
-    const shortCircuit = await failure(source.getDeck(REF));
-    expect(shortCircuit).toMatchObject({ code: 'blocked', retryAfterSeconds: 3_540 });
-    expect(paths()).toEqual([DECK_PATH]);
-
-    blocked = false;
-    advance(3_540_000);
-    expect(source.serverFetchStatus()).toEqual({ state: 'available' });
-    await expect(source.getDeck(REF)).resolves.toMatchObject({ source: 'moxfield' });
-  });
-
-  it('resumes server fetches on request, before the block backoff has passed', async () => {
+  it('pauses server fetches after a block, reports it, and resumes when told', async () => {
     let blocked = true;
     const { source, paths } = setup({
       [DECK_PATH]: () => (blocked ? cloudflareBlockResponse() : jsonResponse(v3Deck())),
     });
     expect((await failure(source.getDeck(REF))).code).toBe('blocked');
-    expect(source.serverFetchStatus().state).toBe('blocked');
+    expect(await source.serverFetchStatus()).toEqual({
+      state: 'paused',
+      reason: expect.stringContaining('bot protection') as unknown,
+      pausedAt: expect.any(String) as unknown,
+    });
+    expect((await failure(source.getDeck(REF))).code).toBe('blocked');
+    expect(paths()).toEqual([DECK_PATH]);
 
     blocked = false;
-    source.resumeServerFetch();
-    expect(source.serverFetchStatus()).toEqual({ state: 'available' });
+    expect(await source.resumeServerFetch()).toBe(true);
+    expect(await source.serverFetchStatus()).toEqual({ state: 'available' });
     await expect(source.getDeck(REF)).resolves.toMatchObject({ source: 'moxfield' });
     expect(paths().filter((path) => path === DECK_PATH)).toHaveLength(2);
   });
@@ -193,18 +173,25 @@ describe('MoxfieldDeckSource', () => {
       primer: null,
       primerError: expect.stringMatching(/^blocked: /) as unknown,
     });
-    expect(source.serverFetchStatus().state).toBe('blocked');
+    expect((await source.serverFetchStatus()).state).toBe('paused');
   });
 
   it('never fetches when server fetching is off', async () => {
-    const { source, paths } = setup({}, { serverFetch: 'off' });
-    expect(source.serverFetchStatus()).toEqual({
+    const { source, paths, limiter } = setup({}, { serverFetch: 'off' });
+    expect(await source.serverFetchStatus()).toEqual({
       state: 'disabled',
       reason: expect.stringContaining('turned off') as unknown,
     });
     expect((await failure(source.getDeck(REF))).code).toBe('blocked');
     expect((await failure(source.getDeckMetadata(REF))).code).toBe('blocked');
     expect(paths()).toEqual([]);
+    expect(limiter.admitted).toBe(0);
+  });
+
+  it('asks the limiter for the deck and the primer request each', async () => {
+    const { source, limiter } = setup();
+    await source.getDeck(REF);
+    expect(limiter.admitted).toBe(2);
   });
 
   it('derives metadata via getDeck', async () => {

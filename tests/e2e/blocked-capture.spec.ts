@@ -40,7 +40,7 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
     ).toBeVisible();
 
     await expect(page.getByText('Moxfield blocked the server')).toBeVisible();
-    await expect(page.getByText(/Moxfield is blocking server-side requests/)).toBeVisible();
+    await expect(page.getByText(/bot protection blocked a server-side request/)).toBeVisible();
 
     // Server fetching is paused, so refreshing becomes "Update from Moxfield" via the bookmarklet.
     await expect(page.getByRole('button', { name: 'Refresh' })).toHaveCount(0);
@@ -96,7 +96,7 @@ test('a blocked deck is sent with the same-tab bookmarklet and committed', async
     // The old block is history now; the pause note remains, with the way forward.
     await expect(moxfieldTab.getByText('Moxfield blocked the server')).toHaveCount(0);
     await expect(
-      moxfieldTab.getByText(/Moxfield blocked server-side fetching, so it is paused until/),
+      moxfieldTab.getByText(/Moxfield refused a server-side request, so server fetching is paused since/),
     ).toBeVisible();
     await expectNoHorizontalOverflow(moxfieldTab);
 

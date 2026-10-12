@@ -95,7 +95,6 @@ export default defineConfig({
         PUBLIC_APP_URL: APP_URL,
         REFRESH_COOLDOWN_SECONDS: '0',
         MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0',
-        AUTO_REFRESH_AFTER_SECONDS: '3600',
         LOG_LEVEL: 'warn',
         GIT_MOXFIELD_E2E: 'true',
         // Neutralize a developer's .env.local: Next.js never overrides variables that are

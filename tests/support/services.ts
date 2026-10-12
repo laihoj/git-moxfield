@@ -1,8 +1,9 @@
 /**
  * Test harness for the service layer: an in-memory database, the REAL Moxfield deck
- * source wired to a {@link FakeMoxfieldApi}, a manual clock shared by the services and
- * the Moxfield client (cooldowns, block backoff), and a silent logger that records
- * entries for assertions.
+ * source wired to a {@link FakeMoxfieldApi} and to the REAL request limiter on that
+ * database (no spacing: the fake API is not Moxfield's), a manual clock for the services
+ * (cooldowns), and a silent logger that records entries for assertions. The limiter keeps
+ * the database's own time, which the manual clock does not move.
  *
  * `services` work on the `local` workspace, like a pre-account installation. For
  * multi-user tests, {@link ServiceHarness.createUser} adds a user with a workspace of
@@ -22,6 +23,7 @@ import {
   type FetchOutcome,
   type VersionRefDTO,
 } from '@/server/services';
+import { DatabaseMoxfieldLimiter } from '@/server/moxfield-limiter';
 import { createDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
 import type { LibsqlDatabase } from '@/server/db/libsql';
 import { ManualClock } from '@tests/support/clock';
@@ -53,6 +55,8 @@ export interface ServiceHarness {
   repos: Repositories;
   config: AppConfig;
   sources: DeckSourceRegistry;
+  /** The installation-wide Moxfield request limiter on {@link db}. */
+  moxfieldLimiter: DatabaseMoxfieldLimiter;
   logger: ReturnType<typeof recordingLogger>;
   /** Creates another service instance on the same database, sources and locks. */
   sibling(): DeckServices;
@@ -77,36 +81,45 @@ export interface ServiceHarnessOptions {
   sources?: (defaults: DeckSourceRegistry) => DeckSourceRegistry;
   /** The database to use, e.g. a `file:` URL in a temporary directory. Default: a private in-memory one. */
   databaseUrl?: string;
+  /**
+   * Where the manual clock starts (default: a fixed time). Tests that compare the services'
+   * times with the request limiter's, which keeps the database's real time, start it now.
+   */
+  clockStart?: number;
 }
 
 /**
  * Services over a fresh in-memory database (or `options.databaseUrl`), closed when the
- * current test finishes (see `openTestDatabase`). Defaults: no request spacing, a 10 s refresh cooldown, auto refresh
- * after 300 s and a one-hour block backoff.
+ * current test finishes (see `openTestDatabase`). Defaults: no request spacing and a 10 s
+ * refresh cooldown.
  */
 export async function createServiceHarness(options: ServiceHarnessOptions = {}): Promise<ServiceHarness> {
   const api = new FakeMoxfieldApi();
-  const clock = new ManualClock();
+  const clock = new ManualClock(options.clockStart);
   const logger = recordingLogger();
   const config = parseConfig({
     MOXFIELD_API_BASE_URL: api.apiBaseUrl,
     MOXFIELD_MIN_REQUEST_INTERVAL_MS: '0',
     REFRESH_COOLDOWN_SECONDS: '10',
-    AUTO_REFRESH_AFTER_SECONDS: '300',
-    MOXFIELD_BLOCK_BACKOFF_SECONDS: '3600',
     ...options.env,
   });
+  const handle = await openTestDatabaseHandle(
+    options.databaseUrl === undefined ? {} : { url: options.databaseUrl },
+  );
+  const { db } = handle;
+  const moxfieldLimiter = new DatabaseMoxfieldLimiter({
+    db: () => Promise.resolve(db),
+    intervalMs: config.MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+    logger,
+  });
   const defaults = createDeckSourceRegistry(config, {
+    moxfieldLimiter,
     fetchImpl: api.fetch,
     now: clock.epochMs,
     sleep: () => Promise.resolve(),
     logger,
   });
   const sources = options.sources ? options.sources(defaults) : defaults;
-  const handle = await openTestDatabaseHandle(
-    options.databaseUrl === undefined ? {} : { url: options.databaseUrl },
-  );
-  const { db } = handle;
   const locks = new KeyedMutex();
   const servicesForWorkspace = (workspaceId: string): DeckServices =>
     createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks });
@@ -121,6 +134,7 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     repos,
     config,
     sources,
+    moxfieldLimiter,
     logger,
     sibling: build,
     servicesForWorkspace,
@@ -232,7 +246,7 @@ export async function publishAndRefresh(
 ): Promise<FetchOutcome> {
   harness.api.setDeck(spec);
   harness.clock.advance(60);
-  return services.refresh(deckId, 'manual');
+  return services.refresh(deckId);
 }
 
 /**

@@ -1,19 +1,20 @@
 /**
- * `POST /api/e2e/reset`, the end-to-end suite's reset hook: it ends the server-fetch
- * pause of every deck source, and only exists when `GIT_MOXFIELD_E2E` is set.
+ * `POST /api/e2e/reset`, the end-to-end suite's reset hook: it resets the installation-wide
+ * Moxfield request limiter (a pause after a refusal, a 429 backoff), and only exists when
+ * `GIT_MOXFIELD_E2E` is set.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MoxfieldDeckSource } from '@/integrations/moxfield/moxfield-deck-source';
-import { cloudflareBlockResponse, fakeFetch } from '@/integrations/moxfield/test-fixtures';
 import type * as ConfigModule from '@/server/config';
 import { parseConfig, type AppConfig } from '@/server/config';
+import { DatabaseMoxfieldLimiter } from '@/server/moxfield-limiter';
 import type * as SourcesModule from '@/server/sources';
-import { createStaticDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
+import { openTestDatabase } from '@tests/support/db';
+import { recordingLogger } from '@tests/support/recording-logger';
 
 const state = vi.hoisted(() => ({
   config: undefined as AppConfig | undefined,
-  registry: undefined as DeckSourceRegistry | undefined,
+  limiter: undefined as DatabaseMoxfieldLimiter | undefined,
 }));
 
 vi.mock('@/server/config', async (importOriginal) => ({
@@ -26,36 +27,37 @@ vi.mock('@/server/config', async (importOriginal) => ({
 
 vi.mock('@/server/sources', async (importOriginal) => ({
   ...(await importOriginal<typeof SourcesModule>()),
-  getDeckSourceRegistry: (): DeckSourceRegistry => {
-    if (state.registry === undefined) throw new Error('No registry for this test');
-    return state.registry;
+  getMoxfieldLimiter: (): DatabaseMoxfieldLimiter => {
+    if (state.limiter === undefined) throw new Error('No limiter for this test');
+    return state.limiter;
   },
 }));
 
 const { POST } = await import('@/app/api/e2e/reset/route');
 
-/** A Moxfield source whose server fetching is paused by a (fake) Cloudflare block. */
-async function blockedSource(): Promise<MoxfieldDeckSource> {
-  const source = new MoxfieldDeckSource({ fetchImpl: fakeFetch(() => cloudflareBlockResponse()) });
-  await source.getDeck({ source: 'moxfield', externalId: 'FixtureDeckId_00000001' }).catch(() => undefined);
-  expect(source.serverFetchStatus().state).toBe('blocked');
-  return source;
-}
-
 describe('POST /api/e2e/reset', () => {
-  let source: MoxfieldDeckSource;
+  let limiter: DatabaseMoxfieldLimiter;
 
   beforeEach(async () => {
-    source = await blockedSource();
-    state.registry = createStaticDeckSourceRegistry([source]);
+    const db = await openTestDatabase();
+    limiter = new DatabaseMoxfieldLimiter({
+      db: () => Promise.resolve(db),
+      intervalMs: 0,
+      logger: recordingLogger(),
+    });
+    state.limiter = limiter;
+    await limiter.rateLimited(600);
+    await limiter.blocked('Moxfield refused a request (HTTP 403).');
+    expect((await limiter.status()).state).toBe('paused');
   });
 
-  it('resumes server fetching when the e2e flag is set', async () => {
+  it('resets the request limiter when the e2e flag is set', async () => {
     state.config = parseConfig({ GIT_MOXFIELD_E2E: 'true' });
-    const response = POST();
+    const response = await POST();
     expect(response.status).toBe(204);
     expect(await response.text()).toBe('');
-    expect(source.serverFetchStatus()).toEqual({ state: 'available' });
+    // Neither paused nor backing off any more.
+    expect(await limiter.status()).toEqual({ state: 'available' });
   });
 
   it.each([
@@ -63,9 +65,9 @@ describe('POST /api/e2e/reset', () => {
     ['false', { GIT_MOXFIELD_E2E: 'false' }],
   ])('does not exist when the e2e flag is %s', async (_label, env) => {
     state.config = parseConfig(env);
-    const response = POST();
+    const response = await POST();
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('Not found.\n');
-    expect(source.serverFetchStatus().state).toBe('blocked');
+    expect((await limiter.status()).state).toBe('paused');
   });
 });

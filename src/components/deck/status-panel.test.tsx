@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { screen, waitFor } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -43,7 +43,6 @@ function deck(overrides: Partial<StatusPanelDeck> = {}): StatusPanelDeck {
     workingStats: null,
     lastFetchError: null,
     serverFetch: { state: 'available' },
-    autoRefreshSuggested: false,
     ...overrides,
   };
 }
@@ -102,85 +101,44 @@ describe('StatusPanel', () => {
     ]);
   });
 
-  it('turns refresh into "Update from Moxfield" when server fetching is blocked', () => {
+  it('turns refresh into "Update from Moxfield" while server fetching is paused', () => {
+    renderWithProviders(
+      <StatusPanel
+        deck={deck({
+          serverFetch: {
+            state: 'paused',
+            reason: 'Moxfield refused a request (HTTP 403).',
+            pausedAt: '2026-10-09T11:00:00.000Z',
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    // `11:00` as a local clock time (with the date only if the time zone puts it on another day).
+    expect(screen.getByText(/so server fetching is paused since/).textContent).toMatch(
+      /paused since (\w{3} \d{1,2}, )?\d{1,2}:\d{2}\s[AP]M, until an admin resumes it\. Use the bookmarklet/,
+    );
+    const update = screen.getByRole('link', { name: /^Update from Moxfield/ });
+    expect(update).toHaveAttribute('href', 'https://moxfield.com/decks/abc');
+  });
+
+  it('says until when Moxfield asked every server fetch to wait', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-09T12:00:00.000Z'));
     renderWithProviders(
       <StatusPanel
         deck={deck({
           serverFetch: {
-            state: 'blocked',
-            reason: 'Blocked by Moxfield.',
-            retryAt: '2026-10-09T13:00:00.000Z',
+            state: 'rate-limited',
+            reason: 'Moxfield asked git-moxfield to slow down (HTTP 429).',
+            retryAt: '2026-10-09T12:02:00.000Z',
           },
         })}
       />,
     );
     expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
-    // `13:00` as a local clock time (with the date only if the time zone puts it on another day).
-    expect(screen.getByText(/so it is paused until/).textContent).toMatch(
-      /paused until (\w{3} \d{1,2}, )?\d{1,2}:\d{2}\s[AP]M \(in 1 hour\)\. Use the bookmarklet/,
-    );
-    const update = screen.getByRole('link', { name: /^Update from Moxfield/ });
-    expect(update).toHaveAttribute('href', 'https://moxfield.com/decks/abc');
-    expect(update).toHaveAttribute('target', '_blank');
-    expect(screen.getByRole('link', { name: 'Setup' })).toHaveAttribute('href', '/setup');
-  });
-
-  it('explains how to get the first snapshot without server fetching', () => {
-    renderWithProviders(
-      <StatusPanel
-        deck={deck({
-          status: 'never-fetched',
-          working: null,
-          head: null,
-          serverFetch: { state: 'disabled', reason: 'Off.' },
-        })}
-      />,
-    );
-    expect(screen.getByText('Send to git-moxfield')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'paste instead' })).toHaveAttribute(
-      'href',
-      '/capture?mode=paste',
-    );
-  });
-
-  it('shows a current fetch error with its next step', () => {
-    renderWithProviders(
-      <StatusPanel
-        deck={deck({
-          lastFetchError: {
-            code: 'blocked',
-            message: 'Moxfield blocked server-side requests.',
-            at: '2026-10-09T12:30:00.000Z',
-            retryAfterSeconds: null,
-          },
-        })}
-      />,
-    );
-    expect(screen.getByText('Moxfield blocked the server')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /^Open deck in Moxfield/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Bookmarklet setup' })).toHaveAttribute('href', '/setup');
-  });
-
-  it('suggests changing the Moxfield deck when the deck is gone from Moxfield', () => {
-    renderWithProviders(
-      <StatusPanel
-        deck={deck({
-          lastFetchError: {
-            code: 'not-found',
-            message: 'The deck does not exist on Moxfield (deleted or wrong id).',
-            at: '2026-10-09T12:30:00.000Z',
-            retryAfterSeconds: null,
-          },
-        })}
-      />,
-    );
-    expect(screen.getByText('Deck not found on Moxfield')).toBeInTheDocument();
-    expect(screen.getByText(/Deleted it and made it again\?/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Change the Moxfield deck' })).toHaveAttribute(
-      'href',
-      '#moxfield-deck',
+    expect(screen.getByText(/asked git-moxfield to slow down/).textContent).toMatch(
+      /waits until (\w{3} \d{1,2}, )?\d{1,2}:\d{2}\s[AP]M \(in 2 min\)\. Use the bookmarklet/,
     );
   });
 
@@ -191,7 +149,7 @@ describe('StatusPanel', () => {
           status: 'never-fetched',
           working: null,
           head: null,
-          serverFetch: { state: 'blocked', reason: 'Blocked.', retryAt: '2026-10-09T13:00:00.000Z' },
+          serverFetch: { state: 'paused', reason: 'Blocked.', pausedAt: '2026-10-09T12:00:00.000Z' },
           lastFetchError: {
             code: 'blocked',
             message: 'Moxfield blocked server-side requests.',
@@ -237,18 +195,13 @@ describe('StatusPanel', () => {
     refreshAction.mockResolvedValue({ ok: true, changed: true });
     renderWithProviders(<StatusPanel deck={deck()} />);
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect(refreshAction).toHaveBeenCalledWith('deck-1', 'manual');
+    expect(refreshAction).toHaveBeenCalledWith('deck-1');
     expect(await screen.findByText('Updated from Moxfield')).toBeInTheDocument();
   });
 
-  it('refreshes once in the background when suggested, then reloads the route', async () => {
-    renderWithProviders(<StatusPanel deck={deck({ autoRefreshSuggested: true })} />);
-    expect(screen.getByText('Checking Moxfield for changes…')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(routerRefresh).toHaveBeenCalledTimes(1);
-    });
-    expect(refreshAction).toHaveBeenCalledTimes(1);
-    expect(refreshAction).toHaveBeenCalledWith('deck-1', 'auto');
-    expect(screen.queryByText('Checking Moxfield for changes…')).not.toBeInTheDocument();
+  it('never refreshes on its own', () => {
+    renderWithProviders(<StatusPanel deck={deck()} />);
+    expect(refreshAction).not.toHaveBeenCalled();
+    expect(routerRefresh).not.toHaveBeenCalled();
   });
 });

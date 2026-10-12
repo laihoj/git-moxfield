@@ -239,7 +239,7 @@ describe('deck services: commit', () => {
     expect(await services.listVersions(deckId)).toHaveLength(1);
     expect(api.requests).toHaveLength(requests);
     expect(await countRows(db, 'observations')).toBe(observations);
-    expect(await services.refresh(deckId, 'manual')).toMatchObject({ ok: true });
+    expect(await services.refresh(deckId)).toMatchObject({ ok: true });
   });
 
   it('refuses a commit from a stale second tab without asking Moxfield', async () => {
@@ -399,7 +399,7 @@ describe('deck services: commit', () => {
     clock.advance(60);
     const requests = api.requests.length;
     const [refreshed, outcome] = await Promise.all([
-      services.refresh(deckId, 'manual'),
+      services.refresh(deckId),
       services.commit(deckId, {
         message: 'Initial version',
         expectedObservationId: defined(overview.working).id,
@@ -418,6 +418,6 @@ describe('deck services: commit', () => {
     await expect(
       services.commit('missing', { message: 'v1', expectedObservationId: 'x', expectedHeadCommitId: null }),
     ).rejects.toMatchObject({ name: 'ServiceError', code: 'not-found' });
-    await expect(services.refresh('missing', 'manual')).rejects.toMatchObject({ code: 'not-found' });
+    await expect(services.refresh('missing')).rejects.toMatchObject({ code: 'not-found' });
   });
 });

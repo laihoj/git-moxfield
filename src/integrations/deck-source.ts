@@ -195,8 +195,10 @@ export type ServerFetchStatus =
   | { state: 'available' }
   /** Server-side fetching is disabled by configuration. */
   | { state: 'disabled'; reason: string }
-  /** Recent attempts were blocked; fetching is paused until `retryAt`. */
-  | { state: 'blocked'; reason: string; retryAt: string };
+  /** The source asked every server to slow down (HTTP 429): nothing is fetched until `retryAt`. */
+  | { state: 'rate-limited'; reason: string; retryAt: string }
+  /** The source refused or challenged a request: paused since `pausedAt` until an operator resumes it. */
+  | { state: 'paused'; reason: string; pausedAt: string };
 
 export interface FetchOptions {
   signal?: AbortSignal;
@@ -213,15 +215,19 @@ export interface DeckSource {
   /** Public URL of the deck on the source site. */
   deckUrl(ref: DeckRef): string;
 
-  /** Whether server-side fetching is currently expected to work. */
-  serverFetchStatus(): ServerFetchStatus;
+  /**
+   * Whether server-side fetching is currently expected to work. Reads the shared state of
+   * every instance (the request limiter), so it can fail like any database read.
+   */
+  serverFetchStatus(): Promise<ServerFetchStatus>;
 
   /**
-   * Ends a pause of server-side fetching (after a block or a rate limit) right away, so
-   * the next fetch is attempted. Optional: only sources that pause implement it. Used by
-   * the end-to-end suite's reset hook (`POST /api/e2e/reset`), never by the UI.
+   * Ends a pause of server-side fetching (after the source refused or challenged a
+   * request), so the next fetch is attempted. Optional: only sources that pause implement
+   * it. An operator's action (Admin page, `pnpm moxfield resume`). Returns whether it was
+   * paused.
    */
-  resumeServerFetch?(): void;
+  resumeServerFetch?(): Promise<boolean>;
 
   /**
    * Fetches the full current deck (including primer when retrievable) server-side.

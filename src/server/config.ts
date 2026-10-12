@@ -11,10 +11,11 @@ import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
 import { LOG_LEVELS } from '@/core/logger';
 import {
   DEFAULT_MOXFIELD_API_BASE_URL,
-  DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS,
-  DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+  DEFAULT_MOXFIELD_REQUEST_INTERVAL_MS,
   DEFAULT_MOXFIELD_SITE_ORIGIN,
   DEFAULT_MOXFIELD_TIMEOUT_MS,
+  isMoxfieldApiHost,
+  MIN_MOXFIELD_REQUEST_INTERVAL_MS,
 } from '@/integrations/moxfield/constants';
 
 import {
@@ -59,34 +60,35 @@ const schema = z.object({
   MOXFIELD_API_BASE_URL: httpUrl().default(DEFAULT_MOXFIELD_API_BASE_URL).transform(stripTrailingSlashes),
   /** Origin of the Moxfield website (deck URLs, capture origin check). */
   MOXFIELD_SITE_ORIGIN: httpUrl().default(DEFAULT_MOXFIELD_SITE_ORIGIN),
-  /** User-Agent issued by Moxfield for approved projects. Server-side only. */
+  /**
+   * User-Agent issued by Moxfield for approved projects. A secret (Moxfield's terms: never
+   * share it): set it in the Netlify site's environment only, never in a file. Only
+   * reachable through {@link AppConfig.moxfieldUserAgent}, which never shows it in logs.
+   */
   MOXFIELD_USER_AGENT: z.string().trim().min(1).optional(),
   /**
-   * `auto`: try server fetches, back off when blocked. `off`: browser capture only.
-   * Default: `off` on Netlify (Cloudflare blocks Moxfield requests from cloud IPs, so every
-   * attempt would only cost a request and a block backoff), `auto` everywhere else.
+   * `auto`: fetch server-side when a user refreshes or commits, as the request limiter
+   * allows. `off`: browser capture only. Default: `off` on Netlify (without a
+   * Moxfield-issued User-Agent, Cloudflare blocks Moxfield requests from cloud IPs),
+   * `auto` everywhere else.
    */
   MOXFIELD_SERVER_FETCH: z.enum(['auto', 'off']).optional(),
   MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(DEFAULT_MOXFIELD_TIMEOUT_MS),
-  /** Minimum spacing between any two requests to Moxfield from this process. */
+  /**
+   * Spacing between the starts of any two requests to Moxfield from the whole installation
+   * (every instance on this database; ADR 0009). At least
+   * {@link MIN_MOXFIELD_REQUEST_INTERVAL_MS} against Moxfield's own API (its terms allow one
+   * call per second); a stand-in API (the mock) may use less.
+   */
   MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce
     .number()
     .int()
     .min(0)
     .max(60_000)
-    .default(DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS),
-  /** How long to pause server fetches after a bot-protection block. */
-  MOXFIELD_BLOCK_BACKOFF_SECONDS: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(86_400)
-    .default(DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS),
+    .default(DEFAULT_MOXFIELD_REQUEST_INTERVAL_MS),
 
   /** Minimum seconds between two refreshes of the same deck. */
   REFRESH_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(3_600).default(10),
-  /** Deck pages trigger a background refresh when the latest observation is older than this. */
-  AUTO_REFRESH_AFTER_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
 
   /** Comma-separated origins allowed to hand captured decks to /capture. Defaults to the Moxfield site origin. */
   CAPTURE_ALLOWED_ORIGINS: z
@@ -173,14 +175,68 @@ export class DatabaseLocation {
   }
 }
 
+/**
+ * The Moxfield-issued User-Agent (`MOXFIELD_USER_AGENT`). Moxfield's terms forbid sharing
+ * it, so the value is a private field: it never shows up when the configuration is logged,
+ * serialized or inspected. Only the Moxfield HTTP client reads {@link value}.
+ */
+export class MoxfieldUserAgent {
+  readonly #value: string;
+
+  constructor(value: string) {
+    this.#value = value;
+  }
+
+  /** The header value to send. Secret: never log it. */
+  get value(): string {
+    return this.#value;
+  }
+
+  toJSON(): string {
+    return '[redacted]';
+  }
+
+  toString(): string {
+    return '[redacted]';
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return 'MoxfieldUserAgent [redacted]';
+  }
+}
+
+/**
+ * Why a Moxfield-issued User-Agent should not be configured here, or `null`: the request
+ * limiter is shared through the database, so only the production deployment, on its own
+ * database, may use the User-Agent. Anywhere else (a laptop, `netlify dev`, a second
+ * deployment) another database would keep a limit of its own, and together they could
+ * exceed Moxfield's one call per second.
+ */
+export function moxfieldUserAgentWarning(env: Record<string, string | undefined>): string | null {
+  if (env.MOXFIELD_USER_AGENT === undefined || env.MOXFIELD_USER_AGENT.trim() === '') return null;
+  const context = env.CONTEXT;
+  if (runsOnNetlify(env) && (context === undefined || context === '' || context === 'production'))
+    return null;
+  return (
+    'MOXFIELD_USER_AGENT is set outside the Netlify production deployment. Requests to Moxfield are ' +
+    'limited through the database, so another database (this one) keeps a separate limit and the two ' +
+    "together can exceed Moxfield's one call per second. Remove it here: the Moxfield-issued " +
+    "User-Agent belongs only in the production site's Netlify environment variables."
+  );
+}
+
 type ParsedEnv = z.infer<typeof schema>;
 
 export type AppConfig = Omit<
   ParsedEnv,
-  'TURSO_DATABASE_URL' | 'TURSO_AUTH_TOKEN' | 'MOXFIELD_SERVER_FETCH'
+  'TURSO_DATABASE_URL' | 'TURSO_AUTH_TOKEN' | 'MOXFIELD_SERVER_FETCH' | 'MOXFIELD_USER_AGENT'
 > & {
   /** `MOXFIELD_SERVER_FETCH`, or its platform default (see the schema). */
   MOXFIELD_SERVER_FETCH: NonNullable<ParsedEnv['MOXFIELD_SERVER_FETCH']>;
+  /** `MOXFIELD_USER_AGENT` (see {@link MoxfieldUserAgent}), or `undefined`. */
+  moxfieldUserAgent: MoxfieldUserAgent | undefined;
+  /** {@link moxfieldUserAgentWarning} for this environment. */
+  moxfieldUserAgentWarning: string | null;
   captureAllowedOrigins: string[];
   moxfieldSiteOrigin: string;
   /** The database to open (see {@link DatabaseLocation}). */
@@ -200,7 +256,8 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     throw new Error(`Invalid git-moxfield configuration: ${issues}`);
   }
-  const { TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, MOXFIELD_SERVER_FETCH, ...config } = result.data;
+  const { TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, MOXFIELD_SERVER_FETCH, MOXFIELD_USER_AGENT, ...config } =
+    result.data;
   if (TURSO_AUTH_TOKEN !== undefined && TURSO_DATABASE_URL === undefined) {
     // Otherwise the app would silently use the local file at DATABASE_PATH.
     throw new Error(
@@ -213,6 +270,15 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
       'Invalid git-moxfield configuration: GIT_MOXFIELD_E2E must not be set when NODE_ENV=production',
     );
   }
+  if (
+    config.MOXFIELD_MIN_REQUEST_INTERVAL_MS < MIN_MOXFIELD_REQUEST_INTERVAL_MS &&
+    isMoxfieldApiHost(config.MOXFIELD_API_BASE_URL)
+  ) {
+    // Moxfield's terms: at most one call per second (ADR 0009).
+    throw new Error(
+      `Invalid git-moxfield configuration: MOXFIELD_MIN_REQUEST_INTERVAL_MS must be at least ${MIN_MOXFIELD_REQUEST_INTERVAL_MS} for Moxfield's API`,
+    );
+  }
   const moxfieldSiteOrigin = new URL(config.MOXFIELD_SITE_ORIGIN).origin;
   const captureAllowedOrigins = splitList(config.CAPTURE_ALLOWED_ORIGINS ?? moxfieldSiteOrigin).map(
     (o) => new URL(o).origin,
@@ -222,6 +288,9 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
   return {
     ...config,
     MOXFIELD_SERVER_FETCH: MOXFIELD_SERVER_FETCH ?? (runsOnNetlify(env) ? 'off' : 'auto'),
+    moxfieldUserAgent:
+      MOXFIELD_USER_AGENT === undefined ? undefined : new MoxfieldUserAgent(MOXFIELD_USER_AGENT),
+    moxfieldUserAgentWarning: moxfieldUserAgentWarning(cleaned),
     moxfieldSiteOrigin,
     captureAllowedOrigins,
     database,

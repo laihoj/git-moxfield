@@ -15,22 +15,13 @@ import { currentFetchError, describeFetchError, describeStatus } from '@/lib/pre
 import { routes } from '@/lib/routes';
 import { TextLink } from '@/components/ui/text-link';
 
-import { AutoRefresh } from './auto-refresh';
 import { ChangeMoxfieldDeckLink } from './moxfield-deck-panel';
 import { RefreshButton } from './refresh-button';
 import { StatusIndicator } from './status-indicator';
 
 export type StatusPanelDeck = Pick<
   DeckOverviewDTO,
-  | 'id'
-  | 'url'
-  | 'status'
-  | 'head'
-  | 'working'
-  | 'workingStats'
-  | 'lastFetchError'
-  | 'serverFetch'
-  | 'autoRefreshSuggested'
+  'id' | 'url' | 'status' | 'head' | 'working' | 'workingStats' | 'lastFetchError' | 'serverFetch'
 >;
 
 export interface StatusPanelProps {
@@ -92,7 +83,6 @@ export function StatusPanel({ deck, children }: StatusPanelProps) {
             )}
             <VersionLine deck={deck} />
             {deck.status === 'no-versions' && <p>Review the deck below, then commit it as v1.</p>}
-            <AutoRefresh deckId={deck.id} enabled={deck.autoRefreshSuggested} />
           </div>
         </div>
         <RefreshControl deck={deck} serverAvailable={serverAvailable} />
@@ -249,17 +239,34 @@ function ServerFetchNote({
 }) {
   return (
     <p className="text-xs text-muted sm:pl-6">
-      {serverFetch.state === 'blocked' ? (
-        <>
-          Moxfield blocked server-side fetching, so it is paused until{' '}
-          <ClockTime value={serverFetch.retryAt} /> (
-          <RelativeTime value={serverFetch.retryAt} future />
-          ).
-        </>
-      ) : (
-        <>Server fetching is off.</>
-      )}{' '}
-      Use the bookmarklet on Moxfield to send changes. <TextLink href={routes.setup()}>Setup</TextLink>
+      <ServerFetchState serverFetch={serverFetch} /> Use the bookmarklet on Moxfield to send changes.{' '}
+      <TextLink href={routes.setup()}>Setup</TextLink>
     </p>
   );
+}
+
+function ServerFetchState({
+  serverFetch,
+}: {
+  serverFetch: Exclude<ServerFetchStatus, { state: 'available' }>;
+}) {
+  switch (serverFetch.state) {
+    case 'paused':
+      return (
+        <>
+          Moxfield refused a server-side request, so server fetching is paused since{' '}
+          <ClockTime value={serverFetch.pausedAt} />, until an admin resumes it.
+        </>
+      );
+    case 'rate-limited':
+      return (
+        <>
+          Moxfield asked git-moxfield to slow down, so server fetching waits until{' '}
+          <ClockTime value={serverFetch.retryAt} /> (<RelativeTime value={serverFetch.retryAt} future />
+          ).
+        </>
+      );
+    case 'disabled':
+      return <>Server fetching is off.</>;
+  }
 }

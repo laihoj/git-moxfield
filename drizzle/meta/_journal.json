@@ -71,6 +71,13 @@
       "when": 1791657100991,
       "tag": "0009_deck_relinks",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791824460125,
+      "tag": "0010_moxfield_rate",
+      "breakpoints": true
     }
   ]
 }

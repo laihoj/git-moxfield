@@ -80,7 +80,9 @@ scanning a deck's whole history.
   from Git). The README walks through the exact steps.
 - Per-process state (Moxfield block backoff, request throttle, deck locks) is per
   function instance in production. Correctness never depends on it: the database's
-  compare-and-set on the branch head is what prevents conflicting commits.
+  compare-and-set on the branch head is what prevents conflicting commits. (Superseded
+  for the Moxfield throttle and backoff by ADR 0009: they live in the database, shared
+  by every instance.)
 - The app cannot fetch from Moxfield server-side in production either (cloud IPs are
   blocked by Cloudflare), so the bookmarklet stays the way decks arrive.
 
