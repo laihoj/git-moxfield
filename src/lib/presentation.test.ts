@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import type { DiffStats } from '@/core/diff/types';
+
 import {
+  cosmeticChange,
   currentFetchError,
   deckTitle,
+  describeStatus,
   isUnnamedDeck,
   sharedDeckTitle,
   UNNAMED_DECK_TITLE,
@@ -77,5 +81,33 @@ describe('currentFetchError', () => {
 
   it('is null without an error', () => {
     expect(currentFetchError({ lastFetchError: null, working: null })).toBeNull();
+  });
+});
+
+describe('cosmeticChange and the cosmetic-only status', () => {
+  const stats = (counts: Partial<DiffStats>): DiffStats => ({
+    zones: [],
+    moves: [],
+    printingChanges: 0,
+    tagChanges: 0,
+    renames: 0,
+    ...counts,
+  });
+
+  it('names renamed cards, printing changes (card tags count as such) or both', () => {
+    expect(cosmeticChange(stats({ renames: 1 }))).toBe('renames');
+    expect(cosmeticChange(stats({ printingChanges: 2 }))).toBe('printings');
+    expect(cosmeticChange(stats({ tagChanges: 1 }))).toBe('printings');
+    expect(cosmeticChange(stats({ renames: 1, printingChanges: 1 }))).toBe('both');
+    expect(cosmeticChange(stats({}))).toBeNull();
+  });
+
+  it('labels a deck whose uncommitted changes are only cosmetic by what they are', () => {
+    const label = (workingStats: DiffStats | null): string =>
+      describeStatus({ status: 'cosmetic-only', head: null, workingStats }).label;
+    expect(label(stats({ renames: 1 }))).toBe('Only renamed cards');
+    expect(label(stats({ printingChanges: 1 }))).toBe('Only printing changes');
+    expect(label(stats({ renames: 2, tagChanges: 1 }))).toBe('Only printing changes and renames');
+    expect(label(null)).toBe('Only printing changes');
   });
 });

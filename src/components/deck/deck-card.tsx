@@ -20,7 +20,7 @@ import { StatusIndicator } from './status-indicator';
 
 /** A tracked deck in the deck list: name, commanders, status, latest version and Moxfield activity. */
 export function DeckCard({ deck }: { deck: DeckSummaryDTO }) {
-  const { label, tone } = describeStatus(deck.status, deck.head);
+  const { label, tone } = describeStatus(deck);
   const error = currentFetchError(deck);
   const unnamed = isUnnamedDeck(deck);
   return (

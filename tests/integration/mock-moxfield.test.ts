@@ -4,7 +4,11 @@ import { zoneCount } from '@/core/canonical';
 import { DeckSourceError } from '@/integrations/deck-source';
 import { MoxfieldDeckSource } from '@/integrations/moxfield';
 import { expectRejection } from '@tests/support/errors';
-import { moxfieldInternalId, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
+import {
+  buildMoxfieldDeck,
+  moxfieldInternalId,
+  type MoxDeckSpec,
+} from '@tests/support/moxfield-deck-builder';
 
 import {
   BLUE_FARM_PUBLIC_ID,
@@ -504,6 +508,35 @@ describe('applyEditOps', () => {
     expect(() =>
       applyEditOps(base, [{ op: 'setQuantity', zone: 'considering', card: 'Island', quantity: 1 }], NOW),
     ).toThrow(MockRequestError);
+  });
+
+  it('renames a card in every zone and keeps its ids and printing, like an Oracle rename', () => {
+    const cardsOf = (spec: MoxDeckSpec): Record<string, unknown>[] => {
+      const boards = buildMoxfieldDeck(spec).boards as Record<
+        string,
+        { cards: Record<string, { card: Record<string, unknown> }> }
+      >;
+      return Object.values(boards).flatMap((board) => Object.values(board.cards).map((entry) => entry.card));
+    };
+    const renamed = applyEditOps(base, [{ op: 'renameCard', card: 'sol ring', name: 'Sol Band' }], NOW);
+    expect(renamed.mainboard?.at(-1)).toEqual({
+      name: 'Sol Band',
+      oracleName: 'Sol Ring',
+      set: 'c21',
+      collectorNumber: '263',
+      finish: 'etched',
+    });
+    const before = cardsOf(base).find((card) => card.name === 'Sol Ring');
+    const after = cardsOf(renamed).find((card) => card.name === 'Sol Band');
+    expect(after).toMatchObject({
+      uniqueCardId: before?.uniqueCardId,
+      id: before?.id,
+      scryfall_id: before?.scryfall_id,
+      type_line: before?.type_line,
+    });
+    expect(() => applyEditOps(base, [{ op: 'renameCard', card: 'Mox Opal', name: 'x' }], NOW)).toThrow(
+      'Mox Opal is not in the deck',
+    );
   });
 
   it('refuses to take more copies than there are, or to move within one zone', () => {

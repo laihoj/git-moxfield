@@ -137,11 +137,10 @@ export function summarizeDiff(diff: DeckDiff): SummaryChip[] {
   if (diff.primer.status === 'captured') chips.push({ label: 'Primer captured', tone: 'neutral' });
   if (diff.deck.length > 0) chips.push({ label: 'Deck info changed', tone: 'neutral' });
 
-  const renames = diff.changes.filter((change) => change.type === 'renamed').length;
   const cosmetic: [number, string][] = [
     [diff.stats.printingChanges, 'printing change'],
     [diff.stats.tagChanges, 'card tag change'],
-    [renames, 'renamed card'],
+    [diff.stats.renames, 'renamed card'],
   ];
   for (const [count, noun] of cosmetic) {
     if (count > 0) chips.push({ label: pluralize(count, noun), tone: 'cosmetic' });

@@ -51,6 +51,8 @@ export type EditOp =
   | { op: 'primer'; text: string }
   /** Renames the deck. */
   | { op: 'rename'; name: string }
+  /** Renames a card in every zone, keeping its ids: an Oracle rename by Wizards. */
+  | { op: 'renameCard'; card: string; name: string }
   /** Switches every copy of a card in the zone to one printing (finish kept unless given). */
   | {
       op: 'setPrinting';
@@ -136,6 +138,7 @@ const cardObjectSchema = z.strictObject({
   manaCost: z.string().max(100).optional(),
   isProxy: z.boolean().optional(),
   isAlter: z.boolean().optional(),
+  oracleName: cardNameSchema.optional(),
 }) satisfies z.ZodType<MoxCardObject>;
 
 const cardStringSchema = z
@@ -201,6 +204,7 @@ const editOpSchema = z.discriminatedUnion('op', [
   }),
   z.strictObject({ op: z.literal('primer'), text: z.string().max(MAX_PRIMER_LENGTH) }),
   z.strictObject({ op: z.literal('rename'), name: z.string().trim().min(1).max(200) }),
+  z.strictObject({ op: z.literal('renameCard'), card: cardNameSchema, name: cardNameSchema }),
   z.strictObject({
     op: z.literal('setPrinting'),
     zone: zoneSchema,
@@ -405,6 +409,17 @@ class DeckEditor {
       case 'rename':
         this.spec.name = op.name;
         return;
+      case 'renameCard': {
+        const renamed = MOCK_ZONES.flatMap((zone) =>
+          this.entries(zone).filter((entry) => isSameCard(entry, op.card)),
+        );
+        if (renamed.length === 0) throw new Error(`${op.card} is not in the deck`);
+        for (const entry of renamed) {
+          entry.oracleName ??= entry.name;
+          entry.name = op.name;
+        }
+        return;
+      }
       case 'setPrinting': {
         const entries = this.entries(op.zone);
         const index = entries.findIndex((entry) => isSameCard(entry, op.card));

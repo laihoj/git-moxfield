@@ -96,7 +96,7 @@ export function diffSnapshots(before: CanonicalSnapshot, after: CanonicalSnapsho
     deck,
     primer,
     commanders: commanderSummary(before, after, changes),
-    stats: collector.stats(tagChanges.length),
+    stats: collector.stats(tagChanges.length, renameChanges.length),
     isEmpty,
     hasCardChanges,
     onlyCosmetic: !isEmpty && !hasCardChanges && !hasOtherChanges,
@@ -436,12 +436,12 @@ class ChangeCollector {
     this.printingChanges++;
   }
 
-  stats(tagChanges: number): DiffStats {
+  stats(tagChanges: number, renames: number): DiffStats {
     const zones = zoneEntries(this.zones).map(([, stats]) => ({ ...stats }));
     const moves = [...this.moves.values()]
       .map((stats) => ({ ...stats }))
       .sort((a, b) => compareZones(a.from, b.from) || compareZones(a.to, b.to));
-    return { zones, moves, printingChanges: this.printingChanges, tagChanges };
+    return { zones, moves, printingChanges: this.printingChanges, tagChanges, renames };
   }
 
   private zone(zone: ZoneId): ZoneDiffStats {

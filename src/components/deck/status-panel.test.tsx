@@ -40,6 +40,7 @@ function deck(overrides: Partial<StatusPanelDeck> = {}): StatusPanelDeck {
     status: 'uncommitted',
     head: HEAD,
     working: WORKING,
+    workingStats: null,
     lastFetchError: null,
     serverFetch: { state: 'available' },
     autoRefreshSuggested: false,

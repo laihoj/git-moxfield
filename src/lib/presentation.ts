@@ -2,17 +2,11 @@
  * Shared wording for domain states, so the deck list, the status panel and the
  * version pages describe the same thing with the same words (docs/ux.md).
  */
+import type { DiffStats } from '@/core/diff/types';
 import { isRecord } from '@/core/guards';
 import { upperFirst } from '@/core/text';
 import type { DeckSourceErrorCode, IngestMethod } from '@/integrations/deck-source';
-import type {
-  CommitNoteDTO,
-  DeckStatus,
-  DeckSummaryDTO,
-  FetchErrorDTO,
-  SharedDeckDTO,
-  VersionRefDTO,
-} from '@/server/services/types';
+import type { CommitNoteDTO, DeckSummaryDTO, FetchErrorDTO, SharedDeckDTO } from '@/server/services/types';
 
 import { versionLabel } from './format';
 
@@ -24,8 +18,28 @@ export interface StatusPresentation {
   tone: StatusTone;
 }
 
-/** Label and tone of a deck status. `head` is the latest version, when there is one. */
-export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): StatusPresentation {
+/**
+ * What a difference without additions, removals or moves of cards consists of: renamed
+ * cards, printing (and card tag) changes, or both; `null` when it has neither.
+ */
+export function cosmeticChange(stats: DiffStats): 'renames' | 'printings' | 'both' | null {
+  const renames = stats.renames > 0;
+  const printings = stats.printingChanges + stats.tagChanges > 0;
+  if (renames && printings) return 'both';
+  return renames ? 'renames' : printings ? 'printings' : null;
+}
+
+const COSMETIC_STATUS_LABELS = {
+  renames: 'Only renamed cards',
+  printings: 'Only printing changes',
+  both: 'Only printing changes and renames',
+} as const;
+
+/** Label and tone of a deck's status. */
+export function describeStatus(
+  deck: Pick<DeckSummaryDTO, 'status' | 'head' | 'workingStats'>,
+): StatusPresentation {
+  const { status, head, workingStats } = deck;
   switch (status) {
     case 'never-fetched':
       return { label: 'Waiting for the first snapshot from Moxfield', tone: 'pending' };
@@ -33,8 +47,10 @@ export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): 
       return { label: 'Not committed yet', tone: 'accent' };
     case 'uncommitted':
       return { label: 'Uncommitted changes', tone: 'accent' };
-    case 'cosmetic-only':
-      return { label: 'Only printing changes', tone: 'neutral' };
+    case 'cosmetic-only': {
+      const change = workingStats === null ? null : cosmeticChange(workingStats);
+      return { label: COSMETIC_STATUS_LABELS[change ?? 'printings'], tone: 'neutral' };
+    }
     case 'clean':
       return {
         label: head === null ? 'Up to date' : `Up to date with ${versionLabel(head.sequence)}`,

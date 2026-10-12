@@ -22,7 +22,15 @@ import { StatusIndicator } from './status-indicator';
 
 export type StatusPanelDeck = Pick<
   DeckOverviewDTO,
-  'id' | 'url' | 'status' | 'head' | 'working' | 'lastFetchError' | 'serverFetch' | 'autoRefreshSuggested'
+  | 'id'
+  | 'url'
+  | 'status'
+  | 'head'
+  | 'working'
+  | 'workingStats'
+  | 'lastFetchError'
+  | 'serverFetch'
+  | 'autoRefreshSuggested'
 >;
 
 export interface StatusPanelProps {
@@ -50,7 +58,7 @@ function observedVerb(method: ObservationDTO['method']): string {
  * ("Update from Moxfield" via the bookmarklet when server fetching is unavailable).
  */
 export function StatusPanel({ deck, children }: StatusPanelProps) {
-  const { label, tone } = describeStatus(deck.status, deck.head);
+  const { label, tone } = describeStatus(deck);
   const { serverFetch } = deck;
   const serverAvailable = serverFetch.state === 'available';
   const error = currentFetchError(deck);

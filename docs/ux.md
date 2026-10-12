@@ -136,7 +136,7 @@ States of the status panel:
 | `never-fetched` | "Waiting for the first snapshot from Moxfield", with refresh or bookmarklet instructions                                  |
 | `no-versions`   | "Not committed yet". The diff is the initial deck ("Initial version · 100 cards"), and the commit button says "Commit v1" |
 | `uncommitted`   | Accent dot, "Uncommitted changes", summary chips                                                                          |
-| `cosmetic-only` | Neutral dot, "Only printing changes"                                                                                      |
+| `cosmetic-only` | Neutral dot, "Only printing changes", "Only renamed cards" or "Only printing changes and renames"                         |
 | `clean`         | Green check, "Up to date with v47"                                                                                        |
 | fetch error     | Inline banner with the error and the next step (bookmarklet when blocked, retry time when rate-limited)                   |
 

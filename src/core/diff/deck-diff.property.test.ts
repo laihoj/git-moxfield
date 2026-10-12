@@ -158,7 +158,7 @@ describe('diffSnapshots properties', () => {
         expect(diff.hasCardChanges).toBe(false);
         expect(diff.onlyCosmetic).toBe(false);
         expect(diff.commanders.changed).toBe(false);
-        expect(diff.stats).toEqual({ zones: [], moves: [], printingChanges: 0, tagChanges: 0 });
+        expect(diff.stats).toEqual({ zones: [], moves: [], printingChanges: 0, tagChanges: 0, renames: 0 });
       }),
       RUNS,
     );
@@ -269,6 +269,7 @@ describe('diffSnapshots properties', () => {
             .sort((a, b) => ZONES.indexOf(a.zone) - ZONES.indexOf(b.zone)),
         );
         expect(diff.stats.printingChanges).toBe(diff.changes.filter((c) => c.type === 'printing').length);
+        expect(diff.stats.renames).toBe(diff.changes.filter((c) => c.type === 'renamed').length);
         expect(diff.stats.tagChanges).toBe(diff.changes.filter((c) => c.type === 'tags').length);
 
         const strategic = diff.changes.some((c) => STRATEGIC_CHANGE_TYPES.has(c.type));

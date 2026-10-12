@@ -28,7 +28,7 @@ function zoneStats(zone: ZoneId, counts: Partial<Omit<ZoneDiffStats, 'zone'>>): 
 }
 
 function stats(overrides: Partial<DiffStats> = {}): DiffStats {
-  return { zones: [], moves: [], printingChanges: 0, tagChanges: 0, ...overrides };
+  return { zones: [], moves: [], printingChanges: 0, tagChanges: 0, renames: 0, ...overrides };
 }
 
 /** A complete expected diff between two variants of the base deck. */
@@ -742,6 +742,7 @@ describe('diffSnapshots — renames', () => {
           },
         ],
         commanders: { before: [], after: [], changed: false },
+        stats: stats({ renames: 1 }),
         hasCardChanges: false,
         onlyCosmetic: true,
       }),
@@ -774,6 +775,7 @@ describe('diffSnapshots — renames', () => {
         stats: stats({
           zones: [zoneStats('mainboard', { movedOut: 1 }), zoneStats('considering', { movedIn: 1 })],
           moves: [{ from: 'mainboard', to: 'considering', quantity: 1, cards: 1 }],
+          renames: 1,
         }),
       }),
     );

@@ -22,7 +22,7 @@ function version(sequence: number, message: string): VersionListItemDTO {
     sourceUpdatedAt: null,
     parentSequence: sequence === 1 ? null : sequence - 1,
     tags: [],
-    stats: { zones: [], moves: [], printingChanges: 0, tagChanges: 0 },
+    stats: { zones: [], moves: [], printingChanges: 0, tagChanges: 0, renames: 0 },
     primer: { status: 'unchanged' },
     commanders: [],
     commandersChanged: false,

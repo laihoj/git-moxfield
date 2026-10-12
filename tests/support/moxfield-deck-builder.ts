@@ -30,6 +30,11 @@ export type MoxCardSpec =
       manaCost?: string;
       isProxy?: boolean;
       isAlter?: boolean;
+      /**
+       * The name the card's ids, printing and facts derive from (default: `name`): a card
+       * Wizards renamed keeps them, so Moxfield shows the same card under its new name.
+       */
+      oracleName?: string;
     };
 
 export interface MoxDeckSpec {
@@ -57,6 +62,7 @@ export interface MoxDeckSpec {
 
 interface NormalizedSpec {
   name: string;
+  oracleName: string;
   quantity: number;
   set: string;
   collectorNumber: string;
@@ -88,12 +94,14 @@ function uuidFrom(value: string): string {
 
 function normalizeSpec(spec: MoxCardSpec): NormalizedSpec {
   const s: Exclude<MoxCardSpec, string> = typeof spec === 'string' ? parseCardSpecString(spec) : spec;
-  const known = cardFacts(s.name);
+  const oracleName = s.oracleName ?? s.name;
+  const known = cardFacts(oracleName);
   return {
     name: s.name,
+    oracleName,
     quantity: s.quantity ?? 1,
     set: s.set ?? 'tst',
-    collectorNumber: s.collectorNumber ?? syntheticCollectorNumber(s.name),
+    collectorNumber: s.collectorNumber ?? syntheticCollectorNumber(oracleName),
     finish: s.finish ?? 'nonFoil',
     lang: s.lang ?? 'en',
     typeLine: s.typeLine ?? known?.typeLine ?? 'Instant',
@@ -112,10 +120,10 @@ function colorIdentity(manaCost: string): string[] {
 export function moxCard(spec: NormalizedSpec): Record<string, unknown> {
   const isDfc = spec.name.includes(' // ');
   const faces = isDfc ? spec.name.split(' // ') : [];
-  const printingKey = `${spec.name}|${spec.set}|${spec.collectorNumber}`;
+  const printingKey = `${spec.oracleName}|${spec.set}|${spec.collectorNumber}`;
   return {
     id: shortHash(`printing:${printingKey}`, 5),
-    uniqueCardId: shortHash(`oracle:${spec.name.toLowerCase()}`, 5),
+    uniqueCardId: shortHash(`oracle:${spec.oracleName.toLowerCase()}`, 5),
     scryfall_id: uuidFrom(`scryfall:${printingKey}`),
     set: spec.set,
     set_name: `Set ${spec.set.toUpperCase()}`,

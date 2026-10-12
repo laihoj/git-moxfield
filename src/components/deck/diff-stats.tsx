@@ -3,27 +3,31 @@ import { ArrowLeftRight, FileText } from 'lucide-react';
 
 import { primerHasChange, type DiffStats, type PrimerChange } from '@/core/diff/types';
 import { MINUS_SIGN } from '@/lib/format';
+import { cosmeticChange } from '@/lib/presentation';
 
-export interface StatTotals {
+interface StatTotals {
   /** Copies added (additions and quantity increases), moves excluded. */
   added: number;
   /** Copies removed (removals and quantity decreases), moves excluded. */
   removed: number;
   /** Copies moved between zones. */
   moved: number;
-  /** Printing and card tag changes. */
-  cosmetic: number;
 }
 
 /** Totals over all zones of a diff's statistics. */
-export function statTotals(stats: DiffStats): StatTotals {
+function statTotals(stats: DiffStats): StatTotals {
   return {
     added: stats.zones.reduce((sum, zone) => sum + zone.added, 0),
     removed: stats.zones.reduce((sum, zone) => sum + zone.removed, 0),
     moved: stats.moves.reduce((sum, move) => sum + move.quantity, 0),
-    cosmetic: stats.printingChanges + stats.tagChanges,
   };
 }
+
+const COSMETIC_ONLY_LABELS = {
+  renames: 'Renamed only',
+  printings: 'Printings only',
+  both: 'Printings and renames only',
+} as const;
 
 export interface DiffStatsInlineProps {
   stats: DiffStats;
@@ -33,12 +37,14 @@ export interface DiffStatsInlineProps {
 
 /**
  * Compact counters for lists (`+3 −2 ⇄2`), colored and labelled for screen readers.
- * Renders "No card changes" when nothing strategic changed.
+ * When no card was added, removed or moved, says what changed instead ("Renamed only",
+ * "Printings only"), or "No card changes".
  */
 export function DiffStatsInline({ stats, primer, className }: DiffStatsInlineProps) {
   const totals = statTotals(stats);
   const primerChanged = primerHasChange(primer);
   const empty = totals.added === 0 && totals.removed === 0 && totals.moved === 0;
+  const cosmetic = cosmeticChange(stats);
   return (
     <span
       className={clsx(
@@ -66,10 +72,8 @@ export function DiffStatsInline({ stats, primer, className }: DiffStatsInlinePro
           <span className="sr-only"> moved</span>
         </span>
       )}
-      {empty && totals.cosmetic > 0 && <span className="text-cosmetic">Printings only</span>}
-      {empty && totals.cosmetic === 0 && !primerChanged && (
-        <span className="text-subtle">No card changes</span>
-      )}
+      {empty && cosmetic !== null && <span className="text-cosmetic">{COSMETIC_ONLY_LABELS[cosmetic]}</span>}
+      {empty && cosmetic === null && !primerChanged && <span className="text-subtle">No card changes</span>}
       {primerChanged && (
         <span className="inline-flex items-center gap-0.5 text-muted">
           <FileText aria-hidden="true" className="size-3" />

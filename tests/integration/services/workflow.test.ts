@@ -112,7 +112,13 @@ describe('deck services: the core workflow', () => {
 
     const clean = defined(await services.getOverview(deckId));
     expect(clean).toMatchObject({ status: 'clean', head: v1, versionCount: 1, suggestedMessage: '' });
-    expect(clean.workingStats).toEqual({ zones: [], moves: [], printingChanges: 0, tagChanges: 0 });
+    expect(clean.workingStats).toEqual({
+      zones: [],
+      moves: [],
+      printingChanges: 0,
+      tagChanges: 0,
+      renames: 0,
+    });
     expect(clean.recentVersions.map((version) => version.sequence)).toEqual([1]);
 
     // Edit the deck on Moxfield and refresh.

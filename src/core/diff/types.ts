@@ -145,6 +145,8 @@ export interface DiffStats {
   moves: MoveStats[];
   printingChanges: number;
   tagChanges: number;
+  /** Cards that are the same card under a new name (`renamed` changes). */
+  renames: number;
 }
 
 export interface CommanderSummary {
