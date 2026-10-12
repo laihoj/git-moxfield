@@ -14,7 +14,7 @@
  *   card-tags.txt      "Dress Down: hate, stax"
  *   primer.md          absent when the deck has no primer (or it was not captured)
  */
-import { compareStrings, snapshotZones, zoneCards } from './canonical';
+import { cardNames, compareStrings, snapshotZones, zoneCards } from './canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from './model';
 import { isKnownZone, type ZoneId } from './zones';
 
@@ -95,10 +95,7 @@ export function snapshotToFileTree(snapshot: CanonicalSnapshot, options: FileTre
     if (lines.length > 0) tree[zoneFileName(zone)] = `${lines.join('\n')}\n`;
   }
 
-  const names = new Map<string, string>();
-  for (const zone of snapshotZones(snapshot)) {
-    for (const card of zoneCards(snapshot, zone)) if (!names.has(card.key)) names.set(card.key, card.name);
-  }
+  const names = cardNames(snapshot);
   const tagLines = Object.keys(snapshot.cardTags)
     .sort(compareStrings)
     .map((key) => `${names.get(key) ?? key}: ${(snapshot.cardTags[key] ?? []).join(', ')}`);

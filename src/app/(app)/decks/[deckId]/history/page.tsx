@@ -1,23 +1,17 @@
-import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
-import { HistoryContent } from '@/components/deck-pages/history-content';
-import { deckTitle } from '@/lib/presentation';
+import { HistoryContent, historyTagParam } from '@/components/deck-pages/history-content';
 
-import { deckServices, decodeSegment, loadOverview, loadTags } from '../data';
+import { deckServices, decodeSegment, loadOverview, loadTags, ownerSectionMetadata } from '../data';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/decks/[deckId]/history'>): Promise<Metadata> {
-  const overview = await loadOverview(decodeSegment((await params).deckId));
-  return { title: overview === null ? 'History' : `History · ${deckTitle(overview)}` };
-}
+export const generateMetadata = ownerSectionMetadata('History');
 
 /** All versions of a deck, newest first, with a tag filter and compare selection. */
 export default async function HistoryPage({ params, searchParams }: PageProps<'/decks/[deckId]/history'>) {
   const deckId = decodeSegment((await params).deckId);
-  const { tag: tagParam } = await searchParams;
-  const tag = typeof tagParam === 'string' && tagParam.trim() !== '' ? tagParam.trim() : undefined;
+  const tag = historyTagParam((await searchParams).tag);
 
   const [overview, tags, versions] = await Promise.all([
     loadOverview(deckId),

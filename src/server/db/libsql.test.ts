@@ -7,13 +7,15 @@ import { sql } from 'drizzle-orm';
 import { drizzle as drizzleRoot } from 'drizzle-orm/libsql';
 import { drizzle as drizzleRemote } from 'drizzle-orm/libsql/http';
 import { drizzle as drizzleLocal } from 'drizzle-orm/libsql/sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { rejectionOf } from '@tests/support/errors';
 
 import {
+  openRawDatabase,
   probeDatabaseEntryInChildProcess,
+  scratchDir,
   startHranaStub,
-  tempDir,
-  type HranaStub,
 } from '@tests/support/libsql';
 
 import {
@@ -28,34 +30,9 @@ import {
 import * as schema from './schema';
 import { classifySqlError } from './sql-errors';
 
-const opened: LibsqlDatabase[] = [];
-const stubs: HranaStub[] = [];
-
-async function open(url: string): Promise<LibsqlDatabase> {
-  const handle = await createLibsqlDatabase({ url });
-  opened.push(handle);
-  return handle;
-}
-
-async function stub(options: { foreignKeys?: 0 | 1 } = {}): Promise<HranaStub> {
-  const server = await startHranaStub(options);
-  stubs.push(server);
-  return server;
-}
-
-afterEach(async () => {
-  for (const handle of opened.splice(0)) handle.close();
-  await Promise.all(stubs.splice(0).map((server) => server.close()));
-});
-
 /** The classified message of the error `operation` rejects with. */
 async function failureMessage(operation: Promise<unknown>): Promise<string> {
-  try {
-    await operation;
-  } catch (error) {
-    return classifySqlError(error).message;
-  }
-  throw new Error('expected the operation to fail');
+  return classifySqlError(await rejectionOf(operation)).message;
 }
 
 async function pragma(handle: LibsqlDatabase, name: string): Promise<unknown> {
@@ -66,8 +43,8 @@ async function pragma(handle: LibsqlDatabase, name: string): Promise<unknown> {
 describe('createLibsqlDatabase', () => {
   describe('in memory', () => {
     it('opens a private local database with foreign keys enforced', async () => {
-      const a = await open(':memory:');
-      const b = await open('file::memory:');
+      const a = await openRawDatabase({ url: ':memory:' });
+      const b = await openRawDatabase({ url: 'file::memory:' });
       expect(a.kind).toBe('local');
       expect(a.db.$client).toBe(a.client);
       expect(await pragma(a, 'foreign_keys')).toBe(1);
@@ -79,7 +56,7 @@ describe('createLibsqlDatabase', () => {
     });
 
     it('closes idempotently', async () => {
-      const handle = await open(':memory:');
+      const handle = await openRawDatabase({ url: ':memory:' });
       handle.close();
       handle.close();
       expect(handle.client.closed).toBe(true);
@@ -89,8 +66,8 @@ describe('createLibsqlDatabase', () => {
 
   describe('files', () => {
     it('creates missing directories, uses write-ahead logging and keeps data across reopening', async () => {
-      const file = join(tempDir(), 'nested', 'dir', 'app.db');
-      const first = await open(`file:${file}`);
+      const file = join(scratchDir(), 'nested', 'dir', 'app.db');
+      const first = await openRawDatabase({ url: `file:${file}` });
       expect(first.kind).toBe('local');
       expect(await pragma(first, 'journal_mode')).toBe('wal');
       expect(await pragma(first, 'foreign_keys')).toBe(1);
@@ -99,17 +76,17 @@ describe('createLibsqlDatabase', () => {
       expect(existsSync(`${file}-wal`)).toBe(true);
       first.close();
 
-      const second = await open(`file://${file}`);
+      const second = await openRawDatabase({ url: `file://${file}` });
       expect(await second.db.all(sql`SELECT n FROM kept`)).toEqual([{ n: 42 }]);
     });
 
     it('shares one write lock between all handles on the same file', async () => {
-      const directory = tempDir();
+      const directory = scratchDir();
       const file = join(directory, 'shared.db');
-      const absolute = await open(`file:${file}`);
-      const viaRelativePath = await open(`file:${relative(process.cwd(), file)}`);
-      const viaAuthority = await open(`file:///${file.replace(/^\//, '')}`);
-      const other = await open(`file:${join(directory, 'other.db')}`);
+      const absolute = await openRawDatabase({ url: `file:${file}` });
+      const viaRelativePath = await openRawDatabase({ url: `file:${relative(process.cwd(), file)}` });
+      const viaAuthority = await openRawDatabase({ url: `file:///${file.replace(/^\//, '')}` });
+      const other = await openRawDatabase({ url: `file:${join(directory, 'other.db')}` });
       expect(viaRelativePath.writeLock).toBe(absolute.writeLock);
       expect(viaAuthority.writeLock).toBe(absolute.writeLock);
       expect(other.writeLock).not.toBe(absolute.writeLock);
@@ -118,8 +95,8 @@ describe('createLibsqlDatabase', () => {
 
     it('relies on libSQL enforcing foreign keys on every pooled connection', async () => {
       // A PRAGMA cannot reach every connection of the pool; the build default must do it.
-      const url = `file:${join(tempDir(), 'pool.db')}`;
-      await open(url);
+      const url = `file:${join(scratchDir(), 'pool.db')}`;
+      await openRawDatabase({ url });
       const raw = createLocalClient({ url });
       try {
         const transaction = await raw.transaction('write'); // holds one connection
@@ -134,8 +111,8 @@ describe('createLibsqlDatabase', () => {
 
   describe('remote', () => {
     it('opens a libSQL server over HTTP and checks that it enforces foreign keys', async () => {
-      const server = await stub();
-      const handle = await open(server.url);
+      const server = await startHranaStub();
+      const handle = await openRawDatabase({ url: server.url });
       expect(handle.kind).toBe('remote');
       expect(handle.client.protocol).toBe('http');
       expect(await pragma(handle, 'foreign_keys')).toBe(1);
@@ -143,22 +120,22 @@ describe('createLibsqlDatabase', () => {
     });
 
     it('serves ws: and wss: URLs over HTTP on the same host and port', async () => {
-      const server = await stub();
-      const handle = await open(server.url.replace(/^http:/, 'ws:'));
+      const server = await startHranaStub();
+      const handle = await openRawDatabase({ url: server.url.replace(/^http:/, 'ws:') });
       expect(handle.kind).toBe('remote');
       expect(handle.client.protocol).toBe('http');
       expect(await pragma(handle, 'foreign_keys')).toBe(1);
     });
 
     it('refuses a server that does not enforce foreign keys', async () => {
-      const server = await stub({ foreignKeys: 0 });
+      const server = await startHranaStub({ foreignKeys: 0 });
       const failure = createLibsqlDatabase({ url: server.url });
       await expect(failure).rejects.toBeInstanceOf(DatabaseConfigError);
       await expect(failure).rejects.toThrow(/does not enforce foreign keys.*--tursodb/s);
     });
 
     it('loads no native module in a process that only opens remote databases', async () => {
-      const server = await stub();
+      const server = await startHranaStub();
       const remote = await probeDatabaseEntryInChildProcess(server.url);
       expect(remote).toEqual({ kind: 'remote', foreignKeys: 1, nativeModules: [] });
 

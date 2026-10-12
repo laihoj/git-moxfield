@@ -12,6 +12,8 @@ import 'server-only';
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
+import { MAX_SETUP_CODE_INPUT_LENGTH } from '@/core/text-limits';
+
 /** Unambiguous upper-case letters and digits. */
 const ALPHABET = 'ABCDEFGHJKMNPQRSTWXYZ23456789';
 
@@ -45,7 +47,7 @@ export function generateSetupCode(): string {
  * when it cannot be a setup code.
  */
 export function normalizeSetupCode(input: unknown): string | null {
-  if (typeof input !== 'string' || input.length > 64) return null;
+  if (typeof input !== 'string' || input.length > MAX_SETUP_CODE_INPUT_LENGTH) return null;
   const compact = input.toUpperCase().replace(/[\s-]+/g, '');
   if (compact.length !== CODE_LENGTH) return null;
   for (const symbol of compact) if (!ALPHABET.includes(symbol)) return null;

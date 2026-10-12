@@ -6,19 +6,29 @@
 import { expect } from 'vitest';
 
 import { SYSTEM_ACTOR, type AuthService } from '@/server/auth/service';
-import type { SignIn, UserRole } from '@/server/auth/types';
+import { tokenOfLinkPath } from '@/server/auth/paths';
+import type { SessionUser, SignIn, UserRole } from '@/server/auth/types';
+
+import { bookmarkletKey } from './bookmarklet';
+import { rejectionOf } from './errors';
 
 /** The token at the end of a link path (`/invite/gmi_…`, `/signin/gml_…`). */
-export function tokenOfPath(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
-}
+export const tokenOfPath = tokenOfLinkPath;
 
 /** The bookmarklet key embedded in a `javascript:` bookmarklet. */
-export function keyOfBookmarklet(bookmarklet: string): string {
-  const source = decodeURIComponent(bookmarklet.slice('javascript:'.length));
-  const match = /"key":"(gmk_[A-Za-z0-9_-]{43})"/.exec(source);
-  if (match?.[1] === undefined) throw new Error('No key in the bookmarklet');
-  return match[1];
+export { bookmarkletKey as keyOfBookmarklet };
+
+/**
+ * Creates a bookmarklet key for `user` and returns it (`gmk_…`). Defaults: the label
+ * `Laptop`, the popup bookmarklet, `http://localhost:3000` as the app.
+ */
+export async function createKey(
+  auth: AuthService,
+  user: SessionUser,
+  options: { label?: string; mode?: 'popup' | 'sameTab'; appUrl?: string } = {},
+): Promise<string> {
+  const { label = 'Laptop', mode = 'popup', appUrl = 'http://localhost:3000' } = options;
+  return bookmarkletKey((await auth.createBookmarkletKey(user, label, appUrl)).bookmarklets[mode]);
 }
 
 /** Creates a user through an invite from the command line and signs them in. */
@@ -39,9 +49,5 @@ export async function signUp(
 
 /** Asserts that `promise` rejects with a ServiceError of `code`. */
 export async function expectServiceError(promise: Promise<unknown>, code: string): Promise<void> {
-  const error: unknown = await promise.then(
-    () => null,
-    (caught: unknown) => caught,
-  );
-  expect(error).toMatchObject({ name: 'ServiceError', code });
+  expect(await rejectionOf(promise)).toMatchObject({ name: 'ServiceError', code });
 }

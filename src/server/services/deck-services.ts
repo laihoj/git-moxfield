@@ -32,14 +32,19 @@
  */
 import 'server-only';
 
-import { commanderNames, emptySnapshot, zoneCards } from '@/core/canonical';
-import { diffSnapshots, suggestCommitMessage } from '@/core/diff';
+import { commanderNames, emptySnapshot, normalizeText, zoneCards } from '@/core/canonical';
+import { diffSnapshots, INITIAL_VERSION_MESSAGE, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
-import { commitId } from '@/core/hash';
+import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
+import { normalizeVersionTag } from '@/core/tags';
+import { codePointLength, pluralize } from '@/core/text';
+import { MAX_COMMIT_MESSAGE_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
 import {
   DeckSourceError,
   isDeckSourceError,
+  retryAfterSecondsUntil,
+  type CapturedIngestMethod,
   type DeckRef,
   type DeckSource,
   type IngestMethod,
@@ -52,7 +57,6 @@ import type { Logger } from '@/server/logger';
 import {
   DEFAULT_CARD_SEARCH_LIMIT,
   isRepositoryError,
-  normalizeVersionTag,
   type BranchRecord,
   type CommitRecord,
   type DeckRecord,
@@ -66,22 +70,17 @@ import type { DeckSourceRegistry } from '@/server/sources';
 
 import { mapConcurrently } from './concurrency';
 import type {
+  CommitInput,
   DeckServices,
+  IngestCaptureInput,
   RelinkDeckOutcome,
   SetupInfoDTO,
   TagOutcome,
   TrackDeckOutcome,
   VersionRef,
 } from './contract';
-import {
-  deckStatus,
-  diffCardKeys,
-  toCommitNoteDTO,
-  toFetchErrorDTO,
-  toObservationDTO,
-  toVersionRefDTO,
-} from './dto';
-import { ServiceError } from './errors';
+import { deckStatus, diffCardKeys, toCommitNoteDTO, toObservationDTO, toVersionRefDTO } from './dto';
+import { DECK_NOT_TRACKED, ServiceError } from './errors';
 import { DeckHistory, type ResolvedSide } from './history';
 import { unlessDeckVanished } from './invariants';
 import type { KeyedMutex } from './mutex';
@@ -92,6 +91,7 @@ import type {
   CardHistoryDTO,
   CardSearchResultDTO,
   CommitNoteDTO,
+  CommitFailureReason,
   CommitOutcome,
   CompareDTO,
   DeckOverviewDTO,
@@ -106,20 +106,11 @@ import type {
   VersionListItemDTO,
 } from './types';
 
-/** Maximum commit message length in characters (Unicode code points). */
-export const MAX_COMMIT_MESSAGE_LENGTH = 2000;
-
-/** Maximum free-text note length in characters (Unicode code points). */
-export const MAX_NOTE_LENGTH = 20_000;
-
 /** Note kind of the free-text note managed by {@link DeckServices.setNote}; data is `{ text }`. */
 export const FREE_TEXT_NOTE_KIND = 'note';
 
-/** Number of versions in {@link DeckOverviewDTO.recentVersions}. */
-export const RECENT_VERSION_COUNT = 8;
-
-/** Suggested message for a deck's first version. */
-const INITIAL_VERSION_MESSAGE = 'Initial version';
+/** Number of versions in {@link DeckOverviewDTO.recentVersions} (the compare defaults need two). */
+export const RECENT_VERSION_COUNT = 5;
 
 /**
  * The source that browser captures and manual pastes come from. The capture protocol
@@ -141,8 +132,6 @@ export interface DeckServicesDependencies {
 /** Why the server fetched a deck: an explicit or automatic refresh, or a commit. */
 type FetchReason = 'manual' | 'auto' | 'commit';
 
-type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
-
 interface Ingested {
   observation: ObservationRecord;
   /** The observation's snapshot (as stored). */
@@ -160,6 +149,16 @@ interface IngestRelink {
 type RelinkFailure = Extract<RelinkDeckOutcome, { ok: false }>;
 
 type FetchResult = ({ ok: true } & Ingested) | { ok: false; error: FetchErrorDTO };
+
+/** Points `deck` at another source deck; its observations (the old deck's state) go too. */
+async function relinkInTx(tx: Repositories, deck: DeckRecord, to: IngestRelink): Promise<void> {
+  await tx.decks.relink(deck.id, {
+    expectedExternalId: deck.externalId,
+    externalId: to.externalId,
+    url: to.url,
+  });
+  await tx.observations.pruneForDeck(deck.id, []);
+}
 
 /**
  * A stored deck state: a snapshot and its content hash (what an observation or a commit
@@ -234,8 +233,7 @@ class DefaultDeckServices implements DeckServices {
     });
     if (!created) return { ok: true, deckId: deck.id, alreadyTracked: true, fetch: null };
 
-    const fetch =
-      source.serverFetchStatus().state === 'available' ? await this.refresh(deck.id, 'manual') : null;
+    const fetch = await this.refreshIfAvailable(source, deck.id);
     return { ok: true, deckId: deck.id, alreadyTracked: false, fetch };
   }
 
@@ -264,11 +262,7 @@ class DefaultDeckServices implements DeckServices {
       const refused = await this.relinkRefusal(deck, source, externalId);
       if (refused) return refused;
       try {
-        await this.repos.transaction(async (tx) => {
-          await tx.decks.relink(deck.id, { expectedExternalId: deck.externalId, externalId, url });
-          // The working state is the old source deck's: it must not be committed as this one.
-          await tx.observations.pruneForDeck(deck.id, []);
-        });
+        await this.repos.transaction((tx) => relinkInTx(tx, deck, { externalId, url }));
       } catch (error) {
         // Another request (or function instance) got there first.
         if (!isRepositoryError(error, 'conflict')) throw error;
@@ -288,8 +282,7 @@ class DefaultDeckServices implements DeckServices {
     });
     if (failure) return failure;
 
-    const fetch =
-      source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+    const fetch = await this.refreshIfAvailable(source, deckId);
     return { ok: true, externalId, url, fetch };
   }
 
@@ -368,12 +361,7 @@ class DefaultDeckServices implements DeckServices {
     });
   }
 
-  async ingestCapture(input: {
-    data: unknown;
-    method: Exclude<IngestMethod, 'server'>;
-    track: boolean;
-    relinkDeckId?: string;
-  }): Promise<CaptureOutcome> {
+  async ingestCapture(input: IngestCaptureInput): Promise<CaptureOutcome> {
     const source = this.sources.require(CAPTURE_SOURCE_ID);
     // Both throw DeckSourceError('schema') for unusable data; callers answer 400.
     const raw = source.parseCapturedPayload(input.data);
@@ -419,6 +407,11 @@ class DefaultDeckServices implements DeckServices {
     return { status: 'ingested', deckId, changedSinceLastObservation: changed };
   }
 
+  /** A first fetch of `deckId`, when its source can be fetched from the server; `null` otherwise. */
+  private async refreshIfAvailable(source: DeckSource, deckId: string): Promise<FetchOutcome | null> {
+    return source.serverFetchStatus().state === 'available' ? await this.refresh(deckId, 'manual') : null;
+  }
+
   /**
    * "Continue an existing deck's history": points the workspace's deck `deckId` at the
    * captured source deck (unless it follows it already) and ingests the capture as its
@@ -428,7 +421,7 @@ class DefaultDeckServices implements DeckServices {
     deckId: string,
     source: DeckSource,
     raw: RawSourcePayload,
-    method: Exclude<IngestMethod, 'server'>,
+    method: CapturedIngestMethod,
     options: { normalized: NormalizedDeck; relink: IngestRelink },
   ): Promise<CaptureOutcome> {
     const { externalId } = options.relink;
@@ -480,7 +473,7 @@ class DefaultDeckServices implements DeckServices {
     const consequence =
       versionCount === 0
         ? 'it has no versions, so nothing is lost'
-        : `that deletes its ${versionCount} version${versionCount === 1 ? '' : 's'} in git-moxfield`;
+        : `that deletes its ${pluralize(versionCount, 'version')} in git-moxfield`;
     return {
       ok: false,
       reason: 'already-tracked',
@@ -513,15 +506,7 @@ class DefaultDeckServices implements DeckServices {
   // Commit
   // -------------------------------------------------------------------------
 
-  async commit(
-    deckId: string,
-    input: {
-      message: string;
-      expectedObservationId: string;
-      expectedHeadCommitId: string | null;
-      tags?: string[];
-    },
-  ): Promise<CommitOutcome> {
+  async commit(deckId: string, input: CommitInput): Promise<CommitOutcome> {
     const message = normalizeMultilineText(input.message);
     const length = codePointLength(message);
     if (length === 0) return commitFailure('invalid-message', 'Write a commit message.');
@@ -685,7 +670,7 @@ class DefaultDeckServices implements DeckServices {
     const sequence = ((await tx.commits.maxSequence(deck.id)) ?? 0) + 1;
     const createdAt = this.now().toISOString();
     const id = commitId({
-      deck: `${deck.source}:${deck.externalId}`,
+      deck: deckReference(deck),
       snapshotHash: observation.snapshotHash,
       parentId,
       createdAt,
@@ -726,7 +711,7 @@ class DefaultDeckServices implements DeckServices {
       const deck = await this.repos.decks.getById(deckId);
       if (!deck) return null;
       const [detail, state] = await Promise.all([
-        this.history.versionDetail(deckId, sequence),
+        this.history.versionDetail(deck, sequence),
         this.loadState(deck),
       ]);
       if (!detail) return null;
@@ -819,21 +804,27 @@ class DefaultDeckServices implements DeckServices {
     });
   }
 
-  async addTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
-    const commit = await this.repos.commits.getBySequence(deckId, sequence);
-    if (!commit) return { ok: false, reason: versionNotFound(sequence) };
-    const validation = normalizeVersionTag(tag);
-    if (!validation.ok) return { ok: false, reason: validation.reason };
-    await this.repos.tags.add(commit.id, validation.name);
-    return { ok: true, tags: await this.repos.tags.listForCommit(commit.id) };
+  addTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+    return this.changeTag('add', deckId, sequence, tag);
   }
 
-  async removeTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+  removeTag(deckId: string, sequence: number, tag: string): Promise<TagOutcome> {
+    return this.changeTag('remove', deckId, sequence, tag);
+  }
+
+  /** Adds or removes a tag of a version; the outcome carries the version's tags afterwards. */
+  private async changeTag(
+    op: 'add' | 'remove',
+    deckId: string,
+    sequence: number,
+    tag: string,
+  ): Promise<TagOutcome> {
     const commit = await this.repos.commits.getBySequence(deckId, sequence);
-    if (!commit) return { ok: false, reason: versionNotFound(sequence) };
+    if (!commit) return { ok: false, message: versionNotFound(sequence) };
     const validation = normalizeVersionTag(tag);
-    if (!validation.ok) return { ok: false, reason: validation.reason };
-    await this.repos.tags.remove(commit.id, validation.name);
+    if (!validation.ok) return { ok: false, message: validation.reason };
+    if (op === 'add') await this.repos.tags.add(commit.id, validation.name);
+    else await this.repos.tags.remove(commit.id, validation.name);
     return { ok: true, tags: await this.repos.tags.listForCommit(commit.id) };
   }
 
@@ -859,10 +850,6 @@ class DefaultDeckServices implements DeckServices {
   // Setup
   // -------------------------------------------------------------------------
 
-  primerToMarkdown(source: string, primer: string): string {
-    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
-  }
-
   getSetupInfo(): SetupInfoDTO {
     return setupInfo(this.config, this.sources);
   }
@@ -882,7 +869,7 @@ class DefaultDeckServices implements DeckServices {
 
   private async requireDeck(deckId: string): Promise<DeckRecord> {
     const deck = await this.repos.decks.getById(deckId);
-    if (!deck) throw new ServiceError('not-found', 'This deck is not tracked (it may have been removed).');
+    if (!deck) throw new ServiceError('not-found', DECK_NOT_TRACKED);
     return deck;
   }
 
@@ -966,7 +953,7 @@ class DefaultDeckServices implements DeckServices {
         status: error.status ?? null,
         retryAfterSeconds: record.retryAfterSeconds,
       });
-      return toFetchErrorDTO(record);
+      return record;
     }
     // Aborts and unexpected failures: log the details, show a generic message.
     this.logger.error('Unexpected error while fetching the deck', { deckId: deck.id, reason, error });
@@ -1015,14 +1002,7 @@ class DefaultDeckServices implements DeckServices {
     }
     const fetchedAt = this.now().toISOString();
     return this.repos.transaction(async (tx) => {
-      if (relink) {
-        await tx.decks.relink(deck.id, {
-          expectedExternalId: deck.externalId,
-          externalId: relink.externalId,
-          url: relink.url,
-        });
-        await tx.observations.pruneForDeck(deck.id, []);
-      }
+      if (relink) await relinkInTx(tx, deck, relink);
       const previous = await tx.observations.latestWithSnapshot(deck.id);
       const rawBlobHash = await tx.rawBlobs.put({ mediaType: raw.mediaType, data: raw.data });
       const snapshotHash = await tx.snapshots.put(snapshot);
@@ -1099,7 +1079,7 @@ class DefaultDeckServices implements DeckServices {
       status: deckStatus(head !== null, diff),
       head: head ? toVersionRefDTO(head) : null,
       working: working ? toObservationDTO(working) : null,
-      lastFetchError: deck.lastFetchError ? toFetchErrorDTO(deck.lastFetchError) : null,
+      lastFetchError: deck.lastFetchError,
       workingStats: head && diff ? diff.stats : null,
       versionCount: state.versionCount,
     };
@@ -1173,12 +1153,13 @@ function unavailableError(status: ServerFetchStatus, now: Date): FetchErrorDTO |
     case 'disabled':
       return { code: 'blocked', message: status.reason, at: now.toISOString(), retryAfterSeconds: null };
     case 'blocked': {
-      const retryAfterMs = Date.parse(status.retryAt) - now.getTime();
+      // `retryAt` comes from any DeckSource: an unreadable date is no deadline.
+      const retryAfterSeconds = retryAfterSecondsUntil(Date.parse(status.retryAt), now.getTime());
       return {
         code: 'blocked',
         message: status.reason,
         at: now.toISOString(),
-        retryAfterSeconds: Number.isNaN(retryAfterMs) ? null : Math.max(0, Math.ceil(retryAfterMs / 1000)),
+        retryAfterSeconds: Number.isNaN(retryAfterSeconds) ? null : retryAfterSeconds,
       };
     }
   }
@@ -1241,11 +1222,5 @@ function versionNotFound(sequence: number): string {
 
 /** NFC, LF line endings, surrounding whitespace trimmed. */
 function normalizeMultilineText(text: string): string {
-  return text.normalize('NFC').replace(/\r\n?/g, '\n').trim();
-}
-
-function codePointLength(text: string): number {
-  let length = 0;
-  for (const _ of text) length++;
-  return length;
+  return normalizeText(text).trim();
 }

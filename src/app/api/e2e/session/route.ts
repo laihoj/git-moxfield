@@ -27,44 +27,34 @@ import { randomBytes } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { USER_ROLES } from '@/core/roles';
 import { getAuthService, SYSTEM_ACTOR } from '@/server/auth';
 import { cookieNames } from '@/server/auth/cookie-spec';
 import { establishSessionOnResponse, requestCookieSecurity } from '@/server/auth/cookies';
+import { tokenOfLinkPath } from '@/server/auth/paths';
 import { parseToken } from '@/server/auth/tokens';
+import { jsonResponse } from '@/server/http/responses';
 import type { BookmarkletsDTO } from '@/server/auth/types';
 
-import { isCrossOriginBrowserRequest, publicAppUrl } from '../../../request-origin';
-import { e2eDisabledResponse } from '../guard';
+import { publicAppUrl } from '../../../request-origin';
+import { e2eDisabledResponse, e2eRequestRefusal } from '../guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const bodySchema = z.object({
   displayName: z.string().optional(),
-  role: z.enum(['admin', 'member']).optional(),
+  role: z.enum(USER_ROLES).optional(),
   bookmarkletLabel: z.string().optional(),
 });
 
-/** The media type of a `Content-Type` value, lower-cased, without parameters. */
-function mediaType(contentType: string | null): string {
-  return (contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-}
-
 function badRequest(error: string): Response {
-  return Response.json({ error }, { status: 400, headers: { 'cache-control': 'no-store' } });
+  return jsonResponse({ error }, { status: 400 });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const disabled = e2eDisabledResponse();
-  if (disabled !== null) return disabled;
-  // Defence in depth: only the suite's own JSON requests (Node's fetch, which sends no
-  // Origin), never a form or a "simple" request a web page could make.
-  if (mediaType(request.headers.get('content-type')) !== 'application/json') {
-    return Response.json({ error: 'Send application/json.' }, { status: 415 });
-  }
-  if (isCrossOriginBrowserRequest(request)) {
-    return Response.json({ error: 'Cross-origin requests are refused.' }, { status: 403 });
-  }
+  const refused = e2eDisabledResponse() ?? e2eRequestRefusal(request);
+  if (refused !== null) return refused;
 
   const text = await request.text();
   let json: unknown = {};
@@ -80,7 +70,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const auth = await getAuthService();
   const invite = await auth.createInvite(SYSTEM_ACTOR, { role: input.data.role ?? 'member', note: 'e2e' });
-  const token = parseToken('invite', invite.path.split('/').at(-1));
+  const token = parseToken('invite', tokenOfLinkPath(invite.path));
   const displayName = input.data.displayName ?? `Tester ${randomBytes(3).toString('hex')}`;
   const accepted = await auth.acceptInvite(token, displayName, request.headers.get('user-agent'));
   if (!accepted.ok) return badRequest(accepted.message);

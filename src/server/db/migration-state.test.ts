@@ -2,15 +2,21 @@ import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { eq, sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { countRows, seedDeckHistory, tempDir, tempFileUrl } from '@tests/support/libsql';
+import {
+  countRows,
+  IMMUTABILITY_TRIGGERS,
+  openRawDatabase,
+  scratchDir,
+  scratchFileUrl,
+  seedDeckHistory,
+} from '@tests/support/libsql';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from './libsql';
+import type { LibsqlDatabase } from './libsql';
 import {
   applyMigrations,
   assertMigrationsApplied,
-  assertMigrationsUpToDate,
   bundledMigrations,
   checkMigrationState,
   DEFAULT_MIGRATIONS_FOLDER,
@@ -23,25 +29,8 @@ import {
 import * as schema from './schema';
 import { classifySqlError } from './sql-errors';
 
-/** Hand-written triggers that enforce immutable history (drizzle/0001). */
-const IMMUTABILITY_TRIGGERS = [
-  'commits_immutable_delete',
-  'commits_immutable_update',
-  'raw_blobs_immutable_update',
-  'snapshot_cards_immutable_update',
-  'snapshots_immutable_update',
-];
-
-const opened: LibsqlDatabase[] = [];
-
-afterEach(() => {
-  for (const handle of opened.splice(0)) handle.close();
-});
-
-async function open(url = ':memory:'): Promise<LibsqlDatabase> {
-  const handle = await createLibsqlDatabase({ url });
-  opened.push(handle);
-  return handle;
+function open(url = ':memory:'): Promise<LibsqlDatabase> {
+  return openRawDatabase({ url });
 }
 
 interface ExtraMigration {
@@ -55,7 +44,7 @@ interface ExtraMigration {
  * plus extra hand-written migrations.
  */
 function migrationsFolder(entries: readonly MigrationJournalEntry[], extra: ExtraMigration[] = []): string {
-  const folder = tempDir('git-moxfield-migrations-');
+  const folder = scratchDir('git-moxfield-migrations-');
   mkdirSync(join(folder, 'meta'));
   for (const entry of entries) {
     copyFileSync(join(DEFAULT_MIGRATIONS_FOLDER, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
@@ -95,7 +84,7 @@ describe('bundledMigrations', () => {
 
 describe.each([
   ['in memory', () => ':memory:'],
-  ['in a file', () => tempFileUrl()],
+  ['in a file', () => scratchFileUrl()],
 ])('migrations %s', (_, url) => {
   it('takes a new database from missing to up to date, once', async () => {
     const handle = await open(url());
@@ -127,7 +116,9 @@ describe.each([
     expect(second.applied).toEqual([]);
     expect(second.state.status).toBe('up-to-date');
     expect(ranIntegrityCheck()).toBe(false);
-    await expect(assertMigrationsUpToDate(handle.db)).resolves.toMatchObject({ status: 'up-to-date' });
+    await expect(assertMigrationsApplied(handle.db, { allowAhead: false })).resolves.toMatchObject({
+      status: 'up-to-date',
+    });
   });
 
   it('applies the hand-written trigger migration unchanged; triggers fire and cascades work', async () => {
@@ -136,7 +127,9 @@ describe.each([
     const triggers = await db.all<{ name: string; sql: string }>(
       sql`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
     );
-    expect(triggers.map((trigger) => trigger.name)).toEqual(expect.arrayContaining(IMMUTABILITY_TRIGGERS));
+    expect(triggers.map((trigger) => trigger.name)).toEqual(
+      expect.arrayContaining([...IMMUTABILITY_TRIGGERS]),
+    );
     expect(triggers.find((trigger) => trigger.name === 'commits_immutable_delete')?.sql).toContain(
       "SELECT RAISE(ABORT, 'commits are immutable; delete the deck to remove its history');",
     );
@@ -166,7 +159,7 @@ describe.each([
 describe('applyMigrations on a populated database', () => {
   it('upgrades it without losing or orphaning rows', async () => {
     const all = bundledMigrations();
-    const { db } = await open(tempFileUrl());
+    const { db } = await open(scratchFileUrl());
     await applyMigrations(db, { migrationsFolder: migrationsFolder(all.slice(0, 2)) });
     const seeded = await seedDeckHistory(db);
     // The catalog before 0005 made it per workspace.
@@ -210,7 +203,9 @@ describe('checkMigrationState', () => {
     expect(describeMigrationState(state)).toContain(
       `2 migrations behind (${tags(all.slice(-2)).join(', ')})`,
     );
-    await expect(assertMigrationsUpToDate(db)).rejects.toBeInstanceOf(MigrationStateError);
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toBeInstanceOf(
+      MigrationStateError,
+    );
 
     const rest = await applyMigrations(db);
     expect(rest.applied).toEqual(tags(all.slice(-2)));
@@ -262,7 +257,9 @@ describe('checkMigrationState', () => {
       unknown: 1,
     });
     // The exact check still refuses it, and so does migrating it with this build.
-    await expect(assertMigrationsUpToDate(db)).rejects.toMatchObject({ state: { status: 'ahead' } });
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toMatchObject({
+      state: { status: 'ahead' },
+    });
     await expect(applyMigrations(db)).rejects.toBeInstanceOf(MigrationStateError);
 
     // Behind, and ahead along another line of migrations (this build's last one is missing).
@@ -283,7 +280,7 @@ describe('checkMigrationState', () => {
       sql`CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)`,
     );
     await expect(checkMigrationState(db)).resolves.toMatchObject({ status: 'missing', applied: 0 });
-    await expect(assertMigrationsUpToDate(db)).rejects.toThrow(/not been migrated yet/);
+    await expect(assertMigrationsApplied(db, { allowAhead: false })).rejects.toThrow(/not been migrated yet/);
   });
 });
 

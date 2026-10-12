@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 
 import { BookmarkletLink } from '@/components/capture/bookmarklet-link';
 import { CopyButton } from '@/components/ui/copy-button';
+import { isLoopbackHostname } from '@/lib/hosts';
+import { InlineCode } from '@/components/ui/inline-code';
 
 export interface BookmarkletInstallProps {
   /** The popup bookmarklet (`javascript:` URL with the user's key). */
@@ -19,13 +21,7 @@ export interface BookmarkletInstallProps {
 /** Whether `appUrl` only works on the computer that runs git-moxfield. */
 function isLoopback(appUrl: string): boolean {
   try {
-    const { hostname } = new URL(appUrl);
-    return (
-      hostname === 'localhost' ||
-      hostname.endsWith('.localhost') ||
-      hostname === '127.0.0.1' ||
-      hostname === '[::1]'
-    );
+    return isLoopbackHostname(new URL(appUrl).hostname);
   } catch {
     return false;
   }
@@ -108,15 +104,14 @@ export function BookmarkletInstall({ popup, sameTab, siteHost, appUrl }: Bookmar
       </InstructionBlock>
 
       <p className="text-xs text-pretty text-muted max-md:order-3">
-        These bookmarklets send decks to{' '}
-        <code className="rounded bg-surface-2 px-1 py-0.5 break-all">{appUrl}</code>.
+        These bookmarklets send decks to <InlineCode className="break-all">{appUrl}</InlineCode>.
         {isLoopback(appUrl) && (
           <>
             {' '}
             That address only works on this computer. To use git-moxfield from your phone, start it with{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5 whitespace-nowrap">pnpm start:lan</code> and set{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5">PUBLIC_APP_URL</code> to an address your phone
-            can reach (for example your computer’s LAN address), then make the phone’s bookmarklet there.
+            <InlineCode className="whitespace-nowrap">pnpm start:lan</InlineCode> and set{' '}
+            <InlineCode>PUBLIC_APP_URL</InlineCode> to an address your phone can reach (for example your
+            computer’s LAN address), then make the phone’s bookmarklet there.
           </>
         )}
       </p>

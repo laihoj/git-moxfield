@@ -8,18 +8,13 @@ import { zoneLabel } from '@/core/zones';
 import { MINUS_SIGN } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
+import { BADGE_TONE_CLASSES, type BadgeTone } from '@/components/ui/badge';
+
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
 import { ZoneBadge } from './zone-badge';
 
-type GlyphTone = 'add' | 'remove' | 'move' | 'cosmetic';
-
-const GLYPH_TONES: Record<GlyphTone, string> = {
-  add: 'bg-add-bg text-add',
-  remove: 'bg-remove-bg text-remove',
-  move: 'bg-move-bg text-move',
-  cosmetic: 'bg-cosmetic-bg text-cosmetic',
-};
+type GlyphTone = Extract<BadgeTone, 'add' | 'remove' | 'move' | 'cosmetic'>;
 
 /** Glyph, tone and spoken meaning of a change (meaning is never carried by color alone). */
 function glyphOf(change: CardChange): { glyph: string; tone: GlyphTone; meaning: string } {
@@ -56,7 +51,7 @@ export function ChangeGlyph({ glyph, tone }: { glyph: string; tone: GlyphTone })
       aria-hidden="true"
       className={clsx(
         'flex size-5 shrink-0 items-center justify-center rounded-md text-[0.8125rem] leading-none font-semibold',
-        GLYPH_TONES[tone],
+        BADGE_TONE_CLASSES[tone],
       )}
     >
       {glyph}

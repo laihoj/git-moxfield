@@ -9,11 +9,12 @@
  * atomically), so tests can build realistic histories quickly. Everything is asynchronous,
  * like the database.
  */
-import { expect, onTestFinished } from 'vitest';
+import { expect } from 'vitest';
 
-import { commitId } from '@/core/hash';
+import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
+import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
 import { openDatabase, type OpenDatabaseOptions } from '@/server/db/client';
 import type { LibsqlDatabase, LibsqlDb } from '@/server/db/libsql';
 import { classifySqlError, type SqlErrorClassification, type SqlErrorKind } from '@/server/db/sql-errors';
@@ -29,6 +30,9 @@ import {
   type RepositoryOptions,
 } from '@/server/repositories';
 
+import { expectRejection, rejectionOf } from './errors';
+import { cleanUpAfterTest } from './libsql';
+
 export { countRows } from './libsql';
 
 /**
@@ -39,15 +43,7 @@ export async function expectRepositoryError(
   operation: Promise<unknown> | (() => unknown),
   code: RepositoryErrorCode,
 ): Promise<RepositoryError> {
-  let caught: unknown;
-  try {
-    await (typeof operation === 'function' ? operation() : operation);
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(RepositoryError);
-  expect(caught).toMatchObject({ code });
-  return caught as RepositoryError;
+  return expectRejection(operation, RepositoryError, { code });
 }
 
 /**
@@ -60,32 +56,12 @@ export async function expectDatabaseError(
   kind: SqlErrorKind,
   message?: RegExp,
 ): Promise<SqlErrorClassification> {
-  let caught: unknown;
-  try {
-    await operation;
-  } catch (error) {
-    caught = error;
-  }
+  const caught = await rejectionOf(operation);
   expect(caught).toBeInstanceOf(Error);
   const failure = classifySqlError(caught);
   expect(failure.kind).toBe(kind);
   if (message !== undefined) expect(failure.message).toMatch(message);
   return failure;
-}
-
-/**
- * Closes `handle` when the current test finishes. Outside a test (in `beforeAll` or at
- * module level) there is no test to wait for; the database then lives as long as the test
- * file's worker.
- */
-function closeWhenTestFinishes(handle: LibsqlDatabase): void {
-  try {
-    onTestFinished(() => {
-      handle.close();
-    });
-  } catch {
-    // Not inside a test: nothing to attach the cleanup to.
-  }
 }
 
 /**
@@ -97,7 +73,9 @@ export async function openTestDatabaseHandle(
   options: Partial<OpenDatabaseOptions> = {},
 ): Promise<LibsqlDatabase> {
   const handle = await openDatabase({ url: ':memory:', ...options });
-  closeWhenTestFinishes(handle);
+  cleanUpAfterTest(() => {
+    handle.close();
+  });
   return handle;
 }
 
@@ -142,7 +120,7 @@ export function createTestDeck(repos: Repositories, overrides: Partial<NewDeck> 
   return repos.decks.create({
     source: 'moxfield',
     externalId,
-    url: `https://moxfield.com/decks/${externalId}`,
+    url: moxfieldDeckUrl(externalId),
     name: 'Test Deck',
     format: 'commander',
     ...overrides,
@@ -200,7 +178,7 @@ export function commitTestSnapshot(
     const message = options.message ?? `Version ${sequence}`;
     const sourceVersion = options.sourceVersion === undefined ? sequence : options.sourceVersion;
     const id = commitId({
-      deck: `${deck.source}:${deck.externalId}`,
+      deck: deckReference(deck),
       snapshotHash,
       parentId,
       createdAt,

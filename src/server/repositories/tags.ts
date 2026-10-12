@@ -2,60 +2,31 @@
  * Version tags: short, reusable, mutable labels on versions (`tournament`, `stable`,
  * `pre-ban`). A version can carry many tags and a tag many versions.
  */
-import { and, count, desc, eq, getTableColumns, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, getTableColumns, inArray, max } from 'drizzle-orm';
 
 import { compareStrings } from '@/core/canonical';
+import { normalizeVersionTag } from '@/core/tags';
 import { commits, versionTags } from '@/server/db/schema';
 
 import { toCommitRecord, type CommitRecord } from './commits';
 import {
-  batches,
   commitInWorkspace,
   deckInWorkspace,
   distinct,
   referencing,
+  requireCommitInWorkspace,
+  selectInBatches,
   write,
   type RepositoryContext,
 } from './context';
 import { RepositoryError } from './errors';
 
-/** Maximum tag length in Unicode code points (after normalization). */
-export const MAX_VERSION_TAG_LENGTH = 40;
-
-export type VersionTagValidation = { ok: true; name: string } | { ok: false; reason: string };
-
-const ALLOWED_TAG = /^[\p{L}\p{M}\p{N} ._-]+$/u;
-const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
-
-/**
- * Normalizes user input into a tag name: lowercase, NFC, runs of whitespace collapsed
- * to one space, trimmed. A valid tag has 1–{@link MAX_VERSION_TAG_LENGTH} characters
- * from: letters and digits of any script (with combining marks), space, `.`, `-` and
- * `_`, and at least one letter or digit. Invalid input is rejected rather than
- * silently altered, so the user sees exactly the tag that is stored.
- */
-export function normalizeVersionTag(input: string): VersionTagValidation {
-  const name = input.toLowerCase().normalize('NFC').replace(/\s+/gu, ' ').trim();
-  if (name === '') return { ok: false, reason: 'Tag must not be empty.' };
-  if (codePointLength(name) > MAX_VERSION_TAG_LENGTH) {
-    return { ok: false, reason: `Tags can be at most ${MAX_VERSION_TAG_LENGTH} characters long.` };
-  }
-  if (!ALLOWED_TAG.test(name) || !HAS_LETTER_OR_DIGIT.test(name)) {
-    return { ok: false, reason: 'Tags may contain letters, digits, spaces, ".", "-" and "_".' };
-  }
-  return { ok: true, name };
-}
-
-function codePointLength(text: string): number {
-  let length = 0;
-  for (const _ of text) length++;
-  return length;
-}
-
 export interface TagCount {
   name: string;
   /** Number of versions of the deck carrying the tag. */
   count: number;
+  /** Sequence of the newest version carrying the tag. */
+  lastSequence: number;
 }
 
 export interface VersionTagRepository {
@@ -86,12 +57,7 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
       const validation = normalizeVersionTag(tag);
       if (!validation.ok) throw new RepositoryError('invalid-input', validation.reason);
       const { name } = validation;
-      const owned = await ctx.db
-        .select({ id: commits.id })
-        .from(commits)
-        .where(and(eq(commits.id, commitId), deckInWorkspace(ctx, commits.deckId)))
-        .get();
-      if (!owned) throw new RepositoryError('not-found', `Commit ${commitId} does not exist`);
+      await requireCommitInWorkspace(ctx, commitId);
       const createdAt = ctx.now();
       await referencing(`Tag ${name}`, () =>
         write(ctx, (db) =>
@@ -130,23 +96,26 @@ export function createVersionTagRepository(ctx: RepositoryContext): VersionTagRe
     async listForCommits(commitIds) {
       const ids = distinct(commitIds);
       const result = new Map<string, string[]>(ids.map((id) => [id, []]));
-      const pages = await Promise.all(
-        batches(ids).map((batch) =>
-          ctx.db
-            .select({ commitId: versionTags.commitId, name: versionTags.name })
-            .from(versionTags)
-            .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
-            .all(),
-        ),
+      const rows = await selectInBatches(ids, (batch) =>
+        ctx.db
+          .select({ commitId: versionTags.commitId, name: versionTags.name })
+          .from(versionTags)
+          .where(and(inArray(versionTags.commitId, batch), ownedCommit(versionTags.commitId)))
+          .all(),
       );
-      for (const row of pages.flat()) result.get(row.commitId)?.push(row.name);
+      for (const row of rows) result.get(row.commitId)?.push(row.name);
       for (const names of result.values()) names.sort(compareStrings);
       return result;
     },
 
     async listForDeck(deckId) {
       const rows = await ctx.db
-        .select({ name: versionTags.name, count: count() })
+        .select({
+          name: versionTags.name,
+          count: count(),
+          // Never null: every row joins a commit.
+          lastSequence: max(commits.sequence).mapWith(Number),
+        })
         .from(versionTags)
         .innerJoin(commits, eq(commits.id, versionTags.commitId))
         .where(and(eq(commits.deckId, deckId), deckInWorkspace(ctx, deckId)))

@@ -6,20 +6,13 @@
 import { promisify } from 'node:util';
 import { constants, gunzip as gunzipCallback, gzip as gzipCallback } from 'node:zlib';
 
-import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { sha256Hex } from '@/core/hash';
-import { commits, observations, rawBlobs } from '@/server/db/schema';
+import { rawBlobs } from '@/server/db/schema';
 
 import { corruptData, decodeJson } from './codec';
-import {
-  assertStorableSize,
-  batches,
-  distinct,
-  write,
-  type LibsqlExecutor,
-  type RepositoryContext,
-} from './context';
+import { assertStorableSize, write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
 /** The only encoding written today. */
@@ -159,36 +152,4 @@ function serialize(data: unknown): string {
   if (json === undefined)
     throw new RepositoryError('invalid-input', 'Raw blob data is not JSON-serializable');
   return json;
-}
-
-/**
- * Deletes those of `hashes` that no commit or observation references any more.
- * Returns the number of blobs deleted.
- */
-export async function deleteUnreferencedRawBlobs(
-  db: LibsqlExecutor,
-  hashes: readonly string[],
-): Promise<number> {
-  let deleted = 0;
-  for (const batch of batches(distinct(hashes))) {
-    const result = await db.delete(rawBlobs).where(
-      and(
-        inArray(rawBlobs.hash, batch),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(commits)
-            .where(eq(commits.rawBlobHash, rawBlobs.hash)),
-        ),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(observations)
-            .where(eq(observations.rawBlobHash, rawBlobs.hash)),
-        ),
-      ),
-    );
-    deleted += result.rowsAffected;
-  }
-  return deleted;
 }

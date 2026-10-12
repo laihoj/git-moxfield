@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { sql } from 'drizzle-orm';
 
 import { createLibsqlDatabase, type LibsqlDatabase } from '@/server/db/libsql';
-import { applyMigrations, MigrationStateError } from '@/server/db/migration-state';
+import { applyMigrations, MIGRATIONS_TABLE, MigrationStateError } from '@/server/db/migration-state';
 import { classifySqlError } from '@/server/db/sql-errors';
 
 import { HistoryImportError } from './errors';
@@ -119,7 +119,7 @@ export async function openSourceCopy(sourcePath: string): Promise<SourceCopy> {
       );
     }
     const tables = await tableNames(opened);
-    if (!tables.has('decks') || !tables.has('__drizzle_migrations')) {
+    if (!tables.has('decks') || !tables.has(MIGRATIONS_TABLE)) {
       throw new HistoryImportError(`${sourcePath} is not a git-moxfield database.`);
     }
     let migrated: readonly string[];

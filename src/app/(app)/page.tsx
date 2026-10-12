@@ -4,9 +4,12 @@ import type { Metadata } from 'next';
 import { DeckCard } from '@/components/deck/deck-card';
 import { TrackDeckForm } from '@/components/deck/track-deck-form';
 import { Card } from '@/components/ui/card';
-import { Link } from '@/components/ui/navigation';
+import { IconTile } from '@/components/ui/item-list';
+import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
+import { TextLink } from '@/components/ui/text-link';
+import { PageHeader } from '@/components/ui/page-header';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,9 +71,9 @@ export default async function DecksPage() {
                 key={title}
                 className="flex gap-3.5 rounded-xl border border-border bg-surface p-4 shadow-card md:flex-col md:gap-3 md:p-5"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-                  <Icon aria-hidden="true" className="size-4" />
-                </span>
+                <IconTile tone="accent">
+                  <Icon aria-hidden="true" />
+                </IconTile>
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-subtle tabular">Step {index + 1}</p>
                   <h3 className="text-sm font-semibold text-fg">{title}</h3>
@@ -81,10 +84,8 @@ export default async function DecksPage() {
           </ol>
           <p className="mx-auto mt-4 max-w-lg text-center text-sm text-balance text-muted">
             Moxfield blocks most servers, so the{' '}
-            <Link href="/setup" className="font-medium text-accent hover:underline">
-              Send to git-moxfield bookmarklet
-            </Link>{' '}
-            is usually how decks get here. Set it up once.
+            <TextLink href={routes.setup()}>Send to git-moxfield bookmarklet</TextLink> is usually how decks
+            get here. Set it up once.
           </p>
         </section>
       </div>
@@ -93,12 +94,10 @@ export default async function DecksPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Decks</h1>
-        <p className="text-sm text-muted">
-          Moxfield stays your editor. Commit versions here when the deck changes.
-        </p>
-      </div>
+      <PageHeader
+        title="Decks"
+        description="Moxfield stays your editor. Commit versions here when the deck changes."
+      />
 
       <section aria-labelledby="decks-heading">
         <h2 id="decks-heading" className="sr-only">

@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import type { Route } from 'next';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
+import { ExternalLink, type ExternalLinkProps } from './external-link';
 import { Link } from './navigation';
 import { Spinner } from './spinner';
 
@@ -11,7 +12,8 @@ export type ButtonSize = 'sm' | 'md' | 'lg';
 const BASE =
   'relative inline-flex shrink-0 items-center justify-center rounded-lg font-medium whitespace-nowrap select-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 disabled:cursor-not-allowed disabled:opacity-55 aria-disabled:cursor-not-allowed aria-disabled:opacity-55';
 
-const VARIANTS: Record<ButtonVariant, string> = {
+/** Colors, border and hover states of each variant (the icon buttons share them). */
+export const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-fg shadow-card hover:bg-accent-hover active:bg-accent-hover',
   secondary:
     'border border-border-strong bg-surface text-fg shadow-card hover:border-subtle hover:bg-surface-2 active:bg-surface-3',
@@ -43,7 +45,7 @@ export function buttonClasses({
   size = 'md',
   block = false,
 }: ButtonStyleOptions = {}): string {
-  return clsx(BASE, VARIANTS[variant], SIZES[size], block && 'w-full');
+  return clsx(BASE, BUTTON_VARIANTS[variant], SIZES[size], block && 'w-full');
 }
 
 export interface ButtonProps extends ComponentPropsWithoutRef<'button'>, ButtonStyleOptions {
@@ -106,37 +108,24 @@ export function ButtonLink({
   );
 }
 
-export interface ExternalButtonLinkProps
-  extends Omit<ComponentPropsWithoutRef<'a'>, 'target' | 'rel'>, ButtonStyleOptions {
-  href: string;
+export interface ExternalButtonLinkProps extends ExternalLinkProps, ButtonStyleOptions {
   icon?: ReactNode;
-  /** Trailing icon, typically the ↗ arrow. */
-  trailingIcon?: ReactNode;
 }
 
-/** A link to another site, styled as a button. Opens in a new tab without leaking the opener. */
+/** A link to another site, styled as a button (see {@link ExternalLink}). */
 export function ExternalButtonLink({
-  href,
   variant,
   size,
   block,
   icon,
-  trailingIcon,
   className,
   children,
   ...props
 }: ExternalButtonLinkProps) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={clsx(buttonClasses({ variant, size, block }), className)}
-      {...props}
-    >
+    <ExternalLink className={clsx(buttonClasses({ variant, size, block }), className)} {...props}>
       {icon}
       {children}
-      {trailingIcon}
-    </a>
+    </ExternalLink>
   );
 }

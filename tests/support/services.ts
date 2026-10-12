@@ -9,10 +9,10 @@
  * their own and services bound to it, and {@link ServiceHarness.auth} is the auth service
  * on the same database and clock.
  */
+import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
 import { createAuthService, type AuthService } from '@/server/auth/service';
 import { LOCAL_WORKSPACE_ID, type Db } from '@/server/db/client';
 import { parseConfig, type AppConfig } from '@/server/config';
-import type { Logger } from '@/server/logger';
 import { createRepositories, type Repositories, type UserRecord, type UserRole } from '@/server/repositories';
 import {
   createServices,
@@ -24,46 +24,16 @@ import {
 } from '@/server/services';
 import { createDeckSourceRegistry, type DeckSourceRegistry } from '@/server/sources';
 import type { LibsqlDatabase } from '@/server/db/libsql';
+import { ManualClock } from '@tests/support/clock';
+import { cardSpecName } from '@tests/support/card-spec';
+import { captureSpec, commitWorkingState } from '@tests/support/flows';
+import { recordingLogger, type LogEntry } from '@tests/support/recording-logger';
 import { openTestDatabaseHandle } from '@tests/support/db';
-import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
+import { FakeMoxfieldApi, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
-/** A clock that only moves when told to. */
-export class ManualClock {
-  private ms: number;
+export { ManualClock };
 
-  constructor(start = '2026-10-09T12:00:00.000Z') {
-    this.ms = Date.parse(start);
-  }
-
-  readonly now = (): Date => new Date(this.ms);
-
-  readonly epochMs = (): number => this.ms;
-
-  advance(seconds: number): void {
-    this.ms += seconds * 1000;
-  }
-
-  iso(): string {
-    return new Date(this.ms).toISOString();
-  }
-}
-
-export interface LogEntry {
-  level: 'debug' | 'info' | 'warn' | 'error';
-  message: string;
-  context: Record<string, unknown> | undefined;
-}
-
-/** A logger that writes nothing and keeps every entry for assertions. */
-export function recordingLogger(): Logger & { entries: LogEntry[] } {
-  const entries: LogEntry[] = [];
-  const log =
-    (level: LogEntry['level']) =>
-    (message: string, context?: Record<string, unknown>): void => {
-      entries.push({ level, message, context });
-    };
-  return { entries, debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
-}
+export { recordingLogger, type LogEntry };
 
 export interface HarnessUser {
   user: UserRecord;
@@ -88,6 +58,12 @@ export interface ServiceHarness {
   sibling(): DeckServices;
   /** Services bound to `workspaceId`, on the same database, sources, clock and locks. */
   servicesForWorkspace(workspaceId: string): DeckServices;
+  /**
+   * Services on the same database, sources, config, clock and logger, with deck locks of
+   * their own: another function instance, as on Netlify, where only the database orders
+   * what two instances do to a deck.
+   */
+  otherInstance(workspaceId?: string): DeckServices;
   /** Creates a user with a workspace of their own (directly, bypassing invites). */
   createUser(displayName: string, role?: UserRole): Promise<HarnessUser>;
   /** The auth service on the same database, config, clock and logger. */
@@ -148,6 +124,8 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     logger,
     sibling: build,
     servicesForWorkspace,
+    otherInstance: (workspaceId = LOCAL_WORKSPACE_ID) =>
+      createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks: new KeyedMutex() }),
     createUser: async (displayName, role = 'member') => {
       const user = await repos.users.create({ displayName, role });
       return { user, services: servicesForWorkspace(user.workspaceId) };
@@ -157,7 +135,7 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
 }
 
 export const BLUE_FARM_PUBLIC_ID = 'BlueFarmTestDeck000001';
-export const BLUE_FARM_URL = `https://moxfield.com/decks/${BLUE_FARM_PUBLIC_ID}`;
+export const BLUE_FARM_URL = moxfieldDeckUrl(BLUE_FARM_PUBLIC_ID);
 
 /** Primer of {@link blueFarmSpec}, using Moxfield directives. */
 export const BLUE_FARM_PRIMER = [
@@ -212,7 +190,7 @@ export function moveCard(
   to: 'mainboard' | 'considering' | 'sideboard',
 ): MoxDeckSpec {
   const source = spec[from] ?? [];
-  const entry = source.find((card) => specName(card) === name);
+  const entry = source.find((card) => cardSpecName(card) === name);
   if (entry === undefined) throw new Error(`${name} is not in ${from}`);
   return {
     ...spec,
@@ -221,54 +199,90 @@ export function moveCard(
   };
 }
 
-function specName(card: MoxCardSpec): string {
-  return typeof card === 'string' ? card.replace(/^\d+\s+/, '') : card.name;
-}
-
 /** Narrows away `null`/`undefined`, failing the test with `what` otherwise. */
 export function defined<T>(value: T | null | undefined, what = 'value'): T {
   if (value === null || value === undefined) throw new Error(`Expected ${what} to be defined`);
   return value;
 }
 
-/** Puts `spec` on the fake Moxfield and tracks it; returns the deck id. */
+/**
+ * Puts `spec` on the fake Moxfield and tracks it (through `services`, default the
+ * harness's); returns the deck id.
+ */
 export async function trackDeck(
   harness: ServiceHarness,
   spec: MoxDeckSpec = blueFarmSpec(),
+  services: DeckServices = harness.services,
 ): Promise<string> {
   harness.api.setDeck(spec);
-  const outcome = await harness.services.trackDeck(`https://moxfield.com/decks/${spec.publicId}`);
+  const outcome = await services.trackDeck(moxfieldDeckUrl(spec.publicId));
   if (!outcome.ok) throw new Error(`Tracking failed: ${outcome.reason}`);
   return outcome.deckId;
 }
 
-/** Publishes `spec` on the fake Moxfield, waits out the refresh cooldown and refreshes. */
+/**
+ * Publishes `spec` on the fake Moxfield, waits out the refresh cooldown and refreshes
+ * (through `services`, default the harness's).
+ */
 export async function publishAndRefresh(
   harness: ServiceHarness,
   deckId: string,
   spec: MoxDeckSpec,
+  services: DeckServices = harness.services,
 ): Promise<FetchOutcome> {
   harness.api.setDeck(spec);
   harness.clock.advance(60);
-  return harness.services.refresh(deckId, 'manual');
+  return services.refresh(deckId, 'manual');
 }
 
-/** Commits the working state exactly as the deck overview presents it for review. */
+/**
+ * Commits the working state exactly as the deck overview presents it for review (through
+ * `services`, default the harness's).
+ */
 export async function commitReviewed(
   harness: ServiceHarness,
   deckId: string,
   message: string,
   tags?: string[],
+  services: DeckServices = harness.services,
 ): Promise<CommitOutcome> {
-  const overview = defined(await harness.services.getOverview(deckId), 'overview');
-  const working = defined(overview.working, 'working state');
   harness.clock.advance(1);
-  return harness.services.commit(deckId, {
-    message,
-    expectedObservationId: working.id,
-    expectedHeadCommitId: overview.head?.commitId ?? null,
-    ...(tags ? { tags } : {}),
-  });
+  return commitWorkingState(services, deckId, { message, ...(tags ? { tags } : {}) });
+}
+
+/** The next Moxfield version of `base` (default Blue Farm) with Dress Down cut to Considering. */
+export function withDressDownCut(base: MoxDeckSpec = blueFarmSpec()): MoxDeckSpec {
+  return moveCard({ ...base, version: (base.version ?? 1) + 1 }, 'Dress Down', 'mainboard', 'considering');
+}
+
+/**
+ * Tracks `spec` (default Blue Farm) and commits two versions: `Initial version` (with
+ * `v1Tags`) and `Cut Dress Down` ({@link withDressDownCut}). Through `services`, default
+ * the harness's.
+ */
+export async function twoVersionHistory(
+  harness: ServiceHarness,
+  options: { spec?: MoxDeckSpec; services?: DeckServices; v1Tags?: string[] } = {},
+): Promise<{ deckId: string; v1: VersionRefDTO; v2: VersionRefDTO }> {
+  const { spec = blueFarmSpec(), services, v1Tags } = options;
+  const deckId = await trackDeck(harness, spec, services);
+  const v1 = committed(await commitReviewed(harness, deckId, 'Initial version', v1Tags, services));
+  await publishAndRefresh(harness, deckId, withDressDownCut(spec), services);
+  const v2 = committed(await commitReviewed(harness, deckId, 'Cut Dress Down', undefined, services));
+  return { deckId, v1, v2 };
+}
+
+/**
+ * Captures `spec` through `services` one second after the harness clock's time, like the
+ * bookmarklet does; returns the deck's id.
+ */
+export async function captureNext(
+  harness: Pick<ServiceHarness, 'clock'>,
+  services: DeckServices,
+  spec: MoxDeckSpec,
+): Promise<string> {
+  harness.clock.advance(1);
+  return captureSpec(services, spec, harness.clock.iso());
 }
 
 /** The version of a successful commit; fails the test for any other outcome. */

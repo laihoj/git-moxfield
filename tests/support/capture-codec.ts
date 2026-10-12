@@ -4,13 +4,11 @@
  */
 import { gzipSync } from 'node:zlib';
 
-import { CAPTURE_GZIP_TAG } from '@/integrations/moxfield/capture-codec-protocol';
-import {
-  CAPTURE_ENVELOPE_KIND,
-  CAPTURE_PROTOCOL_VERSION,
-  type CaptureEnvelope,
-} from '@/integrations/moxfield/capture-protocol';
-import { v1Primer, v3Deck } from '@/integrations/moxfield/test-fixtures';
+import { CAPTURE_GZIP_TAG, MAX_ENCODED_CAPTURE_CHARS } from '@/integrations/moxfield/capture-codec-protocol';
+import { fixtureCaptureEnvelope, v1Primer } from '@/integrations/moxfield/test-fixtures';
+
+/** Netlify's cap on a function's request payload (ADR 0008). */
+export const NETLIFY_MAX_PAYLOAD_BYTES = 6_000_000;
 
 /** Text outside ASCII and the BMP, to catch any encoding that is not UTF-8 end to end. */
 export const UNICODE_SAMPLE = 'Æther Vial, Lim-Dûl, 「龍」, Sigarda 🐉, “quotes”,   and \\ "escapes"';
@@ -19,17 +17,7 @@ export const UNICODE_SAMPLE = 'Æther Vial, Lim-Dûl, 「龍」, Sigarda 🐉, �
 export function envelopeJson(): string {
   const primer = v1Primer();
   primer.content = `${primer.content}\n\n${UNICODE_SAMPLE}`;
-  const envelope: CaptureEnvelope = {
-    kind: CAPTURE_ENVELOPE_KIND,
-    version: CAPTURE_PROTOCOL_VERSION,
-    source: 'moxfield',
-    pageUrl: 'https://moxfield.com/decks/FixtureDeckId_00000001',
-    capturedAt: '2026-10-10T12:00:00.000Z',
-    deck: v3Deck(),
-    primer,
-    primerError: null,
-  };
-  return JSON.stringify(envelope);
+  return JSON.stringify(fixtureCaptureEnvelope({ capturedAt: '2026-10-10T12:00:00.000Z', primer }));
 }
 
 /** Mostly ASCII, plus characters of 2, 3 and 4 bytes in UTF-8 (the last one is 2 UTF-16 units). */
@@ -70,4 +58,14 @@ export function gzipPayload(bytes: Uint8Array | string): string {
     CAPTURE_GZIP_TAG +
     gzipSync(typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes).toString('base64url')
   );
+}
+
+/** The largest compressed payload the decoder accepts (its data need not be valid gzip). */
+export function largestEncodedPayload(): string {
+  return CAPTURE_GZIP_TAG + 'A'.repeat(MAX_ENCODED_CAPTURE_CHARS - CAPTURE_GZIP_TAG.length);
+}
+
+/** A `CompressionStream` that cannot be constructed (`new` on a function that throws). */
+export function brokenCompressionStream(): never {
+  throw new TypeError('CompressionStream is broken');
 }

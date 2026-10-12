@@ -1,21 +1,26 @@
 import type { MetadataRoute } from 'next';
 
+import { APP_DESCRIPTION, APP_NAME, PNG_ICONS, THEME, type PngIconName } from '@/lib/brand';
+
 /** Web app manifest: installable as a standalone app on phones and desktops (no service worker). */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'git-moxfield',
-    short_name: 'git-moxfield',
-    description: 'Version control, semantic diffs and history for Moxfield decks.',
+    name: APP_NAME,
+    short_name: APP_NAME,
+    description: APP_DESCRIPTION,
     start_url: '/',
     scope: '/',
     display: 'standalone',
-    background_color: '#f6f6f8',
-    theme_color: '#f6f6f8',
+    background_color: THEME.light.bg,
+    theme_color: THEME.light.bg,
     categories: ['games', 'utilities'],
     icons: [
-      { src: '/icons/192', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: '/icons/512', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: '/icons/maskable-512', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ...(Object.keys(PNG_ICONS) as PngIconName[]).map((name) => ({
+        src: `/icons/${name}`,
+        sizes: `${PNG_ICONS[name].size}x${PNG_ICONS[name].size}`,
+        type: 'image/png',
+        purpose: PNG_ICONS[name].shape === 'rounded' ? ('any' as const) : ('maskable' as const),
+      })),
       { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
     ],
   };

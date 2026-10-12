@@ -3,10 +3,11 @@
 import clsx from 'clsx';
 import { ChevronDown, GitCompareArrows } from 'lucide-react';
 import type { Route } from 'next';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { buttonClasses } from '@/components/ui/button';
 import { Link } from '@/components/ui/navigation';
+import { useDismiss } from '@/components/ui/use-dismiss';
 
 export interface CompareMenuItem {
   label: string;
@@ -17,8 +18,8 @@ export interface CompareMenuItem {
 
 /**
  * "Compare…" button with a small menu of comparisons (with previous, with the current
- * Moxfield deck, ...). Closes on outside click, Escape and selection; arrow keys move
- * between items.
+ * Moxfield deck, ...). Closes on outside click, Escape, focus leaving it and selection;
+ * arrow keys move between items.
  */
 export function CompareMenu({ items }: { items: readonly CompareMenuItem[] }) {
   const [open, setOpen] = useState(false);
@@ -26,24 +27,13 @@ export function CompareMenu({ items }: { items: readonly CompareMenuItem[] }) {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
 
+  const close = useCallback(() => {
+    setOpen(false);
+  }, []);
+  useDismiss({ open, onDismiss: close, root, returnFocus: button });
+
   useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent): void => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        button.current?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    root.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    if (open) root.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   }, [open]);
 
   function moveFocus(direction: 1 | -1): void {
@@ -94,9 +84,7 @@ export function CompareMenu({ items }: { items: readonly CompareMenuItem[] }) {
               href={item.href}
               role="menuitem"
               className="flex min-h-11 flex-col justify-center rounded-lg px-3 py-2 text-sm text-fg outline-none hover:bg-surface-2 focus-visible:bg-surface-2"
-              onClick={() => {
-                setOpen(false);
-              }}
+              onClick={close}
             >
               <span className="font-medium">{item.label}</span>
               {item.detail !== undefined && (

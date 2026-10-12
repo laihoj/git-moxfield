@@ -2,9 +2,10 @@
 
 import clsx from 'clsx';
 import type { Route } from 'next';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 
 import { Link } from '@/components/ui/navigation';
+import { useRestartableTimeout } from '@/components/ui/use-timeout';
 import { scryfallImageUrl } from '@/lib/scryfall';
 
 const HOVER_QUERY = '(hover: hover) and (pointer: fine)';
@@ -76,14 +77,7 @@ export function CardName({ name, scryfallId, href, className }: CardNameProps) {
   const [position, setPosition] = useState<PreviewPosition | null>(null);
   const [failed, setFailed] = useState(false);
   const anchor = useRef<HTMLSpanElement>(null);
-  const timer = useRef<number | undefined>(undefined);
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(timer.current);
-    },
-    [],
-  );
+  const showTimeout = useRestartableTimeout();
 
   const label =
     href === undefined ? (
@@ -102,14 +96,13 @@ export function CardName({ name, scryfallId, href, className }: CardNameProps) {
   }
 
   const show = (): void => {
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    showTimeout.start(() => {
       const rect = anchor.current?.getBoundingClientRect();
       if (rect !== undefined) setPosition(previewPosition(rect));
     }, SHOW_DELAY_MS);
   };
   const hide = (): void => {
-    window.clearTimeout(timer.current);
+    showTimeout.cancel();
     setPosition(null);
   };
 

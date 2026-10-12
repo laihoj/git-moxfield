@@ -3,8 +3,9 @@ import { FileQuestion } from 'lucide-react';
 import { Fragment, useId } from 'react';
 
 import type { PrimerDiff, PrimerDiffLine, PrimerHunk } from '@/core/primer/types';
-import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { MINUS_SIGN, pluralize } from '@/lib/format';
+
+import { PrimerLineCounts } from './primer-line-counts';
 
 export interface PrimerDiffViewProps {
   diff: PrimerDiff;
@@ -54,17 +55,7 @@ export function PrimerDiffView({ diff, className }: PrimerDiffViewProps) {
   return (
     <div className={clsx('primer-diff-root flex flex-col gap-3', className)}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <MetaList aria-label="Primer lines changed" className="text-sm font-medium text-subtle tabular">
-          <MetaItem>
-            <span className="text-add">+{pluralize(diff.addedLines, 'line')}</span>
-          </MetaItem>
-          <MetaItem>
-            <span className="text-remove">
-              {MINUS_SIGN}
-              {pluralize(diff.removedLines, 'line')}
-            </span>
-          </MetaItem>
-        </MetaList>
+        <PrimerLineCounts added={diff.addedLines} removed={diff.removedLines} />
         <span className="flex items-center gap-2 text-xs text-muted">
           <input id={toggleId} type="checkbox" className="size-4 accent-(--accent)" />
           <label htmlFor={toggleId} className="cursor-pointer select-none">

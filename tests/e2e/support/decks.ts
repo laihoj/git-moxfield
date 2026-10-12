@@ -8,7 +8,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import type { Page, TestInfo } from '@playwright/test';
+import type { Locator, Page, TestInfo } from '@playwright/test';
 
 import { blueFarmDeck } from '../../mock-moxfield/scenarios';
 
@@ -18,6 +18,22 @@ import { mockMoxfield, type MoxDeckSpec } from './mock';
 
 /** Paths of the app's deck pages: `/decks/{deckId}` without anything after it. */
 export const DECK_PAGE_PATH = /^\/decks\/[^/?#]+$/;
+
+/** The URL of a deck page a capture has just landed on: `/decks/{deckId}?captured=1`. */
+export const CAPTURED_DECK_URL = new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`);
+
+/**
+ * The deck's navigation: Status · History · Compare · Cards (owner) or Overview · … (viewer
+ * of a share link), as top tabs or, on a phone, a bottom bar.
+ */
+export function deckNav(page: Page): Locator {
+  return page.getByRole('navigation', { name: 'Deck' });
+}
+
+/** A heading of the Status page ("Not committed yet", "Up to date with v1", "Uncommitted changes"). */
+export function statusHeading(page: Page, label: string): Locator {
+  return page.getByRole('heading', { level: 2, name: label });
+}
 
 /**
  * Puts a copy of the seeded Blue Farm deck (100 cards, 12 considered, 2 in the
@@ -66,6 +82,36 @@ export async function commitVersion(
     await expect(page.getByRole('button', { name: `Remove tag ${tag}` })).toBeVisible();
   }
   await page.getByRole('button', { name: `Commit v${sequence}` }).click();
+}
+
+export interface TrackAndCommitOptions {
+  /** The deck's name on the mock Moxfield. Default: `Blue Farm`. */
+  name?: string;
+  /** The commit message of v1. */
+  message: string;
+  /**
+   * What confirms the commit: the `Committed v1` toast, or the Status page's `Up to date
+   * with v1` heading.
+   */
+  confirm: 'toast' | 'status';
+}
+
+/**
+ * The preamble of most journeys: a copy of Blue Farm on the mock Moxfield, tracked as it
+ * is by the signed-in user of `page`, and committed as v1. A journey that edits the deck
+ * before tracking it, or asserts something between the steps, does them one by one.
+ */
+export async function trackAndCommitV1(
+  page: Page,
+  testInfo: TestInfo,
+  { name, message, confirm }: TrackAndCommitOptions,
+): Promise<{ deck: MoxDeckSpec; deckId: string }> {
+  const deck = await createBlueFarmCopy(testInfo, name);
+  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
+  await commitVersion(page, { sequence: 1, message });
+  if (confirm === 'toast') await expect(page.getByText('Committed v1')).toBeVisible();
+  else await expect(statusHeading(page, 'Up to date with v1')).toBeVisible();
+  return { deck, deckId };
 }
 
 /**

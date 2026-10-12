@@ -6,6 +6,8 @@
  * know about are preserved as `other:<slug>` instead of being dropped.
  */
 
+import { upperFirst } from './text';
+
 /** Canonical zone order. Serialization, diffs and UI all follow this order. */
 export const KNOWN_ZONES = [
   'commanders',
@@ -46,16 +48,19 @@ const ZONE_LABELS: Record<KnownZone, string> = {
   tokens: 'Tokens',
 };
 
+/** The command zone: set with deck-page actions rather than listed, and shown flat (few cards). */
+const COMMAND_ZONES = ['commanders', 'companions', 'signatureSpells'] as const satisfies readonly KnownZone[];
+
+/** True for the zones of the command zone (see {@link COMMAND_ZONES}). */
+export function isCommandZone(zone: ZoneId): boolean {
+  return (COMMAND_ZONES as readonly ZoneId[]).includes(zone);
+}
+
 /**
  * Zones whose cards are part of the playable deck. Sideboard and considering are
  * "tracked but not played" zones; they act as the user's record of explored cards.
  */
-const PLAYED_ZONES: ReadonlySet<ZoneId> = new Set<ZoneId>([
-  'commanders',
-  'companions',
-  'signatureSpells',
-  'mainboard',
-]);
+const PLAYED_ZONES: ReadonlySet<ZoneId> = new Set<ZoneId>([...COMMAND_ZONES, 'mainboard']);
 
 export function isKnownZone(zone: string): zone is KnownZone {
   return KNOWN_ZONE_SET.has(zone);
@@ -90,8 +95,7 @@ export function otherZone(sourceBoardName: string): OtherZone {
 export function zoneLabel(zone: ZoneId): string {
   if (isKnownZone(zone)) return ZONE_LABELS[zone];
   const slug = zone.slice('other:'.length);
-  const words = slug.split('-').filter(Boolean).join(' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
+  return upperFirst(slug.split('-').filter(Boolean).join(' '));
 }
 
 /** True for zones whose cards are part of the playable deck (commanders, companions, signature spells, mainboard). */
@@ -110,4 +114,9 @@ export function compareZones(a: ZoneId, b: ZoneId): number {
 /** Returns a new array of the zones in canonical order (see {@link compareZones}). */
 export function sortZones<T extends ZoneId>(zones: Iterable<T>): T[] {
   return [...zones].sort(compareZones);
+}
+
+/** The entries of a zone-keyed map as a new array in canonical zone order (see {@link compareZones}). */
+export function zoneEntries<V>(map: ReadonlyMap<ZoneId, V>): [ZoneId, V][] {
+  return [...map].sort(([a], [b]) => compareZones(a, b));
 }

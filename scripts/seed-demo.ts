@@ -26,24 +26,19 @@
  */
 import { parseArgs } from 'node:util';
 
+import { absoluteAppUrl } from '@/core/http-url';
+import type { CapturedIngestMethod } from '@/integrations/deck-source';
+import { routes } from '@/lib/routes';
 import { createAuthService, SYSTEM_ACTOR } from '@/server/auth/service';
-import { getConfig, parseConfig } from '@/server/config';
-import { createLogger, type Logger } from '@/server/logger';
 import { createRepositories, type Repositories, type UserRecord } from '@/server/repositories';
-import { createServices, type DeckServices } from '@/server/services';
-import { createDeckSourceRegistry } from '@/server/sources';
-import {
-  buildCaptureEnvelope,
-  buildMoxfieldDeck,
-  buildMoxfieldPrimer,
-  FakeMoxfieldApi,
-  type MoxCardSpec,
-  type MoxDeckSpec,
-} from '@tests/support/moxfield-deck-builder';
+import type { DeckServices } from '@/server/services';
+import { cardWithFacts } from '@tests/support/card-facts';
+import { ManualClock } from '@tests/support/clock';
+import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
+import { FakeMoxfieldApi, type MoxCardSpec, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 
-import { describeConfiguredDatabase, openConfiguredDatabase } from './database';
-import { isEntryPoint, runMain } from './cli';
-import { loadEnvFiles } from './load-env';
+import { consoleIO, isEntryPoint, quietLogger, resolveBaseUrl, runMain } from './cli';
+import { describeConfiguredDatabase, loadConfigOrReport, openConfiguredDatabaseOrReport } from './database';
 
 /** Moxfield-style public id of the demo deck (not a real Moxfield deck). */
 export const DEMO_PUBLIC_ID = 'gitMoxfieldDemoBlueFarm';
@@ -51,148 +46,10 @@ export const DEMO_PUBLIC_ID = 'gitMoxfieldDemoBlueFarm';
 /** Display name of the demo user who owns the demo deck. */
 export const DEMO_USER_NAME = 'Demo';
 
-/** Base URL printed in the sign-in link when `PUBLIC_APP_URL` is not set. */
-const DEFAULT_APP_URL = 'http://localhost:3000';
-
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 
 type Board = 'mainboard' | 'considering' | 'sideboard';
-
-/** Type line and mana cost of every card the demo uses (display data for the UI). */
-const CARDS: Record<string, readonly [typeLine: string, manaCost: string]> = {
-  // Commanders
-  'Tymna the Weaver': ['Legendary Creature — Human Cleric', '{1}{W}{B}'],
-  "Kraum, Ludevic's Opus": ['Legendary Creature — Zombie Horror', '{3}{U}{R}'],
-  // Lands
-  'Underground Sea': ['Land — Island Swamp', ''],
-  'Volcanic Island': ['Land — Island Mountain', ''],
-  Tundra: ['Land — Plains Island', ''],
-  Scrubland: ['Land — Plains Swamp', ''],
-  Badlands: ['Land — Swamp Mountain', ''],
-  Plateau: ['Land — Mountain Plains', ''],
-  'Watery Grave': ['Land — Island Swamp', ''],
-  'Steam Vents': ['Land — Island Mountain', ''],
-  'Hallowed Fountain': ['Land — Plains Island', ''],
-  'Godless Shrine': ['Land — Plains Swamp', ''],
-  'Blood Crypt': ['Land — Swamp Mountain', ''],
-  'Sacred Foundry': ['Land — Mountain Plains', ''],
-  'Polluted Delta': ['Land', ''],
-  'Flooded Strand': ['Land', ''],
-  'Scalding Tarn': ['Land', ''],
-  'Bloodstained Mire': ['Land', ''],
-  'Marsh Flats': ['Land', ''],
-  'Arid Mesa': ['Land', ''],
-  'Misty Rainforest': ['Land', ''],
-  'Verdant Catacombs': ['Land', ''],
-  'Command Tower': ['Land', ''],
-  'City of Brass': ['Land', ''],
-  'Mana Confluence': ['Land', ''],
-  'Ancient Tomb': ['Land', ''],
-  'Gemstone Caverns': ['Legendary Land', ''],
-  'Otawara, Soaring City': ['Legendary Land', ''],
-  Island: ['Basic Land — Island', ''],
-  Swamp: ['Basic Land — Swamp', ''],
-  // Fast mana
-  'Sol Ring': ['Artifact', '{1}'],
-  'Mana Vault': ['Artifact', '{1}'],
-  'Chrome Mox': ['Artifact', '{0}'],
-  'Mox Diamond': ['Artifact', '{0}'],
-  'Lotus Petal': ['Artifact', '{0}'],
-  "Lion's Eye Diamond": ['Artifact', '{0}'],
-  'Arcane Signet': ['Artifact', '{2}'],
-  'Fellwar Stone': ['Artifact', '{2}'],
-  'Talisman of Dominance': ['Artifact', '{2}'],
-  'Grim Monolith': ['Artifact', '{2}'],
-  'Dark Ritual': ['Instant', '{B}'],
-  'Cabal Ritual': ['Instant', '{1}{B}'],
-  'Rite of Flame': ['Sorcery', '{R}'],
-  // Tutors
-  'Demonic Tutor': ['Sorcery', '{1}{B}'],
-  'Vampiric Tutor': ['Instant', '{B}'],
-  'Imperial Seal': ['Sorcery', '{B}'],
-  'Mystical Tutor': ['Instant', '{U}'],
-  'Enlightened Tutor': ['Instant', '{W}'],
-  Gamble: ['Sorcery', '{R}'],
-  'Personal Tutor': ['Sorcery', '{U}'],
-  'Merchant Scroll': ['Sorcery', '{1}{U}'],
-  'Grim Tutor': ['Sorcery', '{1}{B}{B}'],
-  'Diabolic Intent': ['Sorcery', '{1}{B}'],
-  'Tainted Pact': ['Instant', '{1}{B}'],
-  'Demonic Consultation': ['Instant', '{B}'],
-  // Win conditions and engines
-  "Thassa's Oracle": ['Creature — Merfolk Wizard', '{U}{U}'],
-  'Underworld Breach': ['Enchantment', '{1}{R}'],
-  'Brain Freeze': ['Instant', '{1}{U}'],
-  Doomsday: ['Instant', '{B}{B}{B}'],
-  'Ad Nauseam': ['Instant', '{3}{B}{B}'],
-  // Card draw
-  'Rhystic Study': ['Enchantment', '{2}{U}'],
-  'Mystic Remora': ['Enchantment', '{U}'],
-  Necropotence: ['Enchantment', '{B}{B}{B}'],
-  'Gitaxian Probe': ['Sorcery', '{U/P}'],
-  Gush: ['Instant', '{4}{U}'],
-  Brainstorm: ['Instant', '{U}'],
-  Ponder: ['Sorcery', '{U}'],
-  Preordain: ['Sorcery', '{U}'],
-  "Night's Whisper": ['Sorcery', '{1}{B}'],
-  'Wheel of Fortune': ['Sorcery', '{2}{R}'],
-  "Jeska's Will": ['Sorcery', '{2}{R}'],
-  // Interaction
-  'Force of Will': ['Instant', '{3}{U}{U}'],
-  'Force of Negation': ['Instant', '{1}{U}{U}'],
-  'Fierce Guardianship': ['Instant', '{2}{U}'],
-  'Deflecting Swat': ['Instant', '{2}{R}'],
-  'Pact of Negation': ['Instant', '{0}'],
-  'Mental Misstep': ['Instant', '{U/P}'],
-  Flusterstorm: ['Instant', '{U}'],
-  'Swan Song': ['Instant', '{U}'],
-  'Mindbreak Trap': ['Instant — Trap', '{2}{U}{U}'],
-  'Spell Pierce': ['Instant', '{U}'],
-  Counterspell: ['Instant', '{U}{U}'],
-  'Mana Drain': ['Instant', '{U}{U}'],
-  "An Offer You Can't Refuse": ['Instant', '{U}'],
-  Pyroblast: ['Instant', '{R}'],
-  'Red Elemental Blast': ['Instant', '{R}'],
-  Silence: ['Instant', '{W}'],
-  'Swords to Plowshares': ['Instant', '{W}'],
-  'Dress Down': ['Enchantment', '{1}{U}'],
-  Snap: ['Instant', '{1}{U}'],
-  Stifle: ['Instant', '{U}'],
-  // Creatures
-  'Ragavan, Nimble Pilferer': ['Legendary Creature — Monkey Pirate', '{R}'],
-  'Dauthi Voidwalker': ['Creature — Dauthi Minion', '{B}{B}'],
-  'Orcish Bowmasters': ['Creature — Orc Archer', '{1}{B}'],
-  'Grand Abolisher': ['Creature — Human Cleric', '{W}{W}'],
-  'Drannith Magistrate': ['Creature — Human Wizard', '{1}{W}'],
-  'Opposition Agent': ['Creature — Human Rogue', '{2}{B}'],
-  'Esper Sentinel': ['Artifact Creature — Human Soldier', '{W}'],
-  Spellseeker: ['Creature — Human Wizard', '{2}{U}'],
-  'Snapcaster Mage': ['Creature — Human Wizard', '{1}{U}'],
-  'Notion Thief': ['Creature — Human Rogue', '{2}{U}{B}'],
-  // The "Broodlord package" (creature-based value engine, tested in v5)
-  'Dark Confidant': ['Creature — Human Wizard', '{1}{B}'],
-  'Professional Face-Breaker': ['Creature — Human Warrior', '{2}{R}'],
-  'Scrawling Crawler': ['Artifact Creature — Phyrexian Construct', '{3}'],
-  // Considering and sideboard
-  'Mnemonic Betrayal': ['Sorcery', '{1}{U}{B}'],
-  'Peer into the Abyss': ['Sorcery', '{4}{B}{B}{B}'],
-  'Beseech the Mirror': ['Sorcery', '{1}{B}{B}{B}'],
-  'Final Fortune': ['Instant', '{R}{R}'],
-  'Borne Upon a Wind': ['Instant', '{1}{U}'],
-  "Praetor's Grasp": ['Sorcery', '{1}{B}{B}'],
-  'Culling the Weak': ['Instant', '{B}'],
-  'Mox Amber': ['Legendary Artifact', '{0}'],
-  "Sevinne's Reclamation": ['Sorcery', '{W}'],
-  'Laboratory Maniac': ['Creature — Human Wizard', '{2}{U}'],
-  Grief: ['Creature — Elemental Incarnation', '{2}{B}{B}'],
-  'Snuff Out': ['Instant', '{3}{B}'],
-  'Cyclonic Rift': ['Instant', '{1}{U}'],
-  Windfall: ['Sorcery', '{2}{U}'],
-  'Sink into Stupor // Soporific Springs': ['Instant // Land', '{1}{U}{U}'],
-  'Toxic Deluge': ['Sorcery', '{2}{B}'],
-  Pyroclasm: ['Sorcery', '{1}{R}'],
-};
 
 const INITIAL_MAINBOARD = [
   // Lands (28)
@@ -264,12 +121,9 @@ Keep any seven with fast mana and a tutor. Ship hands that need three lands to f
 /** A card entry with explicit display data (the builder's object form). */
 type MoxCardEntry = Exclude<MoxCardSpec, string>;
 
-/** One Moxfield card entry: the demo's type line and mana cost for the card. */
+/** One Moxfield card entry: the card with its type line and mana cost (display data for the UI). */
 function card(name: string): MoxCardEntry {
-  const facts = CARDS[name];
-  if (facts === undefined) throw new Error(`Unknown demo card: ${name}`);
-  const [typeLine, manaCost] = facts;
-  return { name, typeLine, manaCost };
+  return cardWithFacts(name);
 }
 
 /** The demo deck as it is "on Moxfield", edited step by step like a real deck. */
@@ -338,7 +192,7 @@ class DemoDeck {
 interface DemoVersion {
   day: number;
   message: string;
-  method?: 'browser-capture' | 'manual-paste';
+  method?: CapturedIngestMethod;
   tags?: string[];
   note?: string;
   edit?: (deck: DemoDeck) => void;
@@ -468,24 +322,6 @@ export async function ensureDemoUser(repos: Repositories): Promise<UserRecord> {
   return repos.users.create({ displayName: DEMO_USER_NAME, role: 'admin' });
 }
 
-/** A clock the seed moves forward explicitly; the services must be created with its `now`. */
-export class DemoClock {
-  constructor(private ms: number) {}
-  readonly now = (): Date => new Date(this.ms);
-  set(ms: number): void {
-    this.ms = ms;
-  }
-  advance(ms: number): void {
-    this.ms += ms;
-  }
-}
-
-/** Services log info lines for every capture and commit; keep the script's output short. */
-function quietLogger(): Logger {
-  const logger = createLogger('seed-demo');
-  return { ...logger, debug: () => undefined, info: () => undefined };
-}
-
 /**
  * Hands the deck's current state to git-moxfield like a user would: the bookmarklet's
  * capture envelope, or the two API responses pasted into /capture?mode=paste.
@@ -493,18 +329,12 @@ function quietLogger(): Logger {
 async function capture(
   services: DeckServices,
   deck: DemoDeck,
-  clock: DemoClock,
-  method: 'browser-capture' | 'manual-paste',
+  clock: ManualClock,
+  method: CapturedIngestMethod,
 ): Promise<string> {
   // Edited on Moxfield 25 minutes before it was sent to git-moxfield.
   const spec = deck.spec(new Date(clock.now().getTime() - 25 * MINUTE_MS));
-  const data =
-    method === 'browser-capture'
-      ? buildCaptureEnvelope(spec, clock.now().toISOString())
-      : { deck: JSON.stringify(buildMoxfieldDeck(spec)), primer: JSON.stringify(buildMoxfieldPrimer(spec)) };
-  const outcome = await services.ingestCapture({ data, method, track: true });
-  if (outcome.status !== 'ingested') throw new Error('The demo capture was not ingested');
-  return outcome.deckId;
+  return captureSpec(services, spec, clock.iso(), method);
 }
 
 /**
@@ -512,7 +342,7 @@ async function capture(
  * `end` (epoch ms), with tags and notes, then leaves uncommitted changes on top. The
  * services must use `clock.now` as their clock. Returns the deck id.
  */
-export async function seedDemoDeck(services: DeckServices, clock: DemoClock, end: number): Promise<string> {
+export async function seedDemoDeck(services: DeckServices, clock: ManualClock, end: number): Promise<string> {
   // Midnight UTC ten weeks ago; versions are committed in the (UTC) evening.
   const start = Math.floor(end / DAY_MS) * DAY_MS - 70 * DAY_MS;
   const deck = new DemoDeck();
@@ -525,13 +355,9 @@ export async function seedDemoDeck(services: DeckServices, clock: DemoClock, end
     }
     deckId = await capture(services, deck, clock, version.method ?? 'browser-capture');
 
-    clock.advance(3 * MINUTE_MS);
-    const overview = await services.getOverview(deckId);
-    if (!overview?.working) throw new Error('The demo deck has no working state');
-    const outcome = await services.commit(deckId, {
+    clock.advanceMs(3 * MINUTE_MS);
+    const outcome = await commitWorkingState(services, deckId, {
       message: version.message,
-      expectedObservationId: overview.working.id,
-      expectedHeadCommitId: overview.head?.commitId ?? null,
       ...(version.tags ? { tags: version.tags } : {}),
     });
     if (!outcome.ok) throw new Error(`Committing "${version.message}" failed: ${outcome.message}`);
@@ -555,30 +381,27 @@ async function main(): Promise<number> {
     );
     return 1;
   }
-  loadEnvFiles();
-  const appConfig = getConfig();
+  const appConfig = loadConfigOrReport(consoleIO);
+  if (appConfig === null) return 1;
   const api = new FakeMoxfieldApi();
-  const config = parseConfig({
-    ...process.env,
-    MOXFIELD_API_BASE_URL: api.apiBaseUrl,
-    MOXFIELD_SERVER_FETCH: 'off',
-  });
-  const logger = quietLogger();
+  // The services log info lines for every capture and commit; keep the script's output short.
+  const logger = quietLogger('seed-demo');
   const end = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
-  const clock = new DemoClock(end);
+  const clock = new ManualClock(end);
 
   const where = describeConfiguredDatabase(appConfig);
-  const database = await openConfiguredDatabase(appConfig);
+  const database = await openConfiguredDatabaseOrReport(appConfig, consoleIO);
+  if (database === null) return 1;
   const { db } = database;
   try {
     const demoUser = await ensureDemoUser(createRepositories(db));
-    const services = createServices({
-      db,
-      sources: createDeckSourceRegistry(config, { fetchImpl: api.fetch, logger }),
-      config,
+    // Server fetching is off: seeding never contacts Moxfield, whose API is the fake one.
+    const services = captureOnlyServices(db, {
+      logger,
       workspaceId: demoUser.workspaceId,
       now: clock.now,
-      logger,
+      fetchImpl: api.fetch,
+      env: { ...process.env, MOXFIELD_API_BASE_URL: api.apiBaseUrl },
     });
 
     const existing = (await services.listDecks()).find(
@@ -587,7 +410,7 @@ async function main(): Promise<number> {
     if (existing) {
       if (!force) {
         console.error(
-          `The demo deck already exists at /decks/${existing.id} in the ${where}. Run with --force to replace it.`,
+          `The demo deck already exists at ${routes.deck(existing.id)} in the ${where}. Run with --force to replace it.`,
         );
         return 1;
       }
@@ -600,16 +423,17 @@ async function main(): Promise<number> {
     console.log(
       `Seeded "${overview?.name ?? 'Blue Farm (demo)'}" with ${overview?.versionCount ?? 0} versions (status: ${overview?.status ?? 'unknown'}) into the ${where}.`,
     );
-    console.log(`/decks/${deckId}`);
+    console.log(routes.deck(deckId));
 
     // Signs a browser in as the demo user (the real clock: the link must be valid now).
     const auth = createAuthService({ db, config: appConfig, logger });
     const link = await auth.createRecoveryLink(SYSTEM_ACTOR, demoUser.id);
-    const appUrl = appConfig.PUBLIC_APP_URL ?? DEFAULT_APP_URL;
+    const appUrl = resolveBaseUrl(undefined, appConfig);
+    if (appUrl === null) throw new Error('PUBLIC_APP_URL is not an absolute http(s) URL.');
     console.log(
       `\nSign in as the demo user "${demoUser.displayName}" with this one-time link (valid until ${link.expiresAt}):`,
     );
-    console.log(new URL(link.path, appUrl).href);
+    console.log(absoluteAppUrl(link.path, appUrl));
     return 0;
   } finally {
     database.close();

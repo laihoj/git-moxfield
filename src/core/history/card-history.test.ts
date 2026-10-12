@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 
 import { buildSnapshot, type SnapshotSpec } from '@tests/support/builders';
 
+import { cardName, findCard, snapshotZones } from '../canonical';
+import { renamedKeys } from '../diff/deck-diff';
+import type { CanonicalSnapshot, CardKey } from '../model';
 import { isPlayedZone, type ZoneId } from '../zones';
-import {
-  cardPointsFromSnapshots,
-  deriveCardHistory,
-  traceCardKeys,
-  type VersionedSnapshot,
-} from './card-history';
-import type { CardHistory, CardHistoryEntry, CardTransition, CardVersionPoint, ZoneQuantity } from './types';
+import { deriveCardHistory, traceCardKeys, traceCardPoints, type CardPointSource } from './card-history';
+import type {
+  CardHistory,
+  CardHistoryEntry,
+  CardTransition,
+  CardVersionPoint,
+  VersionMeta,
+  ZoneQuantity,
+} from './types';
 
 const KEY = 'dress down';
 const NAME = 'Dress Down';
@@ -73,6 +78,10 @@ describe('deriveCardHistory', () => {
         firstSeenSequence: null,
         lastSeenSequence: null,
         currentZones: [],
+        versionCount: 0,
+
+        versionsPresent: 0,
+
         versionsInPlayedZones: 0,
         timesCut: 0,
         timesRestored: 0,
@@ -92,6 +101,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: null,
       lastSeenSequence: null,
       currentZones: [],
+      versionCount: 2,
+
+      versionsPresent: 0,
+
       versionsInPlayedZones: 0,
       timesCut: 0,
       timesRestored: 0,
@@ -113,6 +126,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: null,
       lastSeenSequence: null,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 0,
+
+      versionsPresent: 0,
+
       versionsInPlayedZones: 0,
       timesCut: 0,
       timesRestored: 0,
@@ -185,6 +202,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: 19,
       lastSeenSequence: 44,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 6,
+
+      versionsPresent: 6,
+
       versionsInPlayedZones: 4,
       timesCut: 2,
       timesRestored: 2,
@@ -383,6 +404,10 @@ describe('deriveCardHistory', () => {
       firstSeenSequence: 1,
       lastSeenSequence: 1,
       currentZones: [{ zone: 'mainboard', quantity: 1 }],
+      versionCount: 2,
+
+      versionsPresent: 1,
+
       versionsInPlayedZones: 1,
       timesCut: 1,
       timesRestored: 1,
@@ -536,25 +561,57 @@ describe('deriveCardHistory', () => {
   });
 });
 
-describe('cardPointsFromSnapshots', () => {
-  function version(sequence: number | null, spec: Parameters<typeof buildSnapshot>[0]): VersionedSnapshot {
-    return {
-      commitId: sequence === null ? null : `commit-${sequence}`,
-      sequence,
-      at: '2026-01-01T00:00:00.000Z',
-      message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
-      snapshot: buildSnapshot(spec),
-    };
-  }
+/** A deck version with its full snapshot. */
+type VersionedSnapshot = VersionMeta & { snapshot: CanonicalSnapshot };
 
+/**
+ * One card's points from full snapshots: the reference the server's lazy, index-based
+ * inputs (`DeckHistory.cardHistory`) must agree with.
+ */
+function cardPointsFromSnapshots(key: CardKey, versions: readonly VersionedSnapshot[]): CardVersionPoint[] {
+  const snapshotAt = (index: number): CanonicalSnapshot | undefined => versions[index]?.snapshot;
+  return traceCardPoints(key, {
+    points: versions,
+    zonesAt: (cardKey, index) => {
+      const snapshot = snapshotAt(index);
+      if (!snapshot) return [];
+      return snapshotZones(snapshot).flatMap((zone) => {
+        const card = findCard(snapshot, zone, cardKey);
+        return card ? [{ zone, quantity: card.quantity }] : [];
+      });
+    },
+    renames: (index) => {
+      const before = snapshotAt(index - 1);
+      const after = snapshotAt(index);
+      return before && after ? renamedKeys(before, after) : new Map<CardKey, CardKey>();
+    },
+    nameAt: (cardKey, index) => {
+      const snapshot = snapshotAt(index);
+      return snapshot && cardName(snapshot, cardKey);
+    },
+  }).points;
+}
+
+/** A version of the deck as `cardPointsFromSnapshots` takes it: committed as `sequence`, or the working state when `null`. */
+function versioned(sequence: number | null, spec: Parameters<typeof buildSnapshot>[0]): VersionedSnapshot {
+  return {
+    commitId: sequence === null ? null : `commit-${sequence}`,
+    sequence,
+    at: '2026-01-01T00:00:00.000Z',
+    message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
+    snapshot: buildSnapshot(spec),
+  };
+}
+
+describe('cardPointsFromSnapshots', () => {
   it('extracts the zones holding the card, in canonical zone order', () => {
     const versions = [
-      version(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
-      version(2, {
+      versioned(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
+      versioned(2, {
         zones: { considering: ['Dress Down'], sideboard: ['2 Dress Down'], mainboard: ['Island'] },
       }),
-      version(3, { zones: { mainboard: ['Island'] } }),
-      version(null, { zones: { mainboard: ['3 Dress Down'] } }),
+      versioned(3, { zones: { mainboard: ['Island'] } }),
+      versioned(null, { zones: { mainboard: ['3 Dress Down'] } }),
     ];
 
     expect(cardPointsFromSnapshots(KEY, versions)).toEqual([
@@ -598,10 +655,10 @@ describe('cardPointsFromSnapshots', () => {
 
   it('feeds deriveCardHistory end to end', () => {
     const versions = [
-      version(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
-      version(2, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
-      version(3, { zones: { mainboard: ['Island', 'Dress Down'] } }),
-      version(null, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
+      versioned(1, { zones: { mainboard: ['Dress Down', 'Island'] } }),
+      versioned(2, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
+      versioned(3, { zones: { mainboard: ['Island', 'Dress Down'] } }),
+      versioned(null, { zones: { mainboard: ['Island'], considering: ['Dress Down'] } }),
     ];
 
     const h = deriveCardHistory({ key: KEY, name: NAME, points: cardPointsFromSnapshots(KEY, versions) });
@@ -611,6 +668,10 @@ describe('cardPointsFromSnapshots', () => {
       firstSeenSequence: 1,
       lastSeenSequence: 3,
       currentZones: [{ zone: 'considering', quantity: 1 }],
+      versionCount: 3,
+
+      versionsPresent: 3,
+
       versionsInPlayedZones: 2,
       timesCut: 2,
       timesRestored: 1,
@@ -678,17 +739,103 @@ describe('traceCardKeys', () => {
   });
 });
 
+describe('traceCardPoints', () => {
+  /** A source over point contents (key → quantity in the mainboard), recording what it was asked. */
+  function source(
+    contents: Record<string, number>[],
+    renamesInto: Record<number, Record<string, string>> = {},
+    names: Record<string, string> = {},
+  ) {
+    const calls: string[] = [];
+    const src: CardPointSource = {
+      points: contents.map((_, index) => ({
+        commitId: `commit-${index + 1}`,
+        sequence: index + 1,
+        at: `2026-01-0${index + 1}T00:00:00.000Z`,
+        message: `Version ${index + 1}`,
+      })),
+      zonesAt: (key, index) => {
+        calls.push(`zones:${key}@${index}`);
+        const quantity = contents[index]?.[key];
+        return quantity === undefined ? [] : [{ zone: 'mainboard', quantity }];
+      },
+      renames: (index) => {
+        calls.push(`renames@${index}`);
+        return new Map(Object.entries(renamesInto[index] ?? {}));
+      },
+      nameAt: (key, index) => {
+        calls.push(`name:${key}@${index}`);
+        return names[key];
+      },
+    };
+    return { src, calls };
+  }
+
+  it('gives every point its zones under the key the card had there, and the name it had before a rename', () => {
+    const { src } = source([{ old: 1 }, { old: 1 }, { new: 2 }], { 2: { old: 'new' } }, { old: 'Old Name' });
+    const { points, keys } = traceCardPoints('new', src);
+    expect(keys).toEqual(['old', 'old', 'new']);
+    expect(points.map((point) => [point.sequence, point.zones, point.renamedFrom])).toEqual([
+      [1, [{ zone: 'mainboard', quantity: 1 }], undefined],
+      [2, [{ zone: 'mainboard', quantity: 1 }], undefined],
+      [3, [{ zone: 'mainboard', quantity: 2 }], { key: 'old', name: 'Old Name' }],
+    ]);
+    expect(points[0]).toMatchObject({
+      commitId: 'commit-1',
+      at: '2026-01-01T00:00:00.000Z',
+      message: 'Version 1',
+    });
+  });
+
+  it('keeps the requested key at every point of a card the deck never had', () => {
+    const { src } = source([{ x: 1 }, {}]);
+    const { points, keys } = traceCardPoints('missing', src);
+    expect(keys).toEqual(['missing', 'missing']);
+    expect(points.map((point) => point.zones)).toEqual([[], []]);
+  });
+
+  it('names a renamed card by its key when the source has no name for it, and calls the source as an object', () => {
+    class Source implements CardPointSource {
+      readonly points = source([{ old: 1 }, { new: 1 }]).src.points;
+      readonly #renames = new Map([['old', 'new']]);
+      zonesAt(key: string, index: number): ZoneQuantity[] {
+        return (index === 0 ? key === 'old' : key === 'new') ? [{ zone: 'mainboard', quantity: 1 }] : [];
+      }
+      renames(): ReadonlyMap<string, string> {
+        return this.#renames;
+      }
+      nameAt(): string | undefined {
+        return undefined;
+      }
+    }
+    expect(traceCardPoints('new', new Source()).points[1]?.renamedFrom).toEqual({ key: 'old', name: 'old' });
+  });
+
+  it('asks for renames and names only where the card was renamed', () => {
+    const { src, calls } = source([{ a: 1 }, { a: 1 }, { a: 1 }]);
+    traceCardPoints('a', src);
+    expect(calls.filter((call) => call.startsWith('renames') || call.startsWith('name:'))).toEqual([]);
+  });
+
+  it('lets what a source throws through, so a lazy source can abort the run and start over', () => {
+    const missing = new Error('not loaded yet');
+    const { src } = source([{ a: 1 }, { a: 1 }]);
+    expect(() =>
+      traceCardPoints('a', {
+        ...src,
+        zonesAt: (key, index) => {
+          if (index === 1) throw missing;
+          return src.zonesAt(key, index);
+        },
+      }),
+    ).toThrow(missing);
+  });
+});
+
 describe('cardPointsFromSnapshots across renames', () => {
   const vial = (name: string) => ({ name, ids: { moxfield: 'vial-id' } });
-  function version(sequence: number | null, zones: SnapshotSpec['zones']): VersionedSnapshot {
-    return {
-      commitId: sequence === null ? null : `commit-${sequence}`,
-      sequence,
-      at: '2026-01-01T00:00:00.000Z',
-      message: sequence === null ? 'Current Moxfield deck' : `Version ${sequence}`,
-      snapshot: buildSnapshot({ zones }),
-    };
-  }
+  const version = (sequence: number | null, zones: SnapshotSpec['zones']): VersionedSnapshot =>
+    versioned(sequence, { zones });
 
   const versions = [
     version(1, { mainboard: ['Island', vial('Æther Vial')] }),

@@ -10,17 +10,12 @@
  * libsql-server binary (`sqld --db-path <dir> --http-listen-addr 127.0.0.1:8080`) or
  * `turso dev`. LIBSQL_TEST_AUTH_TOKEN is passed on when set.
  */
-import { fileURLToPath } from 'node:url';
-
 import { defineConfig } from 'vitest/config';
 
+import { sharedResolve } from './vitest.shared.ts';
+
 export default defineConfig({
-  resolve: {
-    tsconfigPaths: true,
-    alias: {
-      'server-only': fileURLToPath(new URL('./tests/support/server-only-stub.ts', import.meta.url)),
-    },
-  },
+  resolve: sharedResolve,
   test: {
     environment: 'node',
     include: ['tests/remote/**/*.test.ts'],

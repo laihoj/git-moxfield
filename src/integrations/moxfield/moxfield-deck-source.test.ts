@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildSnapshot } from '@tests/support/builders';
+import { expectRejection } from '@tests/support/errors';
 
 import { DeckSourceError, type DeckRef, type DeckSource, type RawSourcePayload } from '../deck-source';
 
-import { CAPTURE_ENVELOPE_KIND, CAPTURE_PROTOCOL_VERSION } from './capture-protocol';
 import { MOXFIELD_PAYLOAD_MEDIA_TYPE } from './constants';
 import { MoxfieldDeckSource, type MoxfieldDeckSourceOptions } from './moxfield-deck-source';
 import { moxfieldPrimerToMarkdown } from './primer-markup';
 import { moxfieldRestoreExport } from './restore-text';
-import { cloudflareBlockResponse, fakeFetch, jsonResponse, v1Primer, v3Deck } from './test-fixtures';
+import {
+  cloudflareBlockResponse,
+  fakeFetch,
+  fixtureCaptureEnvelope,
+  jsonResponse,
+  v1Primer,
+  v3Deck,
+} from './test-fixtures';
 
 const REF: DeckRef = { source: 'moxfield', externalId: 'FixtureDeckId_00000001' };
 const DECK_PATH = '/v3/decks/all/FixtureDeckId_00000001';
@@ -47,15 +54,8 @@ function setup(routes: Record<string, Route> = {}, options: MoxfieldDeckSourceOp
   };
 }
 
-async function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
-  const error: unknown = await promise.then(
-    () => {
-      throw new Error('expected a rejection');
-    },
-    (reason: unknown) => reason,
-  );
-  expect(error).toBeInstanceOf(DeckSourceError);
-  return error as DeckSourceError;
+function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
+  return expectRejection(promise, DeckSourceError);
 }
 
 describe('MoxfieldDeckSource', () => {
@@ -102,16 +102,7 @@ describe('MoxfieldDeckSource', () => {
   it('produces the same snapshot from a browser capture as from a server fetch', async () => {
     const { source } = setup();
     const fromServer = source.normalizeDeck(await source.getDeck(REF));
-    const captured = source.parseCapturedPayload({
-      kind: CAPTURE_ENVELOPE_KIND,
-      version: CAPTURE_PROTOCOL_VERSION,
-      source: 'moxfield',
-      pageUrl: 'https://moxfield.com/decks/FixtureDeckId_00000001',
-      capturedAt: '2026-10-09T12:00:00.000Z',
-      deck: v3Deck(),
-      primer: v1Primer(),
-      primerError: null,
-    });
+    const captured = source.parseCapturedPayload(fixtureCaptureEnvelope());
     expect(captured.mediaType).toBe(MOXFIELD_PAYLOAD_MEDIA_TYPE);
     expect(source.normalizeDeck(captured)).toEqual(fromServer);
   });

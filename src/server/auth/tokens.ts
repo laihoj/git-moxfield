@@ -12,16 +12,17 @@
  * hard as guessing the token. Lookups go by hash through a unique index, so the database
  * compares hashes, never secrets, and no constant-time comparison is needed there.
  *
- * Tokens from requests are untrusted: `parseToken` (`./token-format`) checks the exact
+ * Tokens from requests are untrusted: `parseToken` (`@/core/token-format`) checks the exact
  * format before any database lookup, so malformed input never reaches SQL.
  */
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
-import { TOKEN_PREFIXES, type TokenKind } from './token-format';
+import { sha256Hex } from '@/core/hash';
+import { TOKEN_PREFIXES, type TokenKind } from '@/core/token-format';
 
-export { parseToken, TOKEN_PREFIXES, type TokenKind } from './token-format';
+export { parseToken, TOKEN_PREFIXES, type TokenKind } from '@/core/token-format';
 
 /** Random bytes per token. */
 const TOKEN_BYTES = 32;
@@ -33,5 +34,5 @@ export function generateToken(kind: TokenKind): string {
 
 /** SHA-256 hex digest of the full token string: the only form in which tokens are stored. */
 export function hashToken(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex');
+  return sha256Hex(token);
 }

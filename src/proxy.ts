@@ -23,19 +23,17 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { isSecureCookieContext, serializeCookie } from './server/auth/cookie-spec';
 import { sessionRefreshCookies } from './server/auth/session-refresh';
 import { configuredHostnames, isAllowedRequestHost } from './server/host-guard';
+import { plainText } from './server/http/responses';
 
 /** 421 Misdirected Request: the request names a host this app does not answer to. */
-function unknownHostResponse(): NextResponse {
-  return new NextResponse(
-    'Unknown host. To reach git-moxfield under this name, add it to ALLOWED_HOSTS or set PUBLIC_APP_URL.\n',
-    {
-      status: 421,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-    },
+function unknownHostResponse(): Response {
+  return plainText(
+    421,
+    'Unknown host. To reach git-moxfield under this name, add it to ALLOWED_HOSTS or set PUBLIC_APP_URL.',
   );
 }
 
-export function proxy(request: NextRequest): NextResponse {
+export function proxy(request: NextRequest): NextResponse | Response {
   const allowedHosts = configuredHostnames({
     PUBLIC_APP_URL: process.env.PUBLIC_APP_URL,
     ALLOWED_HOSTS: process.env.ALLOWED_HOSTS,

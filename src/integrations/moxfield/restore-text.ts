@@ -13,9 +13,10 @@
  */
 import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
 import type { CanonicalCard, CanonicalPrinting, CanonicalSnapshot } from '@/core/model';
+import { joinList, pluralize } from '@/core/text';
 import { isKnownZone, sortZones, zoneLabel, type KnownZone, type ZoneId } from '@/core/zones';
 
-import type { RestoreExport, RestoreSection, RestoreTarget } from '../deck-source';
+import type { RestoreExport, RestoreSection, RestoreSectionKind, RestoreTarget } from '../deck-source';
 
 import { MOXFIELD_SOURCE_ID } from './constants';
 
@@ -87,19 +88,20 @@ function deckPageTarget(zone: ZoneId): string | undefined {
   return isKnownZone(zone) ? DECK_PAGE_TARGETS[zone] : undefined;
 }
 
-function sectionTarget(zone: ZoneId, empty: boolean): string {
+/** How `zone` is restored on Moxfield, and where. */
+function sectionDestination(zone: ZoneId): { kind: RestoreSectionKind; target: string } {
   const deckPage = deckPageTarget(zone);
-  if (deckPage !== undefined) return deckPage;
+  if (deckPage !== undefined) return { kind: 'manual', target: deckPage };
   const tab = bulkEditTab(zone);
-  if (tab !== undefined) {
-    return empty
-      ? `Bulk Edit › ${tab} (clear the tab: this version has no cards there)`
-      : `Bulk Edit › ${tab}`;
-  }
+  if (tab !== undefined) return { kind: 'paste', target: `Bulk Edit › ${tab}` };
+  return { kind: 'reference', target: unrestorableTarget(zone) };
+}
+
+function unrestorableTarget(zone: ZoneId): string {
   if (zone === 'tokens') {
-    return 'Not restorable via Bulk Edit (the Tokens tab cannot be edited); listed for reference';
+    return 'Not restorable via Bulk Edit (the Tokens tab cannot be edited)';
   }
-  return 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board); listed for reference';
+  return 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board)';
 }
 
 function buildSections(snapshot: CanonicalSnapshot): RestoreSection[] {
@@ -109,26 +111,16 @@ function buildSections(snapshot: CanonicalSnapshot): RestoreSection[] {
     return {
       zone,
       label: zoneLabel(zone),
-      target: sectionTarget(zone, cardCount === 0),
+      ...sectionDestination(zone),
       text: zoneText(snapshot, zone),
       cardCount,
     };
   });
 }
 
-/** `a`, `a and b`, `a, b and c`. */
-function listText(items: readonly string[]): string {
-  if (items.length <= 1) return items.join('');
-  return `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
-}
-
 /** Card names, quoted (names may contain commas) and deduplicated, as a list. */
 function cardList(cards: readonly Pick<CanonicalCard, 'name'>[]): string {
-  return listText([...new Set(cards.map((card) => card.name))].map((name) => `"${name}"`));
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+  return joinList([...new Set(cards.map((card) => card.name))].map((name) => `"${name}"`));
 }
 
 /** The first step: open the deck to restore into, freshly loaded. */
@@ -166,14 +158,14 @@ function buildInstructions(
     listedTabs.add(tab);
     steps.push(
       section.cardCount > 0
-        ? `In the "${tab}" tab, select all text and replace it with the ${section.label} section (${plural(section.cardCount, 'card')}).`
+        ? `In the "${tab}" tab, select all text and replace it with the ${section.label} section (${pluralize(section.cardCount, 'card')}).`
         : `In the "${tab}" tab, select all text and delete it: this version has no ${section.label} cards.`,
     );
   }
   const otherTabs = Object.values(BULK_EDIT_TABS).filter((tab) => !listedTabs.has(tab));
   if (otherTabs.length > 0) {
     steps.push(
-      `If any other Bulk Edit tab (${listText(otherTabs)}) contains cards, clear it too: this version has none there.`,
+      `If any other Bulk Edit tab (${joinList(otherTabs)}) contains cards, clear it too: this version has none there.`,
     );
   }
   steps.push('Click Save once, after all tabs are filled in.');
@@ -218,7 +210,7 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
   if (snapshot.deck.tags.length > 0) deckFields.push('hubs');
   if (snapshot.deck.description !== '') deckFields.push('description');
   limitations.push(
-    `The ${listText(deckFields)} are not part of the pasted text and must be restored by hand.`,
+    `The ${joinList(deckFields)} are not part of the pasted text and must be restored by hand.`,
   );
   if (snapshot.primer === null) {
     limitations.push('The primer was not captured for this version, so it cannot be restored from here.');
@@ -270,7 +262,7 @@ function buildLimitations(snapshot: CanonicalSnapshot, hasCombined: boolean): st
   );
   if (unrestorable.length > 0) {
     limitations.push(
-      `${listText(unrestorable.map(zoneLabel))} cannot be restored via Bulk Edit; those sections are for reference only.`,
+      `${joinList(unrestorable.map(zoneLabel))} cannot be restored via Bulk Edit; those sections are for reference only.`,
     );
   }
 

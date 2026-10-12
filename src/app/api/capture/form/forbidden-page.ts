@@ -6,6 +6,7 @@
  */
 import 'server-only';
 
+import { APP_NAME, THEME, type ThemeTokens } from '@/lib/brand';
 import { routes } from '@/lib/routes';
 
 /** `key`: the bookmarklet's key is missing, malformed, unknown or revoked. `origin`: a third-party site posted. */
@@ -26,10 +27,23 @@ const COPY: Record<CaptureRejection, { title: string; paragraphs: string[] }> = 
   },
 };
 
-// Mirrors the app's design tokens (src/app/globals.css).
+/** The theme's design tokens as custom properties (the page has no stylesheet to share with the app). */
+function tokens(theme: ThemeTokens): string {
+  return [
+    `--bg: ${theme.bg}`,
+    `--surface: ${theme.surface}`,
+    `--border: ${theme.border}`,
+    `--fg: ${theme.fg}`,
+    `--muted: ${theme.muted}`,
+    `--accent: ${theme.accent}`,
+    `--accent-hover: ${theme.accentHover}`,
+    `--accent-fg: ${theme.accentFg}`,
+  ].join('; ');
+}
+
 const STYLE = `
-:root { color-scheme: light dark; --bg: #f6f6f8; --surface: #fff; --border: #e3e3e8; --fg: #17171c; --muted: #62626e; --accent: #6d3fd8; --accent-hover: #5b2fc4; --accent-fg: #fff; }
-@media (prefers-color-scheme: dark) { :root { --bg: #0d0e12; --surface: #15171c; --border: #262933; --fg: #e9e9ee; --muted: #a0a0ad; --accent: #9b7bf0; --accent-hover: #ac90f4; --accent-fg: #120a24; } }
+:root { color-scheme: light dark; ${tokens(THEME.light)}; }
+@media (prefers-color-scheme: dark) { :root { ${tokens(THEME.dark)}; } }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-text-size-adjust: 100%; }
 main { width: 100%; max-width: 28rem; padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.05); }
@@ -54,7 +68,7 @@ export function captureRejectedResponse(reason: CaptureRejection): Response {
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="robots" content="noindex">',
-    `<title>${title} · git-moxfield</title>`,
+    `<title>${title} · ${APP_NAME}</title>`,
     `<style>${STYLE}</style>`,
     '</head>',
     '<body>',

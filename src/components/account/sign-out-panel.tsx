@@ -19,10 +19,7 @@ export function SignOutPanel() {
         trigger={{ label: 'Sign out everywhere', variant: 'ghost' }}
         message="Sign out on every device, this one included? Each needs your bookmarklet or a device link to sign in again."
         confirmLabel="Sign out everywhere"
-        onConfirm={async () => {
-          const result = await signOutEverywhereAction();
-          return result.ok ? null : result.message;
-        }}
+        onConfirm={() => signOutEverywhereAction()}
       />
     </div>
   );

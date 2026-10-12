@@ -15,7 +15,9 @@
  */
 import 'server-only';
 
+import { absoluteAppUrl } from '@/core/http-url';
 import { sharedDeckPath } from '@/server/auth/paths';
+import { requireActiveSession } from '@/server/auth/require-session';
 import { generateToken, hashToken } from '@/server/auth/tokens';
 import type { SessionUser } from '@/server/auth/types';
 import { validateShareLinkLabel } from '@/server/auth/validation';
@@ -28,8 +30,8 @@ import {
   type ShareLinkRecord,
 } from '@/server/repositories';
 
-import type { ShareLinkServices } from './contract';
-import { ServiceError } from './errors';
+import type { ShareLinkInput, ShareLinkServices } from './contract';
+import { DECK_NOT_TRACKED, ServiceError } from './errors';
 import type { CreatedShareLinkDTO, ShareLinkDTO } from './types';
 
 export interface ShareLinkServicesDependencies {
@@ -44,8 +46,6 @@ export interface ShareLinkServicesDependencies {
   /** Default: `createLogger('share-links')`. */
   logger?: Logger;
 }
-
-const DECK_NOT_FOUND = 'This deck is not tracked (it may have been removed).';
 
 /** Creates the share link services of one signed-in user's request. */
 export function createShareLinkServices(deps: ShareLinkServicesDependencies): ShareLinkServices {
@@ -69,11 +69,7 @@ interface BoundDependencies {
 class DefaultShareLinkServices implements ShareLinkServices {
   constructor(private readonly deps: BoundDependencies) {}
 
-  async createShareLink(
-    deckId: string,
-    input: { label: string; includeNotes: boolean },
-    appUrl: string,
-  ): Promise<CreatedShareLinkDTO> {
+  async createShareLink(deckId: string, input: ShareLinkInput, appUrl: string): Promise<CreatedShareLinkDTO> {
     const label = validateShareLinkLabel(input.label);
     if (!label.ok) throw new ServiceError('invalid-input', label.message);
     // Checked at runtime too: callers may pass a value straight from a form.
@@ -85,8 +81,7 @@ class DefaultShareLinkServices implements ShareLinkServices {
     const url = shareUrl(appUrl, token);
     const { repos, user, logger } = this.deps;
     const record = await repos.transaction(async (tx): Promise<ShareLinkRecord> => {
-      const session = await tx.sessions.getActive(user.id, user.sessionId, this.at());
-      if (session === null) throw new ServiceError('forbidden', 'You were signed out. Sign in again.');
+      const session = await requireActiveSession(tx, user, this.at());
       try {
         return await tx.shareLinks.create({
           deckId,
@@ -97,7 +92,7 @@ class DefaultShareLinkServices implements ShareLinkServices {
           credentialId: session.credentialId,
         });
       } catch (error) {
-        if (isRepositoryError(error, 'not-found')) throw new ServiceError('not-found', DECK_NOT_FOUND);
+        if (isRepositoryError(error, 'not-found')) throw new ServiceError('not-found', DECK_NOT_TRACKED);
         throw error;
       }
     });
@@ -145,14 +140,5 @@ export function toShareLinkDTO(record: ShareLinkRecord): ShareLinkDTO {
  * @throws {TypeError} when `appUrl` is not an absolute http(s) URL.
  */
 function shareUrl(appUrl: string, token: string): string {
-  let base: URL;
-  try {
-    base = new URL(appUrl);
-  } catch {
-    throw new TypeError('createShareLink: appUrl must be an absolute URL');
-  }
-  if (base.protocol !== 'http:' && base.protocol !== 'https:') {
-    throw new TypeError('createShareLink: appUrl must use http or https');
-  }
-  return new URL(sharedDeckPath(token), base).href;
+  return absoluteAppUrl(sharedDeckPath(token), appUrl);
 }

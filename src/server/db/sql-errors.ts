@@ -186,19 +186,24 @@ function toLink(value: unknown): ChainLink {
   };
 }
 
-/** `error`, its `cause`, the cause's `cause`, ... (bounded; cycles are cut). */
-function causeChain(error: unknown): ChainLink[] {
-  const links: ChainLink[] = [];
+/**
+ * `error`, its `cause`, the cause's `cause`, ... (bounded; cycles are cut). A cause that
+ * is not an object ends the chain and is its last element.
+ */
+function* causesOf(error: unknown): Generator {
   const seen = new Set<unknown>();
   let current: unknown = error;
-  while (links.length < MAX_CAUSE_DEPTH && !seen.has(current)) {
+  while (seen.size < MAX_CAUSE_DEPTH && !seen.has(current)) {
     seen.add(current);
-    links.push(toLink(current));
-    if (typeof current !== 'object' || current === null) break;
+    yield current;
+    if (typeof current !== 'object' || current === null) return;
     current = field(current, 'cause');
-    if (current === undefined) break;
+    if (current === undefined) return;
   }
-  return links;
+}
+
+function causeChain(error: unknown): ChainLink[] {
+  return [...causesOf(error)].map(toLink);
 }
 
 /** Removes `CODE: ` prefixes (possibly repeated) and `SQLite error: ` from a driver message. */
@@ -306,11 +311,6 @@ export function isSqlErrorKind(error: unknown, kind: SqlErrorKind): boolean {
   return classifySqlError(error).kind === kind;
 }
 
-/** Whether running the failed transaction or batch again may succeed (see {@link SqlErrorClassification.retryable}). */
-export function isRetryableSqlError(error: unknown): boolean {
-  return classifySqlError(error).retryable;
-}
-
 /**
  * Why a remote database could not be used at all: a problem with where it is or with the
  * credentials, which an operator fixes in the configuration rather than in the data.
@@ -346,15 +346,8 @@ const NETWORK_ERROR_CODE =
  * `fetch`'s `TypeError: fetch failed`, whose cause carries the system error code.
  */
 export function connectionFailureOf(error: unknown): ConnectionFailureKind | undefined {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (
-    typeof current === 'object' &&
-    current !== null &&
-    !seen.has(current) &&
-    seen.size < MAX_CAUSE_DEPTH
-  ) {
-    seen.add(current);
+  for (const current of causesOf(error)) {
+    if (typeof current !== 'object' || current === null) break;
     const status = field(current, 'status');
     if (stringField(current, 'name') === 'HttpServerError' && typeof status === 'number') {
       return HTTP_STATUS_FAILURES.get(status);
@@ -362,7 +355,6 @@ export function connectionFailureOf(error: unknown): ConnectionFailureKind | und
     const code = stringField(current, 'code');
     if (code !== undefined && NETWORK_ERROR_CODE.test(code)) return 'unreachable';
     if (current instanceof TypeError && current.message === 'fetch failed') return 'unreachable';
-    current = field(current, 'cause');
   }
   return undefined;
 }

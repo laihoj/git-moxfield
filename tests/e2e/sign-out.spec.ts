@@ -17,7 +17,7 @@ import {
   signedInDevices,
 } from './support/accounts';
 import { runBookmarklet } from './support/bookmarklet';
-import { APP_URL } from './support/constants';
+import { CAPTURED_DECK_URL } from './support/decks';
 import { expect, test, type NewContext } from './support/fixtures';
 import { BLUE_FARM_PUBLIC_ID, mockMoxfield } from './support/mock';
 
@@ -94,7 +94,7 @@ test('sign out everywhere ends every session; the bookmarklet signs in again', a
     await phone.goto(mockMoxfield.deckPageUrl(BLUE_FARM_PUBLIC_ID));
     await runBookmarklet(phone, bookmarklets['same-tab']);
     await confirmBookmarkletSignIn(phone, user.displayName, 'Phone');
-    await expect(phone).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(phone).toHaveURL(CAPTURED_DECK_URL);
     await expectSignedInAs(phone, user.displayName);
   });
 });

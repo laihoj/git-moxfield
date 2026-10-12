@@ -93,13 +93,11 @@ const DOT_TONES: Record<TransitionTone, string> = {
  * zone (command zone or mainboard) and is left out when it is the same number.
  */
 export function historySummary(history: CardHistory): string[] {
-  const versions = history.entries.filter((entry) => entry.sequence !== null);
-  const present = versions.filter((entry) => entry.zones.length > 0).length;
-  const played = history.summary.versionsInPlayedZones;
+  const { versionCount, versionsPresent: present, versionsInPlayedZones: played } = history.summary;
   const parts = [
-    versions.length > 1 && present === versions.length
-      ? `In all ${versions.length} versions`
-      : `In ${present} of ${pluralize(versions.length, 'version')}`,
+    versionCount > 1 && present === versionCount
+      ? `In all ${versionCount} versions`
+      : `In ${present} of ${pluralize(versionCount, 'version')}`,
   ];
   if (present > 0 && played === 0) parts.push('never played');
   else if (played !== present) parts.push(`played in ${played}`);

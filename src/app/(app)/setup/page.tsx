@@ -6,21 +6,19 @@ import { CreateBookmarklet } from '@/components/setup/create-bookmarklet';
 import { Alert } from '@/components/ui/alert';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Link } from '@/components/ui/navigation';
+import { IconTile } from '@/components/ui/item-list';
 import { ClockTime, RelativeTime } from '@/components/ui/relative-time';
 import { describeDevice } from '@/lib/devices';
 import { joinList, pluralize } from '@/lib/format';
 import { routes, WELCOME_REASONS, type WelcomeReason } from '@/lib/routes';
 import { getSetupInfo } from '@/server/access';
-import {
-  getAuthService,
-  MAX_KEY_LABEL_LENGTH,
-  type BookmarkletKeyDTO,
-  type SessionUser,
-} from '@/server/auth';
+import { getAuthService, type BookmarkletKeyDTO, type SessionUser } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 import type { SetupInfoDTO } from '@/server/services/contract';
 import { publicAppUrl } from '@/app/request-origin';
+import { TEXT_LINK, TextLink } from '@/components/ui/text-link';
+import { PageHeader } from '@/components/ui/page-header';
+import { InlineCode } from '@/components/ui/inline-code';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +64,6 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
       ) : (
         <CreateBookmarklet
           defaultLabel={describeDevice(requestHeaders.get('user-agent')).label}
-          maxLabelLength={MAX_KEY_LABEL_LENGTH}
           siteHost={siteHost}
           appUrl={appUrl}
           autoFocus={welcome !== null}
@@ -81,14 +78,16 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {welcome !== null && <Welcome reason={welcome} user={user} />}
 
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Connect Moxfield</h1>
-        <p className="mt-1 text-sm text-pretty text-muted">
-          Moxfield has no public API. git-moxfield reads your deck the way Moxfield&apos;s own page does: from
-          the server when Moxfield allows it, otherwise from your browser with a bookmarklet. Either way it
-          only reads; it never changes your decks.
-        </p>
-      </div>
+      <PageHeader
+        title="Connect Moxfield"
+        description={
+          <>
+            Moxfield has no public API. git-moxfield reads your deck the way Moxfield&apos;s own page does:
+            from the server when Moxfield allows it, otherwise from your browser with a bookmarklet. Either
+            way it only reads; it never changes your decks.
+          </>
+        }
+      />
 
       {welcome !== null && bookmarkletCard}
       <ServerFetchCard setup={setup} />
@@ -104,7 +103,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
           anywhere, takes a minute.
         </p>
         <div>
-          <ButtonLink href="/capture?mode=paste" variant="secondary">
+          <ButtonLink href={routes.capturePaste()} variant="secondary">
             Paste deck JSON
           </ButtonLink>
         </div>
@@ -119,15 +118,15 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
           Moxfield&apos;s bot protection (Cloudflare) blocks requests from servers unless they carry a
           User-Agent that Moxfield issued. Moxfield grants these to personal, non-commercial projects that ask
           at{' '}
-          <a href="mailto:support@moxfield.com" className="font-medium text-accent hover:underline">
+          <a href="mailto:support@moxfield.com" className={TEXT_LINK}>
             support@moxfield.com
           </a>
           . git-moxfield never disguises itself as a browser.
         </p>
         <p className="text-sm text-muted">
-          If you get one, add it to <code className="rounded bg-surface-2 px-1 py-0.5">.env.local</code> as{' '}
-          <code className="rounded bg-surface-2 px-1 py-0.5">MOXFIELD_USER_AGENT=…</code> and restart. Decks
-          then refresh on their own when you open them and before every commit.
+          If you get one, add it to <InlineCode>.env.local</InlineCode> as{' '}
+          <InlineCode>MOXFIELD_USER_AGENT=…</InlineCode> and restart. Decks then refresh on their own when you
+          open them and before every commit.
         </p>
         <p className="text-sm">
           {setup.userAgentConfigured ? (
@@ -141,10 +140,7 @@ export default async function SetupPage({ searchParams }: PageProps<'/setup'>) {
       </Card>
 
       <p className="text-center text-sm text-muted">
-        All set?{' '}
-        <Link href="/" className="font-medium text-accent hover:underline">
-          Back to your decks
-        </Link>
+        All set? <TextLink href={routes.home()}>Back to your decks</TextLink>
       </p>
     </div>
   );
@@ -176,8 +172,7 @@ function ServerFetchCard({ setup }: { setup: SetupInfoDTO }) {
     <Alert tone="info" title="Server fetch: off">
       <p>{status.reason}</p>
       <p className="mt-1 text-muted">
-        Set <code className="rounded bg-surface/70 px-1 py-0.5">MOXFIELD_SERVER_FETCH=auto</code> to turn it
-        on.
+        Set <InlineCode tone="tinted">MOXFIELD_SERVER_FETCH=auto</InlineCode> to turn it on.
       </p>
     </Alert>
   );
@@ -210,9 +205,9 @@ function Welcome({ reason, user }: { reason: WelcomeReason; user: SessionUser })
       aria-labelledby="welcome-heading"
       className="flex gap-3.5 rounded-xl border border-accent/30 bg-accent-soft/50 p-4 md:p-5"
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg">
-        <PartyPopper aria-hidden="true" className="size-4" />
-      </span>
+      <IconTile tone="solid">
+        <PartyPopper aria-hidden="true" />
+      </IconTile>
       <div className="min-w-0">
         <h2 id="welcome-heading" className="text-base font-semibold break-words text-fg">
           {title}
@@ -234,9 +229,9 @@ function KeySummary({ keys }: { keys: readonly BookmarkletKeyDTO[] }) {
   return (
     <p className="border-t border-border pt-4 text-sm text-pretty text-muted">
       You have {pluralize(keys.length, 'bookmarklet')}: <span className="text-fg">{joinList(names)}</span>.{' '}
-      <Link href={routes.account()} className="font-medium whitespace-nowrap text-accent hover:underline">
+      <TextLink href={routes.account()} className="whitespace-nowrap">
         Manage them in Account
-      </Link>
+      </TextLink>
     </p>
   );
 }

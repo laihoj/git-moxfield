@@ -14,6 +14,7 @@ import {
   printingIdentity,
 } from '@/core/canonical';
 import { cardKey, normalizeCardName } from '@/core/card-key';
+import { PRIMARY_TYPE_PRECEDENCE } from '@/core/card-types';
 import type {
   CanonicalCard,
   CanonicalPrinting,
@@ -26,14 +27,15 @@ import type {
   SourceDeckMetadata,
   ZoneMap,
 } from '@/core/model';
+import { getOrCreate } from '@/core/collections';
+import { isRecord } from '@/core/guards';
 import { SNAPSHOT_SCHEMA_VERSION } from '@/core/model';
-import { compareZones, isKnownZone, zoneLabel, type ZoneId } from '@/core/zones';
-
-import { DeckSourceError } from '../deck-source';
+import { upperFirst } from '@/core/text';
+import { compareZones, isKnownZone, zoneEntries, zoneLabel, type ZoneId } from '@/core/zones';
 
 import { DEFAULT_MOXFIELD_SITE_ORIGIN, MOXFIELD_SOURCE_ID, zoneForBoard } from './constants';
+import { moxfieldSchemaError } from './errors';
 import {
-  isPlainObject,
   LEGACY_BOARD_NAMES,
   parseMoxfieldBoard,
   parseMoxfieldBoardEntry,
@@ -90,25 +92,6 @@ const FRONT_FACE_LAYOUTS: ReadonlySet<string> = new Set([
   'double_faced_token',
 ]);
 
-/**
- * Card types in grouping precedence: a card is grouped under the first type in this
- * list that appears on its (front face) type line. Creature wins over everything, so
- * `Artifact Creature` and `Land Creature` (Dryad Arbor) are creatures; Land wins over
- * Artifact, so artifact lands count as lands; Artifact wins over Enchantment for the
- * rare `Enchantment Artifact`. This mirrors the groups Moxfield shows (Creature,
- * Planeswalker, Battle, Instant, Sorcery, Artifact, Enchantment, Land).
- */
-const PRIMARY_TYPE_PRECEDENCE = [
-  'Creature',
-  'Planeswalker',
-  'Battle',
-  'Land',
-  'Instant',
-  'Sorcery',
-  'Artifact',
-  'Enchantment',
-] as const;
-
 const WUBRG = ['W', 'U', 'B', 'R', 'G'] as const;
 
 /**
@@ -125,7 +108,7 @@ export function primaryCardType(typeLine: string): string {
   const match = PRIMARY_TYPE_PRECEDENCE.find((type) => lower.has(type.toLowerCase()));
   if (match !== undefined) return match;
   const last = words.at(-1);
-  return last === undefined ? 'Other' : last.charAt(0).toUpperCase() + last.slice(1);
+  return last === undefined ? 'Other' : upperFirst(last);
 }
 
 /** Maps Moxfield finishes (`nonFoil`, `foil`, `etched`) to canonical ones; others are lowercased. */
@@ -151,11 +134,6 @@ function normalizeTimestamp(value: string | undefined): string | undefined {
   const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) || !text.includes('T') ? text : `${text}Z`;
   const ms = Date.parse(zoned);
   return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
-}
-
-function schemaError(message: string, issues: readonly string[]): DeckSourceError {
-  const detail = issues.length > 0 ? ` ${issues.slice(0, 20).join('; ')}` : '';
-  return new DeckSourceError('schema', `${message}${detail}`, { source: MOXFIELD_SOURCE_ID });
 }
 
 class WarningCollector {
@@ -208,7 +186,7 @@ function collectBoards(rawDeck: PlainObject, deck: MoxfieldDeck, warnings: Warni
   } else {
     for (const name of LEGACY_BOARD_NAMES) {
       const cards = rawDeck[name];
-      if (!isPlainObject(cards)) continue;
+      if (!isRecord(cards)) continue;
       const count = rawDeck[`${name}Count`];
       boards.push({
         name,
@@ -227,7 +205,7 @@ function collectBoards(rawDeck: PlainObject, deck: MoxfieldDeck, warnings: Warni
         : 'boards.mainboard: Invalid input: expected a board',
     );
   }
-  if (issues.length > 0) throw schemaError('The Moxfield deck has an unrecognized shape.', issues);
+  if (issues.length > 0) throw moxfieldSchemaError('The Moxfield deck has an unrecognized shape.', issues);
   return boards.sort((a, b) => compareZones(a.zone, b.zone) || compareStrings(a.name, b.name));
 }
 
@@ -401,10 +379,7 @@ function canonicalize(input: CanonicalSnapshot): CanonicalSnapshot {
     return canonicalizeSnapshot(input);
   } catch (error) {
     if (!(error instanceof CanonicalizationError)) throw error;
-    throw new DeckSourceError('schema', `The Moxfield deck could not be normalized: ${error.message}`, {
-      source: MOXFIELD_SOURCE_ID,
-      cause: error,
-    });
+    throw moxfieldSchemaError(`The Moxfield deck could not be normalized: ${error.message}`, [], error);
   }
 }
 
@@ -437,9 +412,9 @@ export function normalizeMoxfieldPayload(
   options: NormalizeMoxfieldOptions = {},
 ): NormalizedDeck {
   const parsedDeck = parseMoxfieldDeck(data.deck);
-  if (!parsedDeck.ok) throw schemaError('The Moxfield deck data is not usable.', parsedDeck.issues);
+  if (!parsedDeck.ok) throw moxfieldSchemaError('The Moxfield deck data is not usable.', parsedDeck.issues);
   const deck = parsedDeck.value;
-  const rawDeck = isPlainObject(data.deck) ? data.deck : {};
+  const rawDeck = isRecord(data.deck) ? data.deck : {};
   const warnings = new WarningCollector();
 
   const groups = new Map<string, CardGroup>();
@@ -466,9 +441,7 @@ export function normalizeMoxfieldPayload(
       const key = cardKey(read.entry.name);
       counted += read.entry.quantity;
       const groupId = `${board.zone}\u0000${key}`;
-      const group = groups.get(groupId);
-      if (group) group.entries.push(read.entry);
-      else groups.set(groupId, { zone: board.zone, key, entries: [read.entry] });
+      getOrCreate(groups, groupId, () => ({ zone: board.zone, key, entries: [] })).entries.push(read.entry);
       if (!catalog.has(key)) catalog.set(key, cardFacts(key, read.entry.name, read.card));
     }
 
@@ -509,9 +482,7 @@ export function normalizeMoxfieldPayload(
     format: snapshot.deck.format,
     authors: uniqueAuthors(deck),
     reportedCounts: Object.fromEntries(
-      [...reportedCounts]
-        .filter(([zone, count]) => count > 0 || snapshot.zones[zone] !== undefined)
-        .sort(([a], [b]) => compareZones(a, b)),
+      zoneEntries(reportedCounts).filter(([zone, count]) => count > 0 || snapshot.zones[zone] !== undefined),
     ),
   };
   const internalId = nonEmpty(deck.id);

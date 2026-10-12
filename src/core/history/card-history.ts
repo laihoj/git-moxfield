@@ -29,16 +29,15 @@
  *
  * Pure and deterministic; input points are never mutated.
  */
-import { findCard, snapshotZones } from '../canonical';
-import { renamedKeys } from '../diff/deck-diff';
-import type { CanonicalSnapshot, CardKey } from '../model';
-import { compareZones, isPlayedZone, type ZoneId } from '../zones';
+import type { CardKey } from '../model';
+import { isPlayedZone, zoneEntries, type ZoneId } from '../zones';
 import type {
   CardHistory,
   CardHistoryEntry,
   CardHistoryRun,
   CardTransition,
   CardVersionPoint,
+  VersionMeta,
   ZoneQuantity,
 } from './types';
 
@@ -52,17 +51,6 @@ export interface DeriveCardHistoryInput {
    * re-sorted, zero quantities dropped and duplicate zones merged.
    */
   points: readonly CardVersionPoint[];
-}
-
-/** A deck version with its full snapshot, as accepted by {@link cardPointsFromSnapshots}. */
-export interface VersionedSnapshot {
-  /** Commit id, or `null` for the uncommitted working state. */
-  commitId: string | null;
-  /** Version number, or `null` for the uncommitted working state. */
-  sequence: number | null;
-  at: string;
-  message: string;
-  snapshot: CanonicalSnapshot;
 }
 
 type RestoredZone = NonNullable<CardHistoryEntry['restoredFrom']>[number];
@@ -117,6 +105,8 @@ export function deriveCardHistory(input: DeriveCardHistoryInput): CardHistory {
       firstSeenSequence: committed.find(isPresent)?.sequence ?? null,
       lastSeenSequence: committed.findLast(isPresent)?.sequence ?? null,
       currentZones: copyZones(entries.at(-1)?.zones ?? []),
+      versionCount: committed.length,
+      versionsPresent: committed.filter(isPresent).length,
       versionsInPlayedZones: committed.filter((entry) => inPlayedZone(entry.zones)).length,
       timesCut: entries.filter(isCut).length,
       // A return to Considering or the sideboard that takes the card out of play is a
@@ -132,44 +122,50 @@ function isCut(entry: CardHistoryEntry): boolean {
 }
 
 /**
- * Extracts one card's {@link CardVersionPoint}s from full snapshots, preserving the
- * order and version metadata of `versions`. The card is followed across reconciled
- * renames (see {@link traceCardKeys}), so `key` may be any of its names; a point's
- * zones are empty when the snapshot does not contain the card.
+ * Where {@link traceCardPoints} gets its data. The callbacks may be lazy (the server aborts
+ * a run that misses an input by throwing, and runs it again once it is loaded).
  */
-export function cardPointsFromSnapshots(
+export interface CardPointSource {
+  /** The version metadata of every point, oldest → newest (the working state last). */
+  readonly points: readonly VersionMeta[];
+  /** The zones of the card `key` at point `index` (empty when the point does not contain it). */
+  zonesAt: (key: CardKey, index: number) => ZoneQuantity[];
+  /** See {@link TraceCardKeysInput.renames}. */
+  renames: (index: number) => ReadonlyMap<CardKey, CardKey>;
+  /** The display name of the card `key` at point `index`, if the point has the card. */
+  nameAt: (key: CardKey, index: number) => string | undefined;
+}
+
+/**
+ * One card's {@link CardVersionPoint}s and its key at every point, following it across
+ * renames (see {@link traceCardKeys}); a point where the key changed carries `renamedFrom`.
+ */
+export function traceCardPoints(
   key: CardKey,
-  versions: readonly VersionedSnapshot[],
-): CardVersionPoint[] {
-  const snapshotAt = (index: number): CanonicalSnapshot | undefined => versions[index]?.snapshot;
-  const zonesAt = (cardKey: CardKey, index: number): ZoneQuantity[] => {
-    const snapshot = snapshotAt(index);
-    if (!snapshot) return [];
-    return snapshotZones(snapshot).flatMap((zone) => {
-      const card = findCard(snapshot, zone, cardKey);
-      return card ? [{ zone, quantity: card.quantity }] : [];
-    });
-  };
+  source: CardPointSource,
+): { points: CardVersionPoint[]; keys: CardKey[] } {
   const keys = traceCardKeys({
     key,
-    length: versions.length,
-    contains: (cardKey, index) => zonesAt(cardKey, index).length > 0,
-    renames: (index) => {
-      const before = snapshotAt(index - 1);
-      const after = snapshotAt(index);
-      return before && after ? renamedKeys(before, after) : new Map<CardKey, CardKey>();
-    },
+    length: source.points.length,
+    contains: (cardKey, index) => source.zonesAt(cardKey, index).length > 0,
+    renames: (index) => source.renames(index),
   });
-
-  return versions.map(({ commitId, sequence, at, message }, index) => {
+  const points = source.points.map(({ commitId, sequence, at, message }, index) => {
     const pointKey = keys[index] ?? key;
-    const point: CardVersionPoint = { commitId, sequence, at, message, zones: zonesAt(pointKey, index) };
+    const point: CardVersionPoint = {
+      commitId,
+      sequence,
+      at,
+      message,
+      zones: source.zonesAt(pointKey, index),
+    };
     const previousKey = keys[index - 1];
     if (previousKey !== undefined && previousKey !== pointKey) {
-      point.renamedFrom = { key: previousKey, name: cardNameIn(snapshotAt(index - 1), previousKey) };
+      point.renamedFrom = { key: previousKey, name: source.nameAt(previousKey, index - 1) ?? previousKey };
     }
     return point;
   });
+  return { points, keys };
 }
 
 export interface TraceCardKeysInput {
@@ -181,7 +177,7 @@ export interface TraceCardKeysInput {
   contains: (key: CardKey, index: number) => boolean;
   /**
    * Renames from the point at `index - 1` to the point at `index` (old key → new key),
-   * as {@link renamedKeys} reconciles them. Called only where a tracked key appears or
+   * as `renamedKeys` (`../diff/deck-diff`) reconciles them. Called only where a tracked key appears or
    * disappears, so callers can load snapshots for these boundaries alone.
    */
   renames: (index: number) => ReadonlyMap<CardKey, CardKey>;
@@ -230,24 +226,13 @@ export function traceCardKeys(input: TraceCardKeysInput): CardKey[] {
   return keys;
 }
 
-/** Display name of a card in a snapshot (first zone in canonical order), or its key. */
-function cardNameIn(snapshot: CanonicalSnapshot | undefined, key: CardKey): string {
-  if (snapshot) {
-    for (const zone of snapshotZones(snapshot)) {
-      const card = findCard(snapshot, zone, key);
-      if (card) return card.name;
-    }
-  }
-  return key;
-}
-
 /** Canonical zone list: positive quantities only, one entry per zone, canonical zone order. */
 function normalizeZoneQuantities(zones: readonly ZoneQuantity[]): ZoneQuantity[] {
   const totals = new Map<ZoneId, number>();
   for (const { zone, quantity } of zones) {
     if (quantity > 0) totals.set(zone, (totals.get(zone) ?? 0) + quantity);
   }
-  return [...totals].sort(([a], [b]) => compareZones(a, b)).map(([zone, quantity]) => ({ zone, quantity }));
+  return zoneEntries(totals).map(([zone, quantity]) => ({ zone, quantity }));
 }
 
 /** Zones the card enters at this point that it had occupied at some earlier point. */

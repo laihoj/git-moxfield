@@ -1,27 +1,17 @@
-import type { Metadata } from 'next';
-
-import { HistoryContent } from '@/components/deck-pages/history-content';
-import { sharedDeckTitle } from '@/lib/presentation';
+import { HistoryContent, historyTagParam } from '@/components/deck-pages/history-content';
 import { sharedDeckRoutes } from '@/lib/routes';
 
-import { findSharedOverview, loadSharedDeck, sharedPageMetadata } from '../data';
+import { findSharedOverview, loadSharedDeck, sharedSectionMetadata } from '../data';
 import { SharedPageMissing } from '../page-missing';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/s/[token]/history'>): Promise<Metadata> {
-  const { token } = await params;
-  return sharedPageMetadata(token, async () => {
-    const overview = await findSharedOverview(token);
-    return { title: overview === null ? 'History' : `History · ${sharedDeckTitle(overview)}` };
-  });
-}
+export const generateMetadata = sharedSectionMetadata('History');
 
 /** Every committed version of a shared deck, newest first, with a tag filter and compare selection. */
 export default async function SharedHistoryPage({ params, searchParams }: PageProps<'/s/[token]/history'>) {
   const { token } = await params;
-  const { tag: tagParam } = await searchParams;
-  const tag = typeof tagParam === 'string' && tagParam.trim() !== '' ? tagParam.trim() : undefined;
+  const tag = historyTagParam((await searchParams).tag);
   const access = await loadSharedDeck(token);
   if (access === null) return <SharedPageMissing access={access} />;
   const [overview, tags, versions] = await Promise.all([

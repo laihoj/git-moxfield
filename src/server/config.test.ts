@@ -24,6 +24,63 @@ describe('parseConfig — ALLOWED_HOSTS', () => {
   });
 });
 
+describe('parseConfig — CAPTURE_ALLOWED_ORIGINS', () => {
+  it('defaults to the origin of the Moxfield site', () => {
+    expect(parseConfig({}).captureAllowedOrigins).toEqual(['https://moxfield.com']);
+  });
+
+  it('takes the origins of a comma-separated list', () => {
+    const config = parseConfig({
+      CAPTURE_ALLOWED_ORIGINS: 'https://moxfield.com/decks, http://localhost:4010 ,',
+    });
+    expect(config.captureAllowedOrigins).toEqual(['https://moxfield.com', 'http://localhost:4010']);
+  });
+
+  it('refuses an entry that is not a URL, as a configuration error', () => {
+    expect(() => parseConfig({ CAPTURE_ALLOWED_ORIGINS: 'https://moxfield.com, moxfield.org' })).toThrow(
+      /CAPTURE_ALLOWED_ORIGINS: expected origins such as https:\/\/moxfield\.com, got "moxfield\.org"/,
+    );
+  });
+
+  it.each(['moxfield.com:443', 'foo:bar'])(
+    'refuses %j, a URL without an http(s) origin, instead of allowing the origin "null"',
+    (entry) => {
+      expect(() => parseConfig({ CAPTURE_ALLOWED_ORIGINS: `https://moxfield.com, ${entry}` })).toThrow(
+        new RegExp(`Invalid git-moxfield configuration[\\s\\S]*CAPTURE_ALLOWED_ORIGINS: .*got "${entry}"`),
+      );
+    },
+  );
+});
+
+describe('parseConfig — base URLs', () => {
+  it('strips trailing slashes once, from the app URL and the Moxfield API base URL', () => {
+    const config = parseConfig({
+      PUBLIC_APP_URL: 'https://tools.example/git-moxfield//',
+      MOXFIELD_API_BASE_URL: 'http://localhost:4010/api/',
+    });
+    expect(config.PUBLIC_APP_URL).toBe('https://tools.example/git-moxfield');
+    expect(config.MOXFIELD_API_BASE_URL).toBe('http://localhost:4010/api');
+    expect(parseConfig({}).PUBLIC_APP_URL).toBeUndefined();
+    expect(parseConfig({}).MOXFIELD_API_BASE_URL).toBe('https://api2.moxfield.com');
+  });
+
+  it.each(['http://localhost:3000', 'http://192.168.1.5:3000', 'https://tools.example'])(
+    'accepts %s as the app URL',
+    (url) => {
+      expect(parseConfig({ PUBLIC_APP_URL: url }).PUBLIC_APP_URL).toBe(url);
+    },
+  );
+
+  it.each([
+    ['PUBLIC_APP_URL', 'ftp://tools.example'],
+    ['PUBLIC_APP_URL', 'javascript:alert(1)'],
+    ['MOXFIELD_API_BASE_URL', 'file:///tmp/moxfield'],
+    ['MOXFIELD_SITE_ORIGIN', 'ftp://moxfield.com'],
+  ])('fails at startup for %s=%s, which is not an http(s) URL', (name, value) => {
+    expect(() => parseConfig({ [name]: value })).toThrow(new RegExp(name));
+  });
+});
+
 describe('parseConfig — GIT_MOXFIELD_E2E', () => {
   it.each(['development', 'test', undefined])('allows the test-only endpoints with NODE_ENV=%s', (env) => {
     expect(parseConfig({ GIT_MOXFIELD_E2E: 'true', NODE_ENV: env }).GIT_MOXFIELD_E2E).toBe(true);
@@ -73,7 +130,7 @@ describe('parseConfig — database location', () => {
 
   it('rejects other URLs without echoing them', () => {
     expect(() => parseConfig({ TURSO_DATABASE_URL: 'postgres://user:hunter2@db/app' })).toThrow(
-      'TURSO_DATABASE_URL: expected a libsql:, https:, http:, wss:, ws: or file: URL',
+      'TURSO_DATABASE_URL: expected a URL using libsql:, https:, http:, wss:, ws: (remote), file: or :memory: (local)',
     );
     expect(() => parseConfig({ TURSO_DATABASE_URL: 'postgres://user:hunter2@db/app' })).not.toThrow(
       /hunter2/,

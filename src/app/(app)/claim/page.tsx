@@ -7,7 +7,7 @@ import { AuthPanel } from '@/components/auth/auth-panel';
 import { ClaimForm } from '@/components/auth/claim-form';
 import { Card } from '@/components/ui/card';
 import { routes } from '@/lib/routes';
-import { getAuthService, MAX_DISPLAY_NAME_LENGTH } from '@/server/auth';
+import { getAuthService } from '@/server/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +43,7 @@ export default async function ClaimPage() {
       footer="As the admin you invite friends and help them back in. Admins manage accounts, not decks."
     >
       <Card>
-        <ClaimForm maxNameLength={MAX_DISPLAY_NAME_LENGTH} />
+        <ClaimForm />
       </Card>
     </AuthPanel>
   );

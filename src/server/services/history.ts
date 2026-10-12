@@ -16,13 +16,14 @@
  */
 import 'server-only';
 
-import { allCards, cardZoneIndex, emptySnapshot } from '@/core/canonical';
+import { allCards, cardName, cardZoneIndex, emptySnapshot } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
 import { diffSnapshots, renamedKeys } from '@/core/diff';
-import { deriveCardHistory, traceCardKeys } from '@/core/history/card-history';
-import type { CardHistory, CardVersionPoint, ZoneQuantity } from '@/core/history/types';
+import { deriveCardHistory, traceCardPoints } from '@/core/history/card-history';
+import type { CardHistory, VersionMeta, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { primerLineDiff } from '@/core/primer/primer-diff';
+import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
 import type { RestoreExport, RestoreTarget } from '@/integrations/deck-source';
 import {
   DEFAULT_CARD_SEARCH_LIMIT,
@@ -60,9 +61,6 @@ import type {
 
 /** Upper bound for card search results. */
 export const MAX_CARD_SEARCH_LIMIT = 100;
-
-/** Longest card search query considered; card names are far shorter. */
-const MAX_SEARCH_QUERY_LENGTH = 200;
 
 /**
  * The repository methods that read a deck's committed history, and nothing else: no
@@ -121,6 +119,12 @@ export class DeckHistory {
     private readonly repos: HistoryRepositories,
     private readonly sources: DeckSourceRegistry,
   ) {}
+
+  /** A primer as markdown, by the deck's source (as is for an unknown source); `null` without one. */
+  primerMarkdown(source: string, primer: string | null): string | null {
+    if (primer === null || primer === '') return null;
+    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
+  }
 
   /** A stored snapshot; its absence means the database is inconsistent. */
   async snapshot(hash: string): Promise<CanonicalSnapshot> {
@@ -181,7 +185,11 @@ export class DeckHistory {
   }
 
   /** Version `sequence` of the deck with its diff, primer diff, notes and neighbours, or `null`. */
-  async versionDetail(deckId: string, sequence: number): Promise<VersionHistoryDetail | null> {
+  async versionDetail(
+    deck: Pick<DeckRecord, 'id' | 'source'>,
+    sequence: number,
+  ): Promise<VersionHistoryDetail | null> {
+    const deckId = deck.id;
     const commit = await this.repos.commits.getBySequence(deckId, sequence);
     if (!commit) return null;
     const [parent, lineage, tags, notes] = await Promise.all([
@@ -208,6 +216,7 @@ export class DeckHistory {
     return {
       version: toVersionListItemDTO({ commit, parent, snapshot, diff, tags }),
       snapshot,
+      primerMarkdown: this.primerMarkdown(deck.source, snapshot.primer),
       sourceMetadata: commit.sourceMetadata,
       diff,
       primerDiff,
@@ -293,7 +302,7 @@ export class DeckHistory {
       : DEFAULT_CARD_SEARCH_LIMIT;
     const hits = await this.repos.cardIndex.searchCardsInDeck(
       deckId,
-      query.slice(0, MAX_SEARCH_QUERY_LENGTH),
+      query.slice(0, MAX_CARD_QUERY_LENGTH),
       boundedLimit,
       { includeWorking },
     );
@@ -336,42 +345,24 @@ export class DeckHistory {
     const inputs = new CardHistoryInputs(this.repos, deckId, lineage, working?.snapshot ?? null);
     const [, keyFacts] = await Promise.all([inputs.prefetch(key), this.repos.catalog.getMany([key])]);
 
+    const versions: VersionMeta[] = lineage.map((commit) => ({
+      commitId: commit.id,
+      sequence: commit.sequence,
+      at: commit.createdAt,
+      message: commit.message,
+    }));
+    if (working) {
+      versions.push({ commitId: null, sequence: null, at: working.fetchedAt, message: working.label });
+    }
     const traced = await inputs.run(() => {
-      const points: CardVersionPoint[] = lineage.map((commit) => ({
-        commitId: commit.id,
-        sequence: commit.sequence,
-        at: commit.createdAt,
-        message: commit.message,
-        zones: [],
-      }));
-      if (working) {
-        points.push({
-          commitId: null,
-          sequence: null,
-          at: working.fetchedAt,
-          message: working.label,
-          zones: [],
-        });
-      }
-      const keys = traceCardKeys({
-        key,
-        length: points.length,
-        contains: (pointKey, index) => inputs.zonesAt(pointKey, index).length > 0,
+      const { points, keys } = traceCardPoints(key, {
+        points: versions,
+        zonesAt: (pointKey, index) => inputs.zonesAt(pointKey, index),
         renames: (index) => {
           const [before, after] = inputs.snapshotPair(index - 1, index);
           return renamedKeys(before, after);
         },
-      });
-      points.forEach((point, index) => {
-        const pointKey = keys[index] ?? key;
-        point.zones = inputs.zonesAt(pointKey, index);
-        const previousKey = keys[index - 1];
-        if (previousKey !== undefined && previousKey !== pointKey) {
-          point.renamedFrom = {
-            key: previousKey,
-            name: cardName(inputs.snapshotAt(index - 1), previousKey) ?? previousKey,
-          };
-        }
+        nameAt: (pointKey, index) => cardName(inputs.snapshotAt(index), pointKey),
       });
       const newest = points.findLastIndex((point) => point.zones.length > 0);
       if (newest === -1) return null;
@@ -409,7 +400,11 @@ export class DeckHistory {
 
   /** Every tag used in the deck, with the number of versions carrying it, sorted by name. */
   async listTags(deckId: string): Promise<TagCountDTO[]> {
-    return (await this.repos.tags.listForDeck(deckId)).map((tag) => ({ name: tag.name, count: tag.count }));
+    return (await this.repos.tags.listForDeck(deckId)).map(({ name, count, lastSequence }) => ({
+      name,
+      count,
+      lastSequence,
+    }));
   }
 }
 
@@ -557,9 +552,4 @@ class CardHistoryInputs {
     }
     return wantedKeys.length + wantedCommits.length;
   }
-}
-
-/** Display name of a card in a snapshot (first zone that has it), if present. */
-function cardName(snapshot: CanonicalSnapshot, key: CardKey): string | undefined {
-  return allCards(snapshot).find((card) => card.key === key)?.name;
 }

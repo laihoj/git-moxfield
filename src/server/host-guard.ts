@@ -21,8 +21,20 @@
  */
 import { isIP } from 'node:net';
 
-interface HeaderSource {
+/** The part of `Headers` the guards read (a `Headers`, a `NextRequest`'s or `headers()`). */
+export interface HeaderSource {
   get(name: string): string | null;
+}
+
+/** First value of a possibly comma-separated forwarding header. */
+export function firstHeaderValue(value: string | null): string | null {
+  const first = value?.split(',')[0]?.trim() ?? '';
+  return first === '' ? null : first;
+}
+
+/** The host a request was addressed to: the first `X-Forwarded-Host` value, else `Host`. */
+export function forwardedHost(headers: HeaderSource): string | null {
+  return firstHeaderValue(headers.get('x-forwarded-host')) ?? firstHeaderValue(headers.get('host'));
 }
 
 /** The environment variables that name additional hosts. */
@@ -61,7 +73,8 @@ export function hostnameOf(value: string): string | null {
   return name.endsWith('.') ? name.slice(0, -1) : name;
 }
 
-function listEntries(value: string | undefined): string[] {
+/** The non-empty, trimmed entries of a comma-separated setting. */
+export function splitList(value: string | undefined): string[] {
   return (value ?? '')
     .split(',')
     .map((entry) => entry.trim())
@@ -70,7 +83,7 @@ function listEntries(value: string | undefined): string[] {
 
 /** `ALLOWED_HOSTS` entries that are not `host[:port]` values (for configuration errors). */
 export function invalidAllowedHosts(value: string | undefined): string[] {
-  return listEntries(value).filter((entry) => hostnameOf(entry) === null);
+  return splitList(value).filter((entry) => hostnameOf(entry) === null);
 }
 
 /**
@@ -89,7 +102,7 @@ export function configuredHostnames(env: HostGuardEnv): ReadonlySet<string> {
       // Not a URL: reported by the configuration validation.
     }
   }
-  for (const entry of listEntries(env.ALLOWED_HOSTS)) {
+  for (const entry of splitList(env.ALLOWED_HOSTS)) {
     const name = hostnameOf(entry);
     if (name !== null) names.add(name);
   }

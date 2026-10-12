@@ -2,13 +2,11 @@
  * One-time links and invites: single use, expiry, and single use across connections
  * (two processes of the app share one database file).
  */
-import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
-import type { LibsqlDatabase } from '@/server/db/libsql';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import {
   countRows,
@@ -16,7 +14,7 @@ import {
   expectRepositoryError,
   openTestDatabaseHandle,
 } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 
 const HASH = 'c'.repeat(64);
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -180,6 +178,7 @@ describe('login link repository', () => {
       () => repos.loginLinks.create({ ...input, tokenHash: 'e'.repeat(64), userId: 'nope' }),
       'not-found',
     );
+    await expectRepositoryError(repos.loginLinks.create({ ...input, tokenHash: '' }), 'invalid-input');
   });
 });
 
@@ -239,6 +238,20 @@ describe('invite repository', () => {
     expect(await countRows(db, 'users')).toBe(2);
   });
 
+  it('refuses an empty token hash', async () => {
+    const { repos } = await setup();
+    await expectRepositoryError(
+      repos.invites.create({
+        tokenHash: '',
+        role: 'member',
+        note: '',
+        createdByUserId: null,
+        expiresAt: EXPIRY,
+      }),
+      'invalid-input',
+    );
+  });
+
   it('is refused when expired, revoked or given an empty name, without being used up', async () => {
     const { repos, invite } = await setup();
     expect(await repos.invites.accept(HASH, EXPIRY, { displayName: 'Mikko' })).toBeNull();
@@ -287,25 +300,14 @@ describe('invite repository', () => {
 });
 
 describe('single use across connections', () => {
-  let dir: string | undefined;
-  const open: LibsqlDatabase[] = [];
-
-  afterEach(() => {
-    for (const handle of open.splice(0)) handle.close();
-    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
-    dir = undefined;
-  });
-
   /**
    * Two handles on one database file, like two requests (or, through SQLite's file lock,
    * two processes) of the app.
    */
   async function twoConnections(): Promise<[Repositories, Repositories]> {
-    dir = tempDir('git-moxfield-once-');
-    const url = `file:${join(dir, 'app.db')}`;
+    const url = `file:${join(scratchDir('git-moxfield-once-'), 'app.db')}`;
     const first = await openTestDatabaseHandle({ url });
     const second = await openTestDatabaseHandle({ url });
-    open.push(first, second);
     return [createRepositories(first.db), createRepositories(second.db)];
   }
 

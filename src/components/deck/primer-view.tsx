@@ -69,10 +69,7 @@ const COMPONENTS: Components = {
 };
 
 export interface PrimerViewProps {
-  /**
-   * Portable markdown (already converted from Moxfield markup with
-   * `services.primerToMarkdown`). Untrusted.
-   */
+  /** Portable markdown, converted from Moxfield markup (`VersionDetailDTO.primerMarkdown`). Untrusted. */
   markdown: string;
   className?: string;
 }

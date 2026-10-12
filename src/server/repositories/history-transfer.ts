@@ -24,7 +24,7 @@
 import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
-import { commitId, sha256Hex } from '@/core/hash';
+import { deckReference, isContentAddressed, sha256Hex } from '@/core/hash';
 import {
   branches,
   cardCatalog,
@@ -39,14 +39,17 @@ import {
   versionTags,
 } from '@/server/db/schema';
 
-import { classifySqlError } from '@/server/db/sql-errors';
+import { isSqlErrorKind } from '@/server/db/sql-errors';
 
+import { catalogUpserts } from './catalog';
 import { corruptData } from './codec';
 import {
   assertStorableSize,
   batches,
   distinct,
+  excluded,
   isUniqueViolation,
+  selectInBatches,
   withTransaction,
   writeAll,
   type LibsqlExecutor,
@@ -54,7 +57,7 @@ import {
 } from './context';
 import { RepositoryError } from './errors';
 import { inflateRawBlob } from './raw-blobs';
-import { decodeSnapshot, snapshotCardRows } from './snapshots';
+import { decodeSnapshot, snapshotCardRows, snapshotWriteStatements } from './snapshots';
 
 export type DeckRow = typeof decks.$inferSelect;
 export type BranchRow = typeof branches.$inferSelect;
@@ -89,7 +92,8 @@ export interface CommitLocation {
 }
 
 /** Tables whose rows have a random id that a copy keeps when it is free. */
-export type TransferIdKind = 'deck' | 'branch' | 'observation' | 'note' | 'relink';
+export const TRANSFER_ID_KINDS = ['deck', 'branch', 'observation', 'note', 'relink'] as const;
+export type TransferIdKind = (typeof TRANSFER_ID_KINDS)[number];
 
 export interface HistoryTransferRepository {
   /** The deck's history rows, or `null` for a deck that is not the workspace's. */
@@ -165,10 +169,10 @@ export function deckReferences(
   relinks: readonly DeckRelinkRow[],
 ): string[] {
   return distinct([
-    `${deck.source}:${deck.externalId}`,
+    deckReference(deck),
     ...relinks.flatMap((relink) => [
-      `${deck.source}:${relink.previousExternalId}`,
-      `${deck.source}:${relink.externalId}`,
+      deckReference({ source: deck.source, externalId: relink.previousExternalId }),
+      deckReference({ source: deck.source, externalId: relink.externalId }),
     ]),
   ]);
 }
@@ -182,23 +186,7 @@ export function assertCommitsContentAddressed(
   references: readonly string[],
 ): void {
   for (const row of rows) {
-    const verified = references.some((deck) => {
-      try {
-        return (
-          commitId({
-            deck,
-            snapshotHash: row.snapshotHash,
-            parentId: row.parentId,
-            createdAt: row.createdAt,
-            sourceVersion: row.sourceVersion,
-            message: row.message,
-          }) === row.id
-        );
-      } catch {
-        return false;
-      }
-    });
-    if (!verified) {
+    if (!isContentAddressed(row, references)) {
       throw new RepositoryError(
         'invalid-input',
         `Version v${row.sequence} (commit ${row.id}) does not match its content under any of the deck's references (${references.join(', ')})`,
@@ -210,19 +198,37 @@ export function assertCommitsContentAddressed(
 /** Rows per multi-row statement for the wide history tables (commit rows carry metadata JSON). */
 const HISTORY_ROWS_PER_STATEMENT = 100;
 
-export function createHistoryTransferRepository(ctx: RepositoryContext): HistoryTransferRepository {
-  /** `column IN (values)` over batches, collecting the selected rows. */
-  async function selectIn<T>(
-    values: readonly string[],
-    query: (batch: string[]) => PromiseLike<T[]>,
-  ): Promise<T[]> {
-    const pages = await Promise.all(batches(distinct(values)).map((batch) => query(batch)));
-    return pages.flat();
-  }
+const ID_COLUMNS: Record<TransferIdKind, SQLiteColumn> = {
+  deck: decks.id,
+  branch: branches.id,
+  observation: observations.id,
+  note: commitNotes.id,
+  relink: deckRelinks.id,
+};
 
+/** The ids of the rows of `rows`, by kind. */
+export function historyRowIds(rows: DeckHistoryRows): Record<TransferIdKind, string[]> {
+  return {
+    deck: [rows.deck.id],
+    branch: rows.branches.map((row) => row.id),
+    observation: rows.observations.map((row) => row.id),
+    note: rows.commitNotes.map((row) => row.id),
+    relink: rows.relinks.map((row) => row.id),
+  };
+}
+
+/** What an id taken by a row of this kind means for the import (the deck's own id names itself). */
+const ID_CONFLICTS: Record<Exclude<TransferIdKind, 'deck'>, string> = {
+  branch: 'a branch id is taken',
+  observation: 'an observation id is taken',
+  note: 'a note id is taken',
+  relink: 'a relink id is taken',
+};
+
+export function createHistoryTransferRepository(ctx: RepositoryContext): HistoryTransferRepository {
   async function existing(column: SQLiteColumn, values: readonly string[]): Promise<Set<string>> {
     const table = column.table;
-    const rows = await selectIn(values, (batch) =>
+    const rows = await selectInBatches(values, (batch) =>
       ctx.db
         .select({ value: sql<string>`${column}` })
         .from(table)
@@ -231,14 +237,6 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     );
     return new Set(rows.map((row) => row.value));
   }
-
-  const ID_COLUMNS: Record<TransferIdKind, SQLiteColumn> = {
-    deck: decks.id,
-    branch: branches.id,
-    observation: observations.id,
-    note: commitNotes.id,
-    relink: deckRelinks.id,
-  };
 
   return {
     async readDeckHistory(deckId) {
@@ -295,7 +293,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     async readSnapshots(hashes) {
-      const rows = await selectIn(hashes, (batch) =>
+      const rows = await selectInBatches(hashes, (batch) =>
         ctx.db.select().from(snapshots).where(inArray(snapshots.hash, batch)).all(),
       );
       for (const row of rows) verifySnapshot(row);
@@ -303,7 +301,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     async readRawBlobs(hashes) {
-      const rows = await selectIn(hashes, (batch) =>
+      const rows = await selectInBatches(hashes, (batch) =>
         ctx.db.select().from(rawBlobs).where(inArray(rawBlobs.hash, batch)).all(),
       );
       for (const row of rows) await inflateRawBlob(row);
@@ -311,7 +309,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     async snapshotSizes(hashes) {
-      const rows = await selectIn(hashes, (batch) =>
+      const rows = await selectInBatches(hashes, (batch) =>
         ctx.db
           .select({
             hash: snapshots.hash,
@@ -325,7 +323,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     async rawBlobSizes(hashes) {
-      const rows = await selectIn(hashes, (batch) =>
+      const rows = await selectInBatches(hashes, (batch) =>
         ctx.db
           .select({ hash: rawBlobs.hash, bytes: sql<number>`length(${rawBlobs.data})` })
           .from(rawBlobs)
@@ -336,7 +334,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     async cardKeysOf(snapshotHashes) {
-      const rows = await selectIn(snapshotHashes, (batch) =>
+      const rows = await selectInBatches(snapshotHashes, (batch) =>
         ctx.db
           .selectDistinct({ key: snapshotCards.cardKey })
           .from(snapshotCards)
@@ -347,7 +345,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     readCatalog(keys) {
-      return selectIn(keys, (batch) =>
+      return selectInBatches(keys, (batch) =>
         ctx.db
           .select()
           .from(cardCatalog)
@@ -367,7 +365,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
     },
 
     locateCommits(ids) {
-      return selectIn(ids, (batch) =>
+      return selectInBatches(ids, (batch) =>
         ctx.db
           .select({ commitId: commits.id, deckId: commits.deckId, workspaceId: decks.workspaceId })
           .from(commits)
@@ -388,16 +386,10 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
         return { row, cards: snapshotCardRows(row.hash, snapshot) };
       });
       if (first === undefined) return;
-      const all = [first, ...rest];
-      await writeAll(ctx, (db) => [
-        db
-          .insert(snapshots)
-          .values(all.map(({ row }) => row))
-          .onConflictDoNothing(),
-        ...batches(all.flatMap(({ cards }) => cards)).map((batch) =>
-          db.insert(snapshotCards).values(batch).onConflictDoNothing(),
-        ),
-      ]);
+      const cards = [first, ...rest].flatMap((verified) => verified.cards);
+      await writeAll(ctx, (db) =>
+        snapshotWriteStatements(db, [first.row, ...rest.map((verified) => verified.row)], cards),
+      );
     },
 
     async insertRawBlobs(rows) {
@@ -440,7 +432,7 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
           await insertChunks(db, deckRelinks, rows.relinks);
         });
       } catch (error) {
-        if (classifySqlError(error).kind === 'foreign-key') {
+        if (isSqlErrorKind(error, 'foreign-key')) {
           throw new RepositoryError(
             'not-found',
             `Deck ${deck.source}:${deck.externalId} references a snapshot or raw payload that is not stored`,
@@ -464,30 +456,10 @@ export function createHistoryTransferRepository(ctx: RepositoryContext): History
         if (known === undefined || row.updatedAt > known.updatedAt) latest.set(row.key, row);
       }
       const values = [...latest.values()].map((row) => ({ ...row, workspaceId: ctx.workspaceId }));
-      const [first = [], ...rest] = batches(values);
-      await writeAll(ctx, (db) => {
-        const upsert = (batch: typeof values) =>
-          db
-            .insert(cardCatalog)
-            .values(batch)
-            .onConflictDoUpdate({
-              target: [cardCatalog.workspaceId, cardCatalog.key],
-              set: {
-                name: excluded(cardCatalog.name),
-                typeLine: excluded(cardCatalog.typeLine),
-                primaryType: excluded(cardCatalog.primaryType),
-                manaCost: excluded(cardCatalog.manaCost),
-                cmc: excluded(cardCatalog.cmc),
-                colorIdentityJson: excluded(cardCatalog.colorIdentityJson),
-                layout: excluded(cardCatalog.layout),
-                scryfallId: excluded(cardCatalog.scryfallId),
-                updatedAt: excluded(cardCatalog.updatedAt),
-              },
-              // The facts written last win, wherever they were written.
-              setWhere: sql`${excluded(cardCatalog.updatedAt)} > ${cardCatalog.updatedAt}`,
-            });
-        return [upsert(first), ...rest.map(upsert)] as const;
-      });
+      // The facts written last win, wherever they were written.
+      await writeAll(ctx, (db) =>
+        catalogUpserts(db, values, sql`${excluded(cardCatalog.updatedAt)} > ${cardCatalog.updatedAt}`),
+      );
     },
   };
 }
@@ -569,7 +541,7 @@ async function assertInsertable(
     }
     return false;
   };
-  if (await taken(decks.id, [deck.id])) conflict(`deck id ${deck.id} is taken`);
+  if (await taken(ID_COLUMNS.deck, [deck.id])) conflict(`deck id ${deck.id} is taken`);
   if (
     await taken(
       commits.id,
@@ -577,34 +549,10 @@ async function assertInsertable(
     )
   )
     conflict('some of its versions are stored already');
-  if (
-    await taken(
-      branches.id,
-      rows.branches.map((branch) => branch.id),
-    )
-  )
-    conflict('a branch id is taken');
-  if (
-    await taken(
-      observations.id,
-      rows.observations.map((row) => row.id),
-    )
-  )
-    conflict('an observation id is taken');
-  if (
-    await taken(
-      commitNotes.id,
-      rows.commitNotes.map((row) => row.id),
-    )
-  )
-    conflict('a note id is taken');
-  if (
-    await taken(
-      deckRelinks.id,
-      rows.relinks.map((row) => row.id),
-    )
-  )
-    conflict('a relink id is taken');
+  const ids = historyRowIds(rows);
+  for (const kind of ['branch', 'observation', 'note', 'relink'] as const) {
+    if (await taken(ID_COLUMNS[kind], ids[kind])) conflict(ID_CONFLICTS[kind]);
+  }
 }
 
 /** Inserts rows in multi-row statements of at most {@link HISTORY_ROWS_PER_STATEMENT}, in order. */
@@ -620,9 +568,4 @@ async function insertChunks<
   for (const batch of batches(rows, HISTORY_ROWS_PER_STATEMENT)) {
     await db.insert(table).values(batch);
   }
-}
-
-/** The value an upsert tried to insert into `column` (SQLite's `excluded` pseudo-table). */
-function excluded(column: SQLiteColumn): SQL {
-  return sql.raw(`excluded."${column.name}"`);
 }

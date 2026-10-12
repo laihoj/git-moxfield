@@ -1,33 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
-import { createServices } from '@/server/services';
 import { createServiceHarness, defined } from '@tests/support/services';
 
-import {
-  DEMO_PUBLIC_ID,
-  DEMO_USER_NAME,
-  DemoClock,
-  ensureDemoUser,
-  seedDemoDeck,
-} from '../../../scripts/seed-demo';
+import { DEMO_PUBLIC_ID, DEMO_USER_NAME, ensureDemoUser, seedDemoDeck } from '../../../scripts/seed-demo';
 
 describe('demo seed', () => {
   it('creates eight versions over ten weeks with tags, notes and uncommitted changes', async () => {
     const end = Date.parse('2026-10-09T19:00:00.000Z');
-    const clock = new DemoClock(end);
     // Like the script: server fetching is off, so seeding never contacts Moxfield.
-    const { db, sources, config, logger, api } = await createServiceHarness({
-      env: { MOXFIELD_SERVER_FETCH: 'off' },
-    });
-    const services = createServices({
-      db,
-      sources,
-      config,
-      workspaceId: LOCAL_WORKSPACE_ID,
-      now: clock.now,
-      logger,
-    });
+    const { services, clock, api } = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
 
     const deckId = await seedDemoDeck(services, clock, end);
     expect(api.requests).toEqual([]);
@@ -58,9 +40,9 @@ describe('demo seed', () => {
       1,
     );
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 2 },
-      { name: 'testing', count: 1 },
-      { name: 'tournament', count: 2 },
+      { name: 'stable', count: 2, lastSequence: 8 },
+      { name: 'testing', count: 1, lastSequence: 5 },
+      { name: 'tournament', count: 2, lastSequence: 8 },
     ]);
 
     const tournament = defined(await services.getVersion(deckId, 3));

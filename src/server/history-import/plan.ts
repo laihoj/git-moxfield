@@ -7,15 +7,18 @@ import 'server-only';
 
 import { randomUUID } from 'node:crypto';
 
+import { pluralize } from '@/core/text';
+import { describeDeckRef } from '@/server/deck-reference';
 import {
   assertCommitsContentAddressed,
   deckReferences,
+  historyRowIds,
   isRepositoryError,
   MAX_STORED_VALUE_BYTES,
+  TRANSFER_ID_KINDS,
   type DeckHistoryRows,
   type DeckRecord,
   type Repositories,
-  type TransferIdKind,
 } from '@/server/repositories';
 
 import { HistoryImportError } from './errors';
@@ -104,10 +107,6 @@ export interface PlanImportOptions {
   newId?: () => string;
 }
 
-function pluralize(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
-}
-
 function countsOf(rows: DeckHistoryRows): ImportCounts {
   return {
     versions: rows.commits.length,
@@ -129,18 +128,31 @@ function contentOf(rows: DeckHistoryRows): { snapshots: string[]; rawBlobs: stri
   return { snapshots: [...snapshots], rawBlobs: [...rawBlobs] };
 }
 
+/** The content a history references, and the stored size of each piece. */
+interface SourceContent {
+  snapshots: string[];
+  rawBlobs: string[];
+  snapshotBytes: Map<string, number>;
+  rawBlobBytes: Map<string, number>;
+}
+
+/** Reports a repository failure while reading the source as damage to it; anything else is rethrown. */
+function damaged(what: string, error: unknown): never {
+  if (!isRepositoryError(error)) throw error;
+  throw new HistoryImportError(`The source's ${what} is damaged: ${error.message}.`, { cause: error });
+}
+
 /**
  * Checks what will be copied before anything is: the versions are content-addressed, their
  * content is stored in the source, intact (it matches its hashes and this version reads
- * it), and no value is larger than a remote database accepts.
+ * it), and no value is larger than a remote database accepts. Returns the content and its sizes.
  */
-async function verifySource(source: Repositories, rows: DeckHistoryRows): Promise<void> {
-  const what = `“${rows.deck.name}” (${rows.deck.source}:${rows.deck.externalId})`;
+async function verifySource(source: Repositories, rows: DeckHistoryRows): Promise<SourceContent> {
+  const what = describeDeckRef(rows.deck);
   try {
     assertCommitsContentAddressed(rows.commits, deckReferences(rows.deck, rows.relinks));
   } catch (error) {
-    if (!isRepositoryError(error)) throw error;
-    throw new HistoryImportError(`The source's ${what} is damaged: ${error.message}.`, { cause: error });
+    damaged(what, error);
   }
   const content = contentOf(rows);
   const [snapshotBytes, rawBlobBytes] = await Promise.all([
@@ -173,9 +185,9 @@ async function verifySource(source: Repositories, rows: DeckHistoryRows): Promis
       await source.historyTransfer.readRawBlobs(batch);
     }
   } catch (error) {
-    if (!isRepositoryError(error)) throw error;
-    throw new HistoryImportError(`The source's ${what} is damaged: ${error.message}.`, { cause: error });
+    damaged(what, error);
   }
+  return { ...content, snapshotBytes, rawBlobBytes };
 }
 
 /** Replaces the ids of `rows` that the target uses already; returns the rows and how many ids changed. */
@@ -184,14 +196,10 @@ async function withFreeIds(
   rows: DeckHistoryRows,
   newId: () => string,
 ): Promise<{ rows: DeckHistoryRows; replaced: number }> {
-  const kinds: [TransferIdKind, string[]][] = [
-    ['deck', [rows.deck.id]],
-    ['branch', rows.branches.map((row) => row.id)],
-    ['observation', rows.observations.map((row) => row.id)],
-    ['note', rows.commitNotes.map((row) => row.id)],
-    ['relink', rows.relinks.map((row) => row.id)],
-  ];
-  const taken = await Promise.all(kinds.map(([kind, ids]) => target.historyTransfer.takenIds(kind, ids)));
+  const rowIds = historyRowIds(rows);
+  const taken = await Promise.all(
+    TRANSFER_ID_KINDS.map((kind) => target.historyTransfer.takenIds(kind, rowIds[kind])),
+  );
   const replacements = new Map<string, string>();
   taken.forEach((ids) => {
     for (const id of ids) replacements.set(id, newId());
@@ -221,7 +229,7 @@ async function planDeck(
   const { source, target } = endpoints;
   const rows = await source.historyTransfer.readDeckHistory(sourceDeck.id);
   if (!rows) throw new Error(`Source deck ${sourceDeck.id} vanished while planning`);
-  await verifySource(source, rows);
+  const content = await verifySource(source, rows);
   const deck: ImportDeck = {
     id: rows.deck.id,
     source: rows.deck.source,
@@ -229,7 +237,6 @@ async function planDeck(
     name: rows.deck.name,
   };
   const counts = countsOf(rows);
-  const content = contentOf(rows);
   const commitIds = rows.commits.map((commit) => commit.id);
   const cardKeys = await source.historyTransfer.cardKeysOf(content.snapshots);
 
@@ -271,11 +278,9 @@ async function planDeck(
   }
 
   const { rows: written, replaced } = await withFreeIds(target, rows, newId);
-  const [missingSnapshots, missingRawBlobs, snapshotBytes, rawBlobBytes] = await Promise.all([
+  const [missingSnapshots, missingRawBlobs] = await Promise.all([
     target.historyTransfer.missingSnapshots(content.snapshots),
     target.historyTransfer.missingRawBlobs(content.rawBlobs),
-    source.historyTransfer.snapshotSizes(content.snapshots),
-    source.historyTransfer.rawBlobSizes(content.rawBlobs),
   ]);
   return {
     action: 'import',
@@ -283,7 +288,12 @@ async function planDeck(
     counts,
     rows: written,
     replacedIds: replaced,
-    content: { snapshots: missingSnapshots, rawBlobs: missingRawBlobs, snapshotBytes, rawBlobBytes },
+    content: {
+      snapshots: missingSnapshots,
+      rawBlobs: missingRawBlobs,
+      snapshotBytes: content.snapshotBytes,
+      rawBlobBytes: content.rawBlobBytes,
+    },
     cardKeys,
   };
 }

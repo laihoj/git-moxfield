@@ -2,6 +2,7 @@
  * Parsing of dynamic route segments shared by the owner's deck pages (`/decks/[deckId]/…`)
  * and the shared deck pages (`/s/[token]/…`). Pure; no data access.
  */
+import { parseSequenceText } from '@/core/sequence';
 
 /**
  * Decodes a dynamic route segment. Next.js hands over segments percent-encoded in some
@@ -17,8 +18,5 @@ export function decodeSegment(segment: string): string {
 
 /** Parses `[sequence]` route segments (`12`, also `v12`); `null` when malformed. */
 export function parseSequence(segment: string): number | null {
-  const match = /^v?(\d{1,9})$/i.exec(segment);
-  if (match === null) return null;
-  const sequence = Number(match[1]);
-  return sequence >= 1 ? sequence : null;
+  return parseSequenceText(segment)?.sequence ?? null;
 }

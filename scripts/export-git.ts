@@ -14,8 +14,9 @@
  */
 import { relative } from 'node:path';
 
-import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
-import { getConfig, type AppConfig } from '@/server/config';
+import { pluralize } from '@/core/text';
+import type { AppConfig } from '@/server/config';
+import { operatorSiteOrigins } from '@/server/deck-reference';
 import {
   defaultExportDirectory,
   exportDeckToGit,
@@ -24,14 +25,14 @@ import {
 } from '@/server/git-export';
 import { createRepositories, type DeckLocation, type Repositories } from '@/server/repositories';
 
+import { consoleIO, isEntryPoint, runMain, scriptArgs } from './cli';
 import {
   describeConfiguredDatabase,
   describeFailure,
   isMissingDatabaseFile,
-  openConfiguredDatabase,
+  loadConfigOrReport,
+  openConfiguredDatabaseOrReport,
 } from './database';
-import { runMain } from './cli';
-import { loadEnvFiles } from './load-env';
 
 const USAGE = 'Usage: pnpm export:git <deck id | Moxfield deck id | Moxfield deck URL> [outDir]';
 
@@ -66,12 +67,13 @@ async function run(
     );
     return 1;
   }
-  const database = await openConfiguredDatabase(config);
+  const database = await openConfiguredDatabaseOrReport(config, consoleIO);
+  if (database === null) return 1;
   const { db } = database;
   try {
     const system = createRepositories(db);
     const matches = await locateDecksForExport(system, reference, {
-      siteOrigins: [...new Set([config.moxfieldSiteOrigin, DEFAULT_MOXFIELD_SITE_ORIGIN])],
+      siteOrigins: operatorSiteOrigins(config),
     });
     const [match, ...others] = matches;
     if (match === undefined) {
@@ -95,7 +97,7 @@ async function run(
       outDir: outDirArgument ?? defaultExportDirectory(deck),
     });
     const count = result.versions.length;
-    console.log(`Exported ${count} version${count === 1 ? '' : 's'} of "${deck.name}" to ${result.outDir}`);
+    console.log(`Exported ${pluralize(count, 'version')} of "${deck.name}" to ${result.outDir}`);
     console.log('Every version is tagged v<N>; version tags become <tag>/v<N>.');
     const labels = result.versions.flatMap((version) => version.tags.filter((tag) => tag.includes('/')));
     if (labels.length > 0) console.log(`Version tags: ${labels.join(', ')}`);
@@ -117,9 +119,8 @@ async function run(
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  // pnpm forwards a literal `--` when users separate script arguments with it.
-  const args = argv.filter((arg) => arg !== '--');
-  if (args.includes('--help') || args.includes('-h')) {
+  const { args, help } = scriptArgs(argv);
+  if (help) {
     console.log(USAGE);
     return 0;
   }
@@ -128,14 +129,8 @@ async function main(argv: readonly string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
-  let config: AppConfig;
-  try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    console.error(describeFailure(error));
-    return 1;
-  }
+  const config = loadConfigOrReport(consoleIO);
+  if (config === null) return 1;
   try {
     return await run(config, reference, outDir);
   } catch (error) {
@@ -144,4 +139,5 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-runMain('export:git', () => main(process.argv.slice(2)));
+// Run only as a script (`pnpm export:git`), not when imported.
+if (isEntryPoint(import.meta.url)) runMain('export:git', () => main(process.argv.slice(2)));

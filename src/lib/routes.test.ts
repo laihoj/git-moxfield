@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CLAIM_PATH, SHARED_DECK_PATH, SIGN_IN_PATH, sharedDeckPath, signInPath } from '@/server/auth/paths';
+import { SHARED_DECK_PATH, sharedDeckPath } from '@/server/auth/paths';
 
 import {
   deckRoutes,
@@ -12,21 +12,30 @@ import {
   type DeckRoutes,
 } from './routes';
 
-/**
- * The server prints and redirects to the account pages (`src/server/auth/paths.ts`); the
- * UI's builders must produce exactly the same paths.
- */
-describe('account routes', () => {
-  it.each([undefined, '/', '/decks/abc', '/decks/abc/versions/3?tab=deck', '/capture?mode=paste'])(
-    'builds the same sign-in path as the server for next=%j',
-    (next) => {
-      expect(routes.signIn(next)).toBe(signInPath(next));
-    },
-  );
+describe('capture routes', () => {
+  it('builds the paste page, with the error the same-tab endpoint reports', () => {
+    expect(routes.capturePaste()).toBe('/capture?mode=paste');
+    expect(routes.capturePaste({ error: 'invalid' })).toBe('/capture?mode=paste&error=invalid');
+    expect(routes.capturePaste({ error: 'too-large' })).toBe('/capture?mode=paste&error=too-large');
+  });
+});
 
-  it('uses the server paths of the sign-in and claim pages', () => {
-    expect(routes.signIn()).toBe(SIGN_IN_PATH);
-    expect(routes.claim()).toBe(CLAIM_PATH);
+describe('account routes', () => {
+  it('builds the sign-in page, returning to a local path afterwards', () => {
+    expect(routes.signIn()).toBe('/signin');
+    expect(routes.signIn('/')).toBe('/signin');
+    expect(routes.signIn('/decks/abc/versions/3?tab=deck')).toBe(
+      '/signin?next=%2Fdecks%2Fabc%2Fversions%2F3%3Ftab%3Ddeck',
+    );
+  });
+
+  it('never returns to another site after signing in', () => {
+    expect(routes.signIn('//evil.example')).toBe('/signin');
+    expect(routes.signIn('https://evil.example')).toBe('/signin');
+  });
+
+  it('builds the claim page', () => {
+    expect(routes.claim()).toBe('/claim');
   });
 
   it('builds the onboarding variants of the Connect Moxfield page', () => {
@@ -55,7 +64,7 @@ function everyDeckPage(deck: DeckRoutes): string[] {
     deck.restore(3, 'primer'),
     deck.restoreText(3),
     deck.compare(),
-    deck.compare({ from: 'v1', to: 'head', hash: 'primer' }),
+    deck.compare({ from: 'v1', to: 'head', section: 'primer' }),
     deck.compare({ from: 'empty', to: 'working' }),
     deck.cards(),
     deck.cards({ q: 'Dress Down' }),
@@ -149,7 +158,7 @@ describe('form submission routes', () => {
   });
 
   it('replaces the query and fragment of the action, and adds none without fields', () => {
-    const action = ownerDeckRoutes('d1').compare({ from: 'v1', to: 'v2', hash: 'primer' });
+    const action = ownerDeckRoutes('d1').compare({ from: 'v1', to: 'v2', section: 'primer' });
     expect(formSubmissionRoute(action, [['to', 'v3']])).toBe('/decks/d1/compare?to=v3');
     expect(formSubmissionRoute(action, [])).toBe('/decks/d1/compare');
   });

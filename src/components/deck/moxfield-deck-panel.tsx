@@ -1,17 +1,20 @@
 'use client';
 
-import { ArrowUpRight, Link2 } from 'lucide-react';
+import clsx from 'clsx';
+import { Link2 } from 'lucide-react';
 import { useActionState, useEffect, useId, useState, type ReactNode } from 'react';
 
 import type { RelinkDeckState } from '@/app/action-types';
 import { relinkDeckAction } from '@/app/actions';
+import { DeckUrlInput } from '@/components/deck/deck-url-input';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { fieldDescriptionIds, Input } from '@/components/ui/field';
-import { Link } from '@/components/ui/navigation';
+import { ExternalLink } from '@/components/ui/external-link';
+import { Field, fieldControlProps } from '@/components/ui/field';
 import { AbsoluteTime } from '@/components/ui/relative-time';
 import { routes } from '@/lib/routes';
 import type { DeckRelinkDTO } from '@/server/services/types';
+import { TEXT_LINK, TextLink } from '@/components/ui/text-link';
 
 export interface MoxfieldDeckPanelProps {
   deckId: string;
@@ -39,7 +42,7 @@ export function ChangeMoxfieldDeckLink({ children }: { children: ReactNode }) {
   return (
     <a
       href={`#${PANEL_ID}`}
-      className="font-medium text-accent hover:underline"
+      className={TEXT_LINK}
       onClick={(event) => {
         event.preventDefault();
         document.getElementById(PANEL_ID)?.scrollIntoView({ block: 'nearest' });
@@ -83,16 +86,13 @@ export function MoxfieldDeckPanel({ deckId, externalId, url, relinks }: Moxfield
         <h2 id="moxfield-deck-heading" className="text-base font-semibold text-fg">
           Moxfield deck
         </h2>
-        <a
+        <ExternalLink
           href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-1 inline-flex max-w-full items-center gap-1 text-sm font-medium text-accent hover:underline"
+          newTabLabel="(opens on Moxfield in a new tab)"
+          className={clsx(TEXT_LINK, 'mt-1 inline-flex max-w-full items-center gap-1 text-sm')}
         >
           <span className="truncate font-mono text-[0.8125rem]">{externalId}</span>
-          <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />
-          <span className="sr-only">(opens on Moxfield in a new tab)</span>
-        </a>
+        </ExternalLink>
         {relinks.length > 0 && (
           <ul aria-label="Earlier Moxfield decks" className="mt-2 flex flex-col gap-1 text-xs text-muted">
             {relinks.map((relink) => (
@@ -139,7 +139,6 @@ export function MoxfieldDeckPanel({ deckId, externalId, url, relinks }: Moxfield
 
 function RelinkForm({ deckId, onCancel }: { deckId: string; onCancel: () => void }) {
   const id = useId();
-  const ids = fieldDescriptionIds(id);
   const explanationId = `${id}-explanation`;
   const [state, formAction, pending] = useActionState<RelinkDeckState, FormData>(relinkDeckAction, {
     status: 'idle',
@@ -158,43 +157,34 @@ function RelinkForm({ deckId, onCancel }: { deckId: string; onCancel: () => void
         Deleted this deck on Moxfield and made it again? Its new copy has a new link. Paste it here: every
         version stays, and new versions continue from the new deck. Nothing is changed on Moxfield.
       </p>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={id} className="text-sm font-medium text-fg">
-          New Moxfield deck URL
-        </label>
-        <Input
-          id={id}
+      <Field
+        label="New Moxfield deck URL"
+        htmlFor={id}
+        error={
+          error === null ? undefined : (
+            <>
+              {error.message}
+              {error.trackedBy !== undefined && (
+                <>
+                  {' '}
+                  <TextLink href={routes.deck(error.trackedBy.deckId)}>
+                    Open “{error.trackedBy.name}”
+                  </TextLink>
+                </>
+              )}
+            </>
+          )
+        }
+      >
+        <DeckUrlInput
           name="deck"
-          type="text"
-          inputMode="url"
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
           autoFocus
           required
           defaultValue={error?.input ?? ''}
           key={error === null ? 'idle' : `error:${error.input}:${error.message}`}
-          placeholder="https://moxfield.com/decks/…"
-          aria-invalid={error !== null || undefined}
-          aria-describedby={error !== null ? ids.error : undefined}
+          {...fieldControlProps(id, { invalid: error !== null, hint: false })}
         />
-        {error !== null && (
-          <p id={ids.error} role="alert" className="text-sm text-pretty text-remove">
-            {error.message}
-            {error.trackedBy !== undefined && (
-              <>
-                {' '}
-                <Link
-                  href={routes.deck(error.trackedBy.deckId)}
-                  className="font-medium text-accent hover:underline"
-                >
-                  Open “{error.trackedBy.name}”
-                </Link>
-              </>
-            )}
-          </p>
-        )}
-      </div>
+      </Field>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" variant="primary" size="sm" loading={pending}>
           Change deck

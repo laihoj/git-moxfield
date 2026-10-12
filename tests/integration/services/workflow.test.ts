@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import { suggestCommitMessage, summarizeDiff } from '@/core/diff';
+import { DeckHistory } from '@/server/services/history';
+import { createStaticDeckSourceRegistry } from '@/server/sources';
 import { moxfieldInternalId } from '@tests/support/moxfield-deck-builder';
 import {
   BLUE_FARM_PRIMER,
   BLUE_FARM_PUBLIC_ID,
   BLUE_FARM_URL,
   blueFarmSpec,
+  commitReviewed,
   committed,
   createServiceHarness,
   defined,
   moveCard,
   publishAndRefresh,
+  trackDeck,
 } from '@tests/support/services';
 
 const DECK_PATH = `/v3/decks/all/${BLUE_FARM_PUBLIC_ID}`;
@@ -108,7 +112,13 @@ describe('deck services: the core workflow', () => {
 
     const clean = defined(await services.getOverview(deckId));
     expect(clean).toMatchObject({ status: 'clean', head: v1, versionCount: 1, suggestedMessage: '' });
-    expect(clean.workingStats).toEqual({ zones: [], moves: [], printingChanges: 0, tagChanges: 0 });
+    expect(clean.workingStats).toEqual({
+      zones: [],
+      moves: [],
+      printingChanges: 0,
+      tagChanges: 0,
+      renames: 0,
+    });
     expect(clean.recentVersions.map((version) => version.sequence)).toEqual([1]);
 
     // Edit the deck on Moxfield and refresh.
@@ -245,14 +255,33 @@ describe('deck services: the core workflow', () => {
     expect(JSON.stringify(setup)).not.toContain('secret-agent');
   });
 
-  it('converts primer markup through the deck source', async () => {
-    const { services } = await createServiceHarness();
-    const markdown = services.primerToMarkdown(
-      'moxfield',
-      '===panel: Combo\nUse [[Underworld Breach]].\n===endpanel',
+  it('converts the primer of a version through the deck source', async () => {
+    const harness = await createServiceHarness();
+    const deckId = await trackDeck(
+      harness,
+      blueFarmSpec({ primer: '===panel: Combo\nUse [[Underworld Breach]].\n===endpanel' }),
     );
+    committed(await commitReviewed(harness, deckId, 'With a primer'));
+    const markdown = defined(await harness.services.getVersion(deckId, 1)).primerMarkdown;
     expect(markdown).not.toContain('===panel');
     expect(markdown).toContain('Underworld Breach');
-    expect(services.primerToMarkdown('unknown-source', '# Plain')).toBe('# Plain');
+  });
+
+  it('keeps the primer as it is when the deck source is not registered', async () => {
+    const harness = await createServiceHarness();
+    const primer = '===panel: Combo\nUse [[Underworld Breach]].\n===endpanel';
+    const deckId = await trackDeck(harness, blueFarmSpec({ primer }));
+    committed(await commitReviewed(harness, deckId, 'With a primer'));
+    const history = new DeckHistory(harness.repos, createStaticDeckSourceRegistry([]));
+    const detail = defined(await history.versionDetail({ id: deckId, source: 'moxfield' }, 1));
+    expect(detail.primerMarkdown).toBe(detail.snapshot.primer);
+    expect(detail.primerMarkdown).toContain('===panel: Combo');
+  });
+
+  it('has no primer markdown for a version without a primer', async () => {
+    const harness = await createServiceHarness();
+    const deckId = await trackDeck(harness, blueFarmSpec({ primer: '' }));
+    committed(await commitReviewed(harness, deckId, 'No primer'));
+    expect(defined(await harness.services.getVersion(deckId, 1)).primerMarkdown).toBeNull();
   });
 });

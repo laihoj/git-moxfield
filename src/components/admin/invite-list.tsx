@@ -6,9 +6,10 @@ import { revokeInviteAction } from '@/app/admin-actions';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
-import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { ItemList, ItemRow } from '@/components/ui/item-list';
+import { MetaItem } from '@/components/ui/meta-list';
 import { ExpiryTime, RelativeTime } from '@/components/ui/relative-time';
-import { describeInviteStatus, roleLabel } from '@/lib/accounts';
+import { describeCreator, describeInviteStatus, roleLabel } from '@/lib/accounts';
 import type { InviteDTO } from '@/server/auth/types';
 
 /** Every invite, newest first: state, who it is for, who made it, and Withdraw while pending. */
@@ -24,11 +25,11 @@ export function InviteList({ invites }: { invites: readonly InviteDTO[] }) {
     );
   }
   return (
-    <ul aria-label="Invites" className="divide-y divide-border">
+    <ItemList label="Invites">
       {invites.map((invite) => (
         <InviteRow key={invite.id} invite={invite} />
       ))}
-    </ul>
+    </ItemList>
   );
 }
 
@@ -36,9 +37,9 @@ function InviteRow({ invite }: { invite: InviteDTO }) {
   const status = describeInviteStatus(invite.status);
   const subject = invite.note === '' ? 'this invite' : `the invite for ${invite.note}`;
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-3.5 md:px-5">
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+    <ItemRow
+      title={
+        <p className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <Badge tone={status.tone}>{status.label}</Badge>
           {invite.note === '' ? (
             <span className="text-muted italic">No note</span>
@@ -46,11 +47,12 @@ function InviteRow({ invite }: { invite: InviteDTO }) {
             <span className="min-w-0 font-medium break-words text-fg">{invite.note}</span>
           )}
         </p>
-        <MetaList className="mt-1 text-xs text-muted">
+      }
+      meta={
+        <>
           <MetaItem>{roleLabel(invite.role)}</MetaItem>
           <MetaItem>
-            {invite.createdBy === null ? 'Created on the command line' : `By ${invite.createdBy}`}{' '}
-            <RelativeTime value={invite.createdAt} />
+            {describeCreator(invite.createdBy)} <RelativeTime value={invite.createdAt} />
           </MetaItem>
           {invite.status === 'pending' && (
             <MetaItem>
@@ -63,19 +65,18 @@ function InviteRow({ invite }: { invite: InviteDTO }) {
               <RelativeTime value={invite.usedAt} />
             </MetaItem>
           )}
-        </MetaList>
-      </div>
-      {invite.status === 'pending' && (
-        <InlineConfirm
-          trigger={{ label: 'Withdraw', ariaLabel: `Withdraw ${subject}` }}
-          message={`Withdraw ${subject}? Its link stops working at once.`}
-          confirmLabel="Withdraw invite"
-          onConfirm={async () => {
-            const result = await revokeInviteAction(invite.id);
-            return result.ok ? null : result.message;
-          }}
-        />
-      )}
-    </li>
+        </>
+      }
+      actions={
+        invite.status === 'pending' && (
+          <InlineConfirm
+            trigger={{ label: 'Withdraw', ariaLabel: `Withdraw ${subject}` }}
+            message={`Withdraw ${subject}? Its link stops working at once.`}
+            confirmLabel="Withdraw invite"
+            onConfirm={() => revokeInviteAction(invite.id)}
+          />
+        )
+      }
+    />
   );
 }

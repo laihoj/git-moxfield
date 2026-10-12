@@ -3,11 +3,10 @@
  * (Playwright's Chromium, installed by `pnpm test:e2e:install`), decoded by the server's
  * decoder: the round trip every capture takes, minus the network.
  */
-import { existsSync } from 'node:fs';
+import type { Page } from '@playwright/test';
+import { describe, expect, it } from 'vitest';
 
-import { chromium, type Browser, type Page } from '@playwright/test';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
+import { setUpChromium } from '@tests/support/browser';
 import { envelopeJson, incompressibleJson, UNICODE_SAMPLE } from '@tests/support/capture-codec';
 
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
@@ -24,10 +23,10 @@ interface EncoderWindow {
   encodeCapturePayload: (text: string) => Promise<string>;
 }
 
-let browser: Browser;
+const browser = setUpChromium(BROWSER_TIMEOUT_MS);
 
 async function openPage(options: { withoutCompressionStream?: boolean } = {}): Promise<Page> {
-  const page = await browser.newPage();
+  const page = await browser().newPage();
   await page.setContent('<!doctype html><title>Moxfield deck</title>');
   if (options.withoutCompressionStream) {
     await page.evaluate(() => Reflect.deleteProperty(globalThis, 'CompressionStream'));
@@ -39,17 +38,6 @@ async function openPage(options: { withoutCompressionStream?: boolean } = {}): P
 async function encodeInBrowser(page: Page, text: string): Promise<string> {
   return page.evaluate((input) => (window as unknown as EncoderWindow).encodeCapturePayload(input), text);
 }
-
-beforeAll(async () => {
-  if (!existsSync(chromium.executablePath())) {
-    throw new Error("Playwright's Chromium is not installed: run `pnpm test:e2e:install`.");
-  }
-  browser = await chromium.launch();
-}, BROWSER_TIMEOUT_MS);
-
-afterAll(async () => {
-  await browser.close();
-});
 
 describe('capture encoding in Chromium', () => {
   it(

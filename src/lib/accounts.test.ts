@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeInviteStatus, describeSessionOrigin, initials, roleLabel } from './accounts';
+import {
+  describeCreator,
+  describeInviteStatus,
+  describeSessionOrigin,
+  initials,
+  roleLabel,
+  theShareLinks,
+} from './accounts';
 
 describe('initials', () => {
   it.each([
@@ -21,6 +28,17 @@ describe('account wording', () => {
   it('labels roles', () => {
     expect(roleLabel('admin')).toBe('Admin');
     expect(roleLabel('member')).toBe('Member');
+  });
+
+  it('names who made a link: an admin, or the command line', () => {
+    expect(describeCreator('Mikko')).toBe('By Mikko');
+    expect(describeCreator(null)).toBe('Created on the command line');
+  });
+
+  it('counts the share links a revocation reaches', () => {
+    expect(theShareLinks(0)).toBe('any share links');
+    expect(theShareLinks(1)).toBe('the share link');
+    expect(theShareLinks(3)).toBe('the 3 share links');
   });
 
   it('says how every kind of session started', () => {

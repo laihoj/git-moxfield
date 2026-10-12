@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import type { DiffStats } from '@/core/diff/types';
+
 import {
+  cosmeticChange,
+  currentFetchError,
   deckTitle,
+  describeStatus,
   isUnnamedDeck,
   sharedDeckTitle,
   UNNAMED_DECK_TITLE,
@@ -49,5 +54,60 @@ describe('sharedDeckTitle', () => {
     expect(sharedDeckTitle({ name: '', head })).toBe(UNTITLED_DECK_TITLE);
     expect(sharedDeckTitle({ name: '  ', head })).toBe(UNTITLED_DECK_TITLE);
     expect(UNTITLED_DECK_TITLE).toBe('Untitled deck');
+  });
+});
+
+describe('currentFetchError', () => {
+  const error = {
+    code: 'blocked',
+    message: 'Blocked.',
+    at: '2026-10-09T12:00:00.000Z',
+    retryAfterSeconds: null,
+  } as const;
+
+  it('is the error when there is no observation yet', () => {
+    expect(currentFetchError({ lastFetchError: error, working: null })).toBe(error);
+  });
+
+  it('is the error only when it is later than the latest observation', () => {
+    expect(
+      currentFetchError({ lastFetchError: error, working: { fetchedAt: '2026-10-09T11:00:00.000Z' } }),
+    ).toBe(error);
+    expect(currentFetchError({ lastFetchError: error, working: { fetchedAt: error.at } })).toBeNull();
+    expect(
+      currentFetchError({ lastFetchError: error, working: { fetchedAt: '2026-10-09T13:00:00.000Z' } }),
+    ).toBeNull();
+  });
+
+  it('is null without an error', () => {
+    expect(currentFetchError({ lastFetchError: null, working: null })).toBeNull();
+  });
+});
+
+describe('cosmeticChange and the cosmetic-only status', () => {
+  const stats = (counts: Partial<DiffStats>): DiffStats => ({
+    zones: [],
+    moves: [],
+    printingChanges: 0,
+    tagChanges: 0,
+    renames: 0,
+    ...counts,
+  });
+
+  it('names renamed cards, printing changes (card tags count as such) or both', () => {
+    expect(cosmeticChange(stats({ renames: 1 }))).toBe('renames');
+    expect(cosmeticChange(stats({ printingChanges: 2 }))).toBe('printings');
+    expect(cosmeticChange(stats({ tagChanges: 1 }))).toBe('printings');
+    expect(cosmeticChange(stats({ renames: 1, printingChanges: 1 }))).toBe('both');
+    expect(cosmeticChange(stats({}))).toBeNull();
+  });
+
+  it('labels a deck whose uncommitted changes are only cosmetic by what they are', () => {
+    const label = (workingStats: DiffStats | null): string =>
+      describeStatus({ status: 'cosmetic-only', head: null, workingStats }).label;
+    expect(label(stats({ renames: 1 }))).toBe('Only renamed cards');
+    expect(label(stats({ printingChanges: 1 }))).toBe('Only printing changes');
+    expect(label(stats({ renames: 2, tagChanges: 1 }))).toBe('Only printing changes and renames');
+    expect(label(null)).toBe('Only printing changes');
   });
 });

@@ -12,6 +12,7 @@ import { applyMigrations } from '@/server/db/migration-state';
 import * as schema from '@/server/db/schema';
 import { classifySqlError, type SqlErrorKind } from '@/server/db/sql-errors';
 import { runInTransaction, runWrite } from '@/server/db/transaction';
+import { rejectionOf } from '@tests/support/errors';
 import { seedDeckHistory, type SeededHistory } from '@tests/support/libsql';
 
 import { openRemote, wipeRemoteDatabase } from './support';
@@ -32,15 +33,6 @@ beforeAll(async () => {
 afterAll(() => {
   handle.close();
 });
-
-async function failure(operation: () => Promise<unknown>): Promise<unknown> {
-  try {
-    await operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error('expected the operation to fail');
-}
 
 /** Each case: kind, message, and the failing statement (on the root db or a transaction). */
 function cases(): [SqlErrorKind, string, (db: LibsqlExecutor) => Promise<unknown>][] {
@@ -89,7 +81,7 @@ function cases(): [SqlErrorKind, string, (db: LibsqlExecutor) => Promise<unknown
 describe('remote errors', () => {
   it('are classified by their message in autocommit mode', async () => {
     for (const [kind, message, operation] of cases()) {
-      const error = await failure(() => operation(handle.db));
+      const error = await rejectionOf(() => operation(handle.db));
       expect(classifySqlError(error), message).toEqual({
         kind,
         message,
@@ -102,7 +94,7 @@ describe('remote errors', () => {
   it('are classified the same inside a transaction, which they leave usable', async () => {
     await runInTransaction(handle.db, async (tx) => {
       for (const [kind, message, operation] of cases()) {
-        const error = await failure(() => operation(tx));
+        const error = await rejectionOf(() => operation(tx));
         expect(String((error as Error).cause)).toMatch(/SQLITE_CONSTRAINT: SQLITE_CONSTRAINT: SQLite error:/);
         expect(classifySqlError(error), message).toMatchObject({ kind, message });
       }
@@ -113,7 +105,7 @@ describe('remote errors', () => {
 
   it('are classified the same in a batch, which leaves nothing behind', async () => {
     const { db } = handle;
-    const error = await failure(() =>
+    const error = await rejectionOf(() =>
       runWrite(db, (root) =>
         root.batch([
           root.run(sql`INSERT INTO checked VALUES (2)`),
@@ -130,7 +122,7 @@ describe('remote errors', () => {
   });
 
   it('include SQL the server cannot parse', async () => {
-    const error = await failure(() => handle.db.run(sql.raw('SELEC 1')));
+    const error = await rejectionOf(() => handle.db.run(sql.raw('SELEC 1')));
     expect(classifySqlError(error)).toMatchObject({
       kind: 'other',
       code: 'SQL_PARSE_ERROR',
@@ -154,7 +146,7 @@ describe('the 5,000,000-byte length limit', () => {
   it('applies to whole stored rows, not only to bound arguments', async () => {
     await rawBlob('blob-below-limit', 4_900_000);
     // The value alone is within the limit, but the row (value plus other columns) is not.
-    const rowTooBig = await failure(() => rawBlob('blob-at-limit', 5_000_000));
+    const rowTooBig = await rejectionOf(() => rawBlob('blob-at-limit', 5_000_000));
     expect(classifySqlError(rowTooBig)).toEqual({
       kind: 'too-big',
       message: 'string or blob too big',
@@ -162,7 +154,7 @@ describe('the 5,000,000-byte length limit', () => {
       code: 'SQLITE_TOOBIG',
     });
     // One byte more is rejected before the statement runs.
-    const argumentTooBig = await failure(() => rawBlob('blob-over-limit', 5_000_001));
+    const argumentTooBig = await rejectionOf(() => rawBlob('blob-over-limit', 5_000_001));
     expect(classifySqlError(argumentTooBig)).toEqual({
       kind: 'too-big',
       message: 'Arguments do not match SQL parameters: string or blob too big',

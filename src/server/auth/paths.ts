@@ -53,16 +53,30 @@ export function sharedDeckPath(token: string): string {
   return `${SHARED_DECK_PATH}/${token}`;
 }
 
+/** The token at the end of a link path: the inverse of {@link loginLinkPath} and the like. */
+export function tokenOfLinkPath(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/** `base` with `?next=` set to the local path `next` (checked with {@link safeRedirectPath}), unless that is the home page. */
+function withNext(base: string, next?: string): string {
+  const target = safeRedirectPath(next, '/');
+  return target === '/' ? base : `${base}?next=${encodeURIComponent(target)}`;
+}
+
 /** The page that asks before a bookmarklet signs this browser in, continuing to `next` afterwards. */
 export function handoffConfirmPath(next?: string): string {
-  const target = safeRedirectPath(next, '/');
-  return target === '/' ? HANDOFF_CONFIRM_PATH : `${HANDOFF_CONFIRM_PATH}?next=${encodeURIComponent(target)}`;
+  return withNext(HANDOFF_CONFIRM_PATH, next);
+}
+
+/** The hand-off route that finishes a cross-site bookmarklet sign-in, continuing to `next` afterwards. */
+export function handoffPath(next: string): string {
+  return withNext(HANDOFF_PATH, next);
 }
 
 /** The sign-in page, returning to `next` (a local path) afterwards. */
 export function signInPath(next?: string): string {
-  const target = safeRedirectPath(next, '/');
-  return target === '/' ? SIGN_IN_PATH : `${SIGN_IN_PATH}?next=${encodeURIComponent(target)}`;
+  return withNext(SIGN_IN_PATH, next);
 }
 
 /** A base no real request uses, for resolving `next` values as the browser would. */

@@ -11,6 +11,13 @@
  */
 import type { Route } from 'next';
 
+import {
+  CAPTURE_MODE_PARAM,
+  CAPTURE_PAGE_PATH,
+  CAPTURE_PASTE_MODE,
+  type CaptureFormError,
+} from '@/integrations/moxfield/capture-protocol';
+import { CLAIM_PATH, signInPath } from '@/server/auth/paths';
 import type { VersionRef } from '@/server/services/contract';
 
 const enc = encodeURIComponent;
@@ -27,6 +34,9 @@ function withQuery(path: string, query: Record<string, string | undefined>, hash
 
 export type VersionTab = 'changes' | 'deck' | 'primer';
 
+/** The ids of the page sections other pages link to (`#restore-primer`, `#primer`), where the links and the sections agree. */
+export const PAGE_ANCHORS = { restorePrimer: 'restore-primer', comparePrimer: 'primer' } as const;
+
 /**
  * Why the Connect Moxfield page is opened right after signing in (`/setup?welcome=…`),
  * so it can greet the user and lead with creating a bookmarklet: a new account from an
@@ -37,17 +47,20 @@ export type WelcomeReason = 'invite' | 'claimed' | 'claimed-local' | 'recovery';
 
 export const WELCOME_REASONS: readonly WelcomeReason[] = ['invite', 'claimed', 'claimed-local', 'recovery'];
 
+/** Dynamic route patterns for `revalidatePath`, which refreshes every page matching one. */
+export const routePatterns = { deckShare: '/decks/[deckId]/share' } as const;
+
 export const routes = {
   home: (): Route => '/',
   setup: (query: { welcome?: WelcomeReason } = {}): Route => withQuery('/setup', { welcome: query.welcome }),
-  capturePaste: (): Route => '/capture?mode=paste',
+  capturePaste: (query: { error?: CaptureFormError } = {}): Route =>
+    withQuery(CAPTURE_PAGE_PATH, { [CAPTURE_MODE_PARAM]: CAPTURE_PASTE_MODE, error: query.error }),
 
-  // Account pages. The server prints the same paths (`src/server/auth/paths.ts`); a test
-  // keeps the two in step.
+  // Account pages, at the paths the server prints and redirects to (`src/server/auth/paths.ts`).
 
   /** The sign-in page; `next` is a local path to return to afterwards. */
-  signIn: (next?: string): Route => withQuery('/signin', { next: next === '/' ? undefined : next }),
-  claim: (): Route => '/claim',
+  signIn: (next?: string): Route => signInPath(next) as Route,
+  claim: (): Route => CLAIM_PATH,
   account: (): Route => '/account',
   admin: (): Route => '/admin',
 
@@ -93,7 +106,8 @@ export interface DeckRoutes {
   restore: (sequence: number, section?: 'primer') => Route;
   /** The plain-text download of a version's restore export (a route handler, not a page). */
   restoreText: (sequence: number) => string;
-  compare: (query?: { from?: VersionRef; to?: VersionRef; hash?: string }) => Route;
+  /** `section: 'primer'` links straight to the primer of the comparison. */
+  compare: (query?: { from?: VersionRef; to?: VersionRef; section?: 'primer' }) => Route;
   cards: (query?: { q?: string }) => Route;
   card: (cardKey: string, query?: { all?: boolean }) => Route;
 }
@@ -113,9 +127,14 @@ export function deckRoutes(scope: DeckScope): DeckRoutes {
     version: (sequence, tab, hash) =>
       withQuery(`${base}/versions/${sequence}`, { tab: tab === 'changes' ? undefined : tab }, hash),
     restore: (sequence, section) =>
-      `${base}/versions/${sequence}/restore${section === 'primer' ? '#restore-primer' : ''}` as Route,
+      `${base}/versions/${sequence}/restore${section === 'primer' ? `#${PAGE_ANCHORS.restorePrimer}` : ''}` as Route,
     restoreText: (sequence) => `${base}/versions/${sequence}/restore.txt`,
-    compare: (query = {}) => withQuery(`${base}/compare`, { from: query.from, to: query.to }, query.hash),
+    compare: (query = {}) =>
+      withQuery(
+        `${base}/compare`,
+        { from: query.from, to: query.to },
+        query.section === 'primer' ? PAGE_ANCHORS.comparePrimer : undefined,
+      ),
     cards: (query = {}) => withQuery(`${base}/cards`, { q: query.q }),
     card: (cardKey, query = {}) =>
       withQuery(`${base}/cards/${enc(cardKey)}`, { all: query.all === true ? '1' : undefined }),

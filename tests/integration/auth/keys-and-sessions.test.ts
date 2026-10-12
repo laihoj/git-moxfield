@@ -10,7 +10,7 @@ import { HANDOFF_LIFETIME_MS, SESSION_LIFETIME_MS } from '@/server/auth/service'
 import { hashToken } from '@/server/auth/tokens';
 import type { SessionUser } from '@/server/auth/types';
 import { countRows } from '@tests/support/db';
-import { expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
+import { createKey, expectServiceError, keyOfBookmarklet, signUp, tokenOfPath } from '@tests/support/auth';
 import { createServiceHarness, defined, trackDeck, type ServiceHarness } from '@tests/support/services';
 import { openShared, shareLinksOf, tokenOfShareUrl } from '@tests/support/sharing';
 
@@ -201,8 +201,7 @@ describe('sessions', () => {
   it('end one at a time, all at once, and only the user’s own', async () => {
     const harness = await createServiceHarness();
     const laptop = await signUp(harness.auth, 'Mikko');
-    const created = await harness.auth.createBookmarkletKey(laptop.user, 'Phone', APP_URL);
-    const key = keyOfBookmarklet(created.bookmarklets.popup);
+    const key = await createKey(harness.auth, laptop.user, { label: 'Phone', appUrl: APP_URL });
     const phone = defined(await harness.auth.signInWithKey(key, 'Phone'));
     const tablet = defined(await harness.auth.signInWithKey(key, 'Tablet'));
     const anna = await signUp(harness.auth, 'Anna');
@@ -455,9 +454,10 @@ describe('what a key signed in, and what was made there', () => {
     const { owner, stolen, mintedKey } = await stolenKeyScenario(harness);
     const viaMinted = defined(await harness.auth.signInWithKey(mintedKey, 'Thief tablet'));
     // A key made through the minted one: revoked transitively.
-    const grandchild = keyOfBookmarklet(
-      (await harness.auth.createBookmarkletKey(viaMinted.user, 'Second hop', APP_URL)).bookmarklets.popup,
-    );
+    const grandchild = await createKey(harness.auth, viaMinted.user, {
+      label: 'Second hop',
+      appUrl: APP_URL,
+    });
 
     expect(await harness.auth.revokeKey(owner.user, stolen.id, { includeDerived: true })).toBe(true);
     expect(await harness.auth.signInWithKey(mintedKey, 'Thief again')).toBeNull();

@@ -3,10 +3,10 @@
 import clsx from 'clsx';
 import { useId, useState, useTransition, type ReactNode } from 'react';
 
-import { Button, type ButtonVariant } from './button';
+import type { AccountActionResult } from '@/app/action-types';
 
-/** Result of the confirmed action: `null` on success, otherwise a message to show. */
-export type ConfirmOutcome = string | null;
+import { Button, type ButtonVariant } from './button';
+import { ErrorText } from './field';
 
 export interface InlineConfirmProps {
   /** The button that starts the confirmation (`Revoke`). */
@@ -17,8 +17,8 @@ export interface InlineConfirmProps {
   details?: ReactNode;
   /** Label of the confirming button (`Revoke bookmarklet`). */
   confirmLabel: string;
-  /** Runs the action; resolves with an error message, or `null` when it succeeded. */
-  onConfirm: () => Promise<ConfirmOutcome>;
+  /** Runs the action; resolves with whether it worked, and the message to show if it did not. */
+  onConfirm: () => Promise<AccountActionResult>;
   /** `danger` for destructive actions (default), `primary` otherwise. */
   tone?: 'danger' | 'primary';
   className?: string;
@@ -78,11 +78,7 @@ export function InlineConfirm({
         {message}
       </div>
       {details}
-      {error !== null && (
-        <p role="alert" className="text-sm text-remove">
-          {error}
-        </p>
-      )}
+      {error !== null && <ErrorText>{error}</ErrorText>}
       <div className="flex flex-wrap gap-2">
         <Button
           variant={tone}
@@ -92,9 +88,9 @@ export function InlineConfirm({
           autoFocus
           onClick={() => {
             startTransition(async () => {
-              const outcome = await onConfirm();
-              if (outcome === null) setConfirming(false);
-              setError(outcome);
+              const result = await onConfirm();
+              if (result.ok) setConfirming(false);
+              setError(result.ok ? null : result.message);
             });
           }}
         >

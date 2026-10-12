@@ -1,17 +1,12 @@
-import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { CARD_RESULT_LIMIT, CardsContent, cardQuery } from '@/components/deck-pages/cards-content';
-import { deckTitle } from '@/lib/presentation';
 
-import { deckServices, decodeSegment, loadOverview } from '../data';
+import { deckServices, decodeSegment, loadOverview, ownerSectionMetadata } from '../data';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/decks/[deckId]/cards'>): Promise<Metadata> {
-  const overview = await loadOverview(decodeSegment((await params).deckId));
-  return { title: overview === null ? 'Cards' : `Cards · ${deckTitle(overview)}` };
-}
+export const generateMetadata = ownerSectionMetadata('Cards');
 
 /** Search every card that was ever in the deck; each result links to its card history. */
 export default async function CardsPage({ params, searchParams }: PageProps<'/decks/[deckId]/cards'>) {

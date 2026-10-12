@@ -2,8 +2,11 @@
  * Shared wording for domain states, so the deck list, the status panel and the
  * version pages describe the same thing with the same words (docs/ux.md).
  */
+import type { DiffStats } from '@/core/diff/types';
+import { isRecord } from '@/core/guards';
+import { upperFirst } from '@/core/text';
 import type { DeckSourceErrorCode, IngestMethod } from '@/integrations/deck-source';
-import type { DeckStatus, DeckSummaryDTO, SharedDeckDTO, VersionRefDTO } from '@/server/services/types';
+import type { CommitNoteDTO, DeckSummaryDTO, FetchErrorDTO, SharedDeckDTO } from '@/server/services/types';
 
 import { versionLabel } from './format';
 
@@ -15,8 +18,28 @@ export interface StatusPresentation {
   tone: StatusTone;
 }
 
-/** Label and tone of a deck status. `head` is the latest version, when there is one. */
-export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): StatusPresentation {
+/**
+ * What a difference without additions, removals or moves of cards consists of: renamed
+ * cards, printing (and card tag) changes, or both; `null` when it has neither.
+ */
+export function cosmeticChange(stats: DiffStats): 'renames' | 'printings' | 'both' | null {
+  const renames = stats.renames > 0;
+  const printings = stats.printingChanges + stats.tagChanges > 0;
+  if (renames && printings) return 'both';
+  return renames ? 'renames' : printings ? 'printings' : null;
+}
+
+const COSMETIC_STATUS_LABELS = {
+  renames: 'Only renamed cards',
+  printings: 'Only printing changes',
+  both: 'Only printing changes and renames',
+} as const;
+
+/** Label and tone of a deck's status. */
+export function describeStatus(
+  deck: Pick<DeckSummaryDTO, 'status' | 'head' | 'workingStats'>,
+): StatusPresentation {
+  const { status, head, workingStats } = deck;
   switch (status) {
     case 'never-fetched':
       return { label: 'Waiting for the first snapshot from Moxfield', tone: 'pending' };
@@ -24,14 +47,27 @@ export function describeStatus(status: DeckStatus, head: VersionRefDTO | null): 
       return { label: 'Not committed yet', tone: 'accent' };
     case 'uncommitted':
       return { label: 'Uncommitted changes', tone: 'accent' };
-    case 'cosmetic-only':
-      return { label: 'Only printing changes', tone: 'neutral' };
+    case 'cosmetic-only': {
+      const change = workingStats === null ? null : cosmeticChange(workingStats);
+      return { label: COSMETIC_STATUS_LABELS[change ?? 'printings'], tone: 'neutral' };
+    }
     case 'clean':
       return {
         label: head === null ? 'Up to date' : `Up to date with ${versionLabel(head.sequence)}`,
         tone: 'success',
       };
   }
+}
+
+/** The deck's last fetch error while it is newer than its latest observation (not at the same instant). */
+export function currentFetchError(deck: {
+  lastFetchError: FetchErrorDTO | null;
+  working: { fetchedAt: string } | null;
+}): FetchErrorDTO | null {
+  const error = deck.lastFetchError;
+  if (error === null) return null;
+  if (deck.working === null) return error;
+  return Date.parse(error.at) > Date.parse(deck.working.fetchedAt) ? error : null;
 }
 
 /** Title shown for a deck whose name is not known yet. */
@@ -49,6 +85,11 @@ export function isUnnamedDeck(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' |
 /** The deck's name for titles and labels: `New Moxfield deck` until its name is known. */
 export function deckTitle(deck: Pick<DeckSummaryDTO, 'name' | 'externalId' | 'status'>): string {
   return isUnnamedDeck(deck) ? UNNAMED_DECK_TITLE : deck.name;
+}
+
+/** A page title: `History · Blue Farm`, or just `History` while the deck is not known. */
+export function deckPageTitle(section: string, deckName: string | null): string {
+  return deckName === null ? section : `${section} · ${deckName}`;
 }
 
 /** Title shown for a shared deck whose latest version has no name. */
@@ -105,7 +146,7 @@ export function describeFetchError(code: DeckSourceErrorCode): string {
 export function formatLabel(format: string): string {
   if (format === '') return '';
   if (format.toLowerCase() === 'cedh') return 'cEDH';
-  return format.charAt(0).toUpperCase() + format.slice(1);
+  return upperFirst(format);
 }
 
 /**
@@ -114,9 +155,14 @@ export function formatLabel(format: string): string {
  */
 export function noteText(data: unknown): string {
   if (typeof data === 'string') return data;
-  if (typeof data === 'object' && data !== null && 'text' in data) {
-    const { text } = data;
-    if (typeof text === 'string') return text;
-  }
-  return '';
+  return isRecord(data) && typeof data.text === 'string' ? data.text : '';
+}
+
+/** The text (`''` without one) and last change of the version's free-text note, the note of `kind`. */
+export function freeTextNote(
+  notes: readonly CommitNoteDTO[],
+  kind: string,
+): { text: string; updatedAt: string | null } {
+  const note = notes.find((entry) => entry.kind === kind);
+  return { text: note === undefined ? '' : noteText(note.data), updatedAt: note?.updatedAt ?? null };
 }

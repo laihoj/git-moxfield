@@ -25,32 +25,28 @@
  * newer git-moxfield.
  */
 
-import { getConfig, type AppConfig } from '@/server/config';
+import { pluralize } from '@/core/text';
+import type { AppConfig } from '@/server/config';
 import { ensureLocalWorkspace } from '@/server/db/client';
 import { createLibsqlDatabase, databaseKindOf, type LibsqlDatabase } from '@/server/db/libsql';
 import { applyMigrations } from '@/server/db/migration-state';
 import { runsOnNetlify, type PlatformEnv } from '@/server/platform';
 
-import { describeConfiguredDatabase, describeFailure, isMissingDatabaseFile } from './database';
-import { isEntryPoint, runMain } from './cli';
-import { loadEnvFiles } from './load-env';
-
-export interface MigrateCommandIO {
-  out(line: string): void;
-  err(line: string): void;
-}
+import { consoleIO, isEntryPoint, runMain, type CommandIO } from './cli';
+import {
+  describeConfiguredDatabase,
+  describeFailure,
+  isMissingDatabaseFile,
+  loadConfigOrReport,
+} from './database';
 
 export interface MigrateCommandDependencies {
   config: AppConfig;
   /** The process environment, to tell where the script runs. Default: `process.env`. */
   env?: PlatformEnv;
-  io: MigrateCommandIO;
+  io: CommandIO;
   /** Folder with the migrations and their journal. Default: `drizzle/` in the working directory. */
   migrationsFolder?: string;
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -89,7 +85,7 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
   const created = isMissingDatabaseFile(config);
   let handle: LibsqlDatabase;
   try {
-    handle = await createLibsqlDatabase({ url: config.database.url, authToken: config.database.authToken });
+    handle = await createLibsqlDatabase(config.database.connection());
   } catch (error) {
     io.err(`Could not open the ${description}: ${describeFailure(error, config)}`);
     return 1;
@@ -102,13 +98,13 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
     );
     await ensureLocalWorkspace(handle.db);
     if (applied.length === 0) {
-      io.out(`Already up to date (${plural(state.expected, 'migration')} applied).`);
+      io.out(`Already up to date (${pluralize(state.expected, 'migration')} applied).`);
       return 0;
     }
-    io.out(`Applied ${plural(applied.length, 'migration')}:`);
+    io.out(`Applied ${pluralize(applied.length, 'migration')}:`);
     for (const tag of applied) io.out(`  ${tag}`);
     io.out('Referential integrity verified (PRAGMA foreign_key_check).');
-    io.out(`Up to date: all ${plural(state.expected, 'migration')} applied.`);
+    io.out(`Up to date: all ${pluralize(state.expected, 'migration')} applied.`);
     return 0;
   } catch (error) {
     io.err(`Migrating the ${description} failed: ${describeFailure(error, config)}`);
@@ -119,23 +115,8 @@ export async function runMigrateCommand(deps: MigrateCommandDependencies): Promi
 }
 
 async function main(): Promise<number> {
-  const io: MigrateCommandIO = {
-    out: (line) => {
-      console.log(line);
-    },
-    err: (line) => {
-      console.error(line);
-    },
-  };
-  let config: AppConfig;
-  try {
-    loadEnvFiles();
-    config = getConfig();
-  } catch (error) {
-    io.err(describeFailure(error));
-    return 1;
-  }
-  return runMigrateCommand({ config, io });
+  const config = loadConfigOrReport(consoleIO);
+  return config === null ? 1 : runMigrateCommand({ config, io: consoleIO });
 }
 
 // Run only as a script (`pnpm db:migrate`), not when imported by tests.

@@ -44,8 +44,8 @@
   --zone-sideboard-bg: #eef1f5;
   --zone-considering: #0f766e;
   --zone-considering-bg: #e3f5f2;
-  --zone-other: #6b6b78;
-  --zone-other-bg: #f0f0f3;
+  --zone-other: var(--cosmetic);
+  --zone-other-bg: var(--cosmetic-bg);
 
   /* Mana symbol fills (Scryfall-like). */
   --mana-w: #f8f3d6;
@@ -98,8 +98,8 @@
     --zone-sideboard-bg: #1c212b;
     --zone-considering: #4fd1c0;
     --zone-considering-bg: #10282a;
-    --zone-other: #9a9aa8;
-    --zone-other-bg: #1d1f26;
+    --zone-other: var(--cosmetic);
+    --zone-other-bg: var(--cosmetic-bg);
 
     --mana-w: #e9e3c2;
     --mana-u: #9cc4e4;
@@ -163,6 +163,11 @@
   --shadow-card: var(--shadow-card);
   --shadow-pop: var(--shadow-pop);
 
+  /* The width of the page column (see `.page-gutter` for the padding around it). */
+  --container-page: 1080px;
+  /* The mobile bottom navigation (DeckNav): its tabs; the border on top comes on top of this. */
+  --spacing-bottom-nav: 4rem;
+
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
     sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
@@ -173,6 +178,7 @@
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    scroll-padding-top: 1rem;
   }
 
   body {
@@ -198,26 +204,10 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
-}
-
-/*
- * ---------------------------------------------------------------------------
- * Component-level styles (appended; the design tokens above are the contract).
- * ---------------------------------------------------------------------------
- */
-
-@layer base {
-  html {
-    scroll-padding-top: 1rem;
-  }
 
   /* Native controls (checkboxes, scrollbars, date pickers) follow the theme. */
   input[type='checkbox'] {
     accent-color: var(--accent);
-  }
-
-  summary {
-    -webkit-tap-highlight-color: transparent;
   }
 
   a,
@@ -226,7 +216,24 @@
   label {
     -webkit-tap-highlight-color: transparent;
   }
+
+  /*
+   * Screen-reader-only text must never end up in copied text. Diff rows carry spoken
+   * prefixes ("Removed: …", "Moved from Mainboard to Considering: …") that would
+   * otherwise be pasted along with the visible text. Assistive technology still reads
+   * it; it just cannot be selected.
+   */
+  .sr-only {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Component-level styles (appended; the design tokens above are the contract).
+ * ---------------------------------------------------------------------------
+ */
 
 @layer components {
   /* Page gutter: 16px on phones (or the safe-area inset in landscape), 24px from sm. */
@@ -497,24 +504,12 @@
 /*
  * Pages with the mobile bottom navigation (DeckNav) reserve room for it at the end of
  * the page, and expose its height to fixed elements (toasts, the compare bar). The bar
- * is its 4rem tabs plus a 1px top border (and the home indicator's safe area).
+ * is its tabs (`--spacing-bottom-nav`, the `h-bottom-nav` of DeckNav's links) plus a 1px
+ * top border (and the home indicator's safe area).
  */
-@media (max-width: 47.99rem) {
-  body:has([data-bottom-nav]) {
-    --bottom-nav-offset: calc(4rem + 1px);
+body:has([data-bottom-nav]) {
+  @variant max-md {
+    --bottom-nav-offset: calc(var(--spacing-bottom-nav) + 1px);
     padding-bottom: calc(var(--bottom-nav-offset) + env(safe-area-inset-bottom));
-  }
-}
-
-/*
- * Screen-reader-only text must never end up in copied text. Diff rows carry spoken
- * prefixes ("Removed: …", "Moved from Mainboard to Considering: …") that would
- * otherwise be pasted along with the visible text. Assistive technology still reads
- * it; it just cannot be selected.
- */
-@layer base {
-  .sr-only {
-    -webkit-user-select: none;
-    user-select: none;
   }
 }

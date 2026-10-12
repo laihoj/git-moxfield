@@ -3,7 +3,8 @@ import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
 export type BadgeTone = 'neutral' | 'accent' | 'add' | 'remove' | 'move' | 'cosmetic' | 'warn' | 'outline';
 
-const TONES: Record<BadgeTone, string> = {
+/** The classes of each tone: its background and text colour (the change glyphs use them too). */
+export const BADGE_TONE_CLASSES: Record<BadgeTone, string> = {
   neutral: 'bg-surface-2 text-muted',
   accent: 'bg-accent-soft text-accent',
   add: 'bg-add-bg text-add',
@@ -28,7 +29,7 @@ export function Badge({ tone = 'neutral', icon, size = 'sm', className, children
       className={clsx(
         'inline-flex max-w-full items-center gap-1 rounded-full font-medium whitespace-nowrap tabular',
         size === 'sm' ? 'h-5 px-2 text-xs' : 'h-7 px-2.5 text-[0.8125rem]',
-        TONES[tone],
+        BADGE_TONE_CLASSES[tone],
         className,
       )}
       {...props}

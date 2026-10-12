@@ -6,6 +6,7 @@
  * no admin page.
  */
 import {
+  createExpiringInvite,
   expectSignedInAs,
   inviteRow,
   openFromAccountMenu,
@@ -16,8 +17,7 @@ import {
   openAccountMenu,
 } from './support/accounts';
 import { createBookmarkletOnSetupPage, runBookmarklet } from './support/bookmarklet';
-import { APP_URL } from './support/constants';
-import { createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
+import { CAPTURED_DECK_URL, createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -88,7 +88,7 @@ test('an admin invites a friend, who makes an account and a bookmarklet', async 
     const deck = await createBlueFarmCopy(testInfo, 'First Farm');
     await friend.goto(mockMoxfield.deckPageUrl(deck.publicId));
     await runBookmarklet(friend, bookmarklets['same-tab']);
-    await expect(friend).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(friend).toHaveURL(CAPTURED_DECK_URL);
     await expect(friend.getByRole('heading', { level: 1, name: 'First Farm' })).toBeVisible();
     await expectSignedInAs(friend, friendName);
   });
@@ -116,7 +116,7 @@ test('an admin invites a friend, who makes an account and a bookmarklet', async 
     await expect(header.getByRole('link', { name: 'Account', exact: true })).toBeVisible();
     await expect(header.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0);
     // As if it did not exist (the browser reports the 404 in the console).
-    consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+    consoleErrors.allowHttpStatus(404);
     const response = await friend.goto('/admin');
     expect(response?.status()).toBe(404);
     await expect(friend.getByRole('heading', { level: 1, name: 'We couldn’t find that' })).toBeVisible();
@@ -174,4 +174,32 @@ test('an admin invite makes another admin, and a withdrawn invite stops working'
     // Admins manage accounts, never decks: nothing on the page leads to anyone's decks.
     await expect(coAdmin.getByRole('main').locator('a[href^="/decks/"]')).toHaveCount(0);
   });
+});
+
+test('an invite that expired while the admin page was open cannot be withdrawn, and shows as expired', async ({
+  page,
+  context,
+}) => {
+  await signIn(context, { role: 'admin', displayName: uniqueName('Admin') });
+  // Warm up the page first: the invite must still be pending when the page shows it.
+  await page.goto('/admin');
+  const note = uniqueName('Too late');
+  const expiresAt = await createExpiringInvite(note, 5);
+  await page.goto('/admin');
+  const row = inviteRow(page, note);
+  await expect(row).toContainText('Pending');
+  const withdraw = row.getByRole('button', { name: `Withdraw the invite for ${note}` });
+  await expect(withdraw).toBeVisible();
+
+  await page.waitForTimeout(Math.max(0, expiresAt.getTime() - Date.now()) + 500);
+  await withdraw.click();
+  await row.getByRole('group').getByRole('button', { name: 'Withdraw invite' }).click();
+  // Refused: the page shows the invite as it is now, expired, with nothing to withdraw.
+  await expect(row).toContainText('Expired');
+  await expect(row).not.toContainText('Withdrawn');
+  await expect(withdraw).toHaveCount(0);
+
+  await page.reload();
+  await expect(inviteRow(page, note)).toContainText('Expired');
+  await expect(inviteRow(page, note)).not.toContainText('Withdrawn');
 });

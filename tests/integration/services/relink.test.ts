@@ -37,7 +37,7 @@ async function lostDeck(harness: ServiceHarness): Promise<{ deckId: string; v1: 
   return { deckId, v1: v1.commitId };
 }
 
-function expectServiceError(code: 'not-found' | 'invalid-input', message?: RegExp) {
+function serviceErrorMatching(code: 'not-found' | 'invalid-input', message?: RegExp) {
   return (error: unknown): boolean =>
     isServiceError(error, code) && (message === undefined || message.test(error.message));
 }
@@ -221,7 +221,7 @@ describe('deck services: changing the Moxfield deck', () => {
     const mikko = await harness.createUser('Mikko');
     // Another user's deck is not found…
     await expect(mikko.services.relinkDeck(deckId, RECREATED_URL)).rejects.toSatisfy(
-      expectServiceError('not-found'),
+      serviceErrorMatching('not-found'),
     );
     // …and another user tracking the new Moxfield deck does not matter.
     harness.api.setDeck(RECREATED);
@@ -338,7 +338,7 @@ describe('deck services: continuing a deck’s history with a captured deck', ()
         track: false,
         relinkDeckId: lostId,
       }),
-    ).rejects.toSatisfy(expectServiceError('invalid-input', /already tracks that Moxfield deck/));
+    ).rejects.toSatisfy(serviceErrorMatching('invalid-input', /already tracks that Moxfield deck/));
     expect(defined(await services.getOverview(lostId)).externalId).toBe(LOST.publicId);
     expect(defined(await services.getOverview(copyId)).externalId).toBe(RECREATED.publicId);
     expect(await countRows(db, 'observations')).toBe(observations);
@@ -362,7 +362,7 @@ describe('deck services: continuing a deck’s history with a captured deck', ()
           track: false,
           relinkDeckId,
         }),
-      ).rejects.toSatisfy(expectServiceError('not-found'));
+      ).rejects.toSatisfy(serviceErrorMatching('not-found'));
     }
     expect(await harness.services.listDecks()).toEqual([]);
     expect(defined(await mikko.services.getOverview(theirs.deckId)).externalId).toBe(LOST.publicId);

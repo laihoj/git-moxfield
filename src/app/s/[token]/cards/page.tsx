@@ -1,21 +1,12 @@
-import type { Metadata } from 'next';
-
 import { CARD_RESULT_LIMIT, CardsContent, cardQuery } from '@/components/deck-pages/cards-content';
-import { sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckRoutes } from '@/lib/routes';
 
-import { findSharedOverview, loadSharedDeck, sharedPageMetadata } from '../data';
+import { findSharedOverview, loadSharedDeck, sharedSectionMetadata } from '../data';
 import { SharedPageMissing } from '../page-missing';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata({ params }: PageProps<'/s/[token]/cards'>): Promise<Metadata> {
-  const { token } = await params;
-  return sharedPageMetadata(token, async () => {
-    const overview = await findSharedOverview(token);
-    return { title: overview === null ? 'Cards' : `Cards · ${sharedDeckTitle(overview)}` };
-  });
-}
+export const generateMetadata = sharedSectionMetadata('Cards');
 
 /** Search every card of a shared deck's versions; each result links to its card history. */
 export default async function SharedCardsPage({ params, searchParams }: PageProps<'/s/[token]/cards'>) {

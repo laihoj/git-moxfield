@@ -3,11 +3,14 @@ import { ChevronRight, Search, SearchX } from 'lucide-react';
 import { CardSearch } from '@/components/deck/card-search';
 import { ManaCost } from '@/components/deck/mana-cost';
 import { ZoneBadge } from '@/components/deck/zone-badge';
+import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
+import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
 import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { searchParamText } from '@/lib/search-params';
 import type { CardSearchResultDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
@@ -17,7 +20,7 @@ export const CARD_RESULT_LIMIT = 50;
 
 /** The parsed `?q=` of the Cards page: trimmed and bounded; `''` for no search. */
 export function cardQuery(value: string | string[] | undefined): string {
-  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+  return searchParamText(value, MAX_CARD_QUERY_LENGTH) ?? '';
 }
 
 export interface CardsContentProps {
@@ -75,7 +78,7 @@ export function CardsContent({ scope, query, versionCount, results }: CardsConte
               ? `First ${CARD_RESULT_LIMIT} matches`
               : pluralize(results.length, 'match', 'matches')}
           </p>
-          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface shadow-card">
+          <Card as="ul" flush className="divide-y divide-border overflow-hidden">
             {results.map((result) => (
               <li
                 key={result.key}
@@ -112,7 +115,7 @@ export function CardsContent({ scope, query, versionCount, results }: CardsConte
                 <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-subtle" />
               </li>
             ))}
-          </ul>
+          </Card>
         </section>
       )}
     </div>

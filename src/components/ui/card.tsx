@@ -54,6 +54,31 @@ export function CardHeader({ title, level = 'h2', id, description, actions, clas
   );
 }
 
+interface ListCardProps {
+  headingId: string;
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+  children: ReactNode;
+}
+
+/** A flush card for a list: a heading with a rule under it, then the rows edge to edge. */
+export function ListCard({ headingId, title, description, actions, className, children }: ListCardProps) {
+  return (
+    <Card as="section" flush aria-labelledby={headingId} className={className}>
+      <CardHeader
+        id={headingId}
+        title={title}
+        description={description}
+        actions={actions}
+        className="border-b border-border p-4 md:p-5"
+      />
+      {children}
+    </Card>
+  );
+}
+
 /** Small uppercase label above a group of rows (`MAINBOARD`, `MOVED`). */
 export function Overline({
   children,

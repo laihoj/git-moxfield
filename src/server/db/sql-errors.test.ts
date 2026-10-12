@@ -1,18 +1,18 @@
 import { LibsqlBatchError, LibsqlError } from '@libsql/client/http';
 import { createClient as createLocalClient } from '@libsql/client/sqlite3';
 import { DrizzleQueryError, eq, sql } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { seedDeckHistory, tempFileUrl } from '@tests/support/libsql';
+import { rejectionOf } from '@tests/support/errors';
+import { openRawDatabase, scratchFileUrl, seedDeckHistory } from '@tests/support/libsql';
 
-import { createLibsqlDatabase, type LibsqlDatabase } from './libsql';
+import type { LibsqlDatabase } from './libsql';
 import { applyMigrations } from './migration-state';
 import * as schema from './schema';
 import {
   classifySqlError,
   connectionFailureOf,
   isConstraintViolation,
-  isRetryableSqlError,
   isSqlErrorKind,
   type SqlErrorKind,
 } from './sql-errors';
@@ -264,8 +264,8 @@ describe('classifySqlError', () => {
     const fk = localError('SQLITE_CONSTRAINT_FOREIGNKEY', 787, 'FOREIGN KEY constraint failed');
     expect(isSqlErrorKind(fk, 'foreign-key')).toBe(true);
     expect(isSqlErrorKind(fk, 'unique')).toBe(false);
-    expect(isRetryableSqlError(fk)).toBe(false);
-    expect(isRetryableSqlError(remoteError('STREAM_EXPIRED', 'The stream has expired'))).toBe(true);
+    expect(classifySqlError(fk).retryable).toBe(false);
+    expect(classifySqlError(remoteError('STREAM_EXPIRED', 'The stream has expired')).retryable).toBe(true);
     expect(
       ['foreign-key', 'unique', 'not-null', 'check', 'trigger'].every((kind) =>
         isConstraintViolation(kind as SqlErrorKind),
@@ -336,22 +336,9 @@ describe('classifySqlError with real local libSQL errors', () => {
   let database: LibsqlDatabase;
 
   beforeEach(async () => {
-    database = await createLibsqlDatabase({ url: ':memory:' });
+    database = await openRawDatabase({ url: ':memory:' });
     await applyMigrations(database.db);
   });
-
-  afterEach(() => {
-    database.close();
-  });
-
-  async function failure(operation: () => Promise<unknown>): Promise<unknown> {
-    try {
-      await operation();
-    } catch (error) {
-      return error;
-    }
-    throw new Error('expected the operation to fail');
-  }
 
   it('classifies constraint violations of the app schema', async () => {
     const { db } = database;
@@ -414,7 +401,7 @@ describe('classifySqlError with real local libSQL errors', () => {
       ],
     ];
     for (const [kind, message, operation] of cases) {
-      const error = await failure(operation);
+      const error = await rejectionOf(operation);
       expect(error).toBeInstanceOf(DrizzleQueryError);
       expect(classifySqlError(error), message).toMatchObject({ kind, message, retryable: false });
     }
@@ -423,12 +410,14 @@ describe('classifySqlError with real local libSQL errors', () => {
   it('classifies a CHECK constraint and a failing batch', async () => {
     const { db } = database;
     await db.run(sql`CREATE TABLE checked (n INTEGER CHECK (n > 0))`);
-    expect(classifySqlError(await failure(() => db.run(sql`INSERT INTO checked VALUES (0)`)))).toMatchObject({
+    expect(
+      classifySqlError(await rejectionOf(() => db.run(sql`INSERT INTO checked VALUES (0)`))),
+    ).toMatchObject({
       kind: 'check',
       message: 'CHECK constraint failed: n > 0',
     });
 
-    const batchError = await failure(() =>
+    const batchError = await rejectionOf(() =>
       db.batch([db.run(sql`INSERT INTO checked VALUES (1)`), db.run(sql`INSERT INTO checked VALUES (-1)`)]),
     );
     expect(batchError).toBeInstanceOf(LibsqlBatchError);
@@ -436,15 +425,15 @@ describe('classifySqlError with real local libSQL errors', () => {
   });
 
   it('classifies a lock held by another connection as busy and retryable', async () => {
-    const url = tempFileUrl();
+    const url = scratchFileUrl();
     // No busy wait: the lock holder below runs in this process and could never release it.
-    const handle = await createLibsqlDatabase({ url, busyTimeoutMs: 0 });
+    const handle = await openRawDatabase({ url, busyTimeoutMs: 0 });
     // A second client on the same file, as another process would have.
     const other = createLocalClient({ url });
     try {
       await handle.db.run(sql`CREATE TABLE t (n INTEGER)`);
       const blocking = await other.transaction('write');
-      const error = await failure(() => handle.db.run(sql`INSERT INTO t VALUES (1)`));
+      const error = await rejectionOf(() => handle.db.run(sql`INSERT INTO t VALUES (1)`));
       await blocking.rollback();
       expect(classifySqlError(error)).toEqual({
         kind: 'busy',
@@ -454,7 +443,6 @@ describe('classifySqlError with real local libSQL errors', () => {
       });
     } finally {
       other.close();
-      handle.close();
     }
   });
 });

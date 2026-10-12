@@ -5,6 +5,7 @@ import 'server-only';
 
 import { isDeckSourceError, type DeckSourceError } from '@/integrations/deck-source';
 import { isCapturePayloadError } from '@/integrations/moxfield/capture-codec';
+import type { CaptureFormError } from '@/integrations/moxfield/capture-protocol';
 
 /** Whether `error` is a `DeckSourceError` with code `schema` (unusable capture data). */
 export function isUnusableCaptureError(error: unknown): error is DeckSourceError & { code: 'schema' } {
@@ -16,7 +17,7 @@ export interface RejectedCapture {
   /** HTTP status of `POST /api/capture`: 413 for an oversized payload, 400 otherwise. */
   status: 400 | 413;
   /** `?error=` code for the paste form, where `POST /api/capture/form` redirects. */
-  formError: 'too-large' | 'invalid';
+  formError: Extract<CaptureFormError, 'too-large' | 'invalid'>;
   /** User-facing message; never contains the payload. */
   message: string;
 }

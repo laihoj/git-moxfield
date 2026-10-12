@@ -14,15 +14,15 @@
 import 'server-only';
 
 import { getConfig } from '@/server/config';
+import { jsonResponse, plainText } from '@/server/http/responses';
 import { createLogger } from '@/server/logger';
+
+import { isCrossOriginBrowserRequest } from '../../request-origin';
 
 const globalForE2e = globalThis as unknown as { __gitMoxfieldE2eAnnounced?: boolean };
 
 function notFound(): Response {
-  return new Response('Not found.\n', {
-    status: 404,
-    headers: { 'content-type': 'text/plain; charset=utf-8' },
-  });
+  return plainText(404, 'Not found.');
 }
 
 /** `null` when the e2e endpoints are enabled, else the 404 to answer with. */
@@ -35,6 +35,26 @@ export function e2eDisabledResponse(): Response | null {
     createLogger('api/e2e').warn(
       'The end-to-end test endpoints (/api/e2e/*) are enabled: they sign anyone in. Never set GIT_MOXFIELD_E2E outside the test suite.',
     );
+  }
+  return null;
+}
+
+/** The media type of a `Content-Type` value, lower-cased, without parameters. */
+function mediaType(contentType: string | null): string {
+  return (contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+}
+
+/**
+ * `null` for a request the suite itself sends (JSON from Node's fetch, which sends no
+ * `Origin`), else the 415 or 403 to answer with. Defence in depth for the endpoints that
+ * change something: a web page cannot send one of these, only forms and "simple" requests.
+ */
+export function e2eRequestRefusal(request: Request): Response | null {
+  if (mediaType(request.headers.get('content-type')) !== 'application/json') {
+    return jsonResponse({ error: 'Send application/json.' }, { status: 415 });
+  }
+  if (isCrossOriginBrowserRequest(request)) {
+    return jsonResponse({ error: 'Cross-origin requests are refused.' }, { status: 403 });
   }
   return null;
 }

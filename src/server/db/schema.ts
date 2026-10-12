@@ -25,6 +25,9 @@ import {
   type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core';
 
+// Relative, not '@/…': drizzle-kit loads this file without the app's path aliases.
+import { USER_ROLES } from '../../core/roles';
+
 /**
  * A user's private space: decks and everything under them belong to a workspace. Each
  * user owns exactly one (see `users.workspace_id`). `local` is the workspace of the
@@ -55,7 +58,7 @@ export const decks = sqliteTable(
     /** Symbolic HEAD: the branch new versions are committed to. */
     headBranchName: text('head_branch_name').notNull().default('main'),
     lastFetchAttemptAt: text('last_fetch_attempt_at'),
-    /** JSON `FetchErrorDTO` of the most recent failed fetch, cleared on success. */
+    /** JSON `FetchErrorRecord` of the most recent failed fetch, cleared on success. */
     lastFetchErrorJson: text('last_fetch_error_json'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -87,6 +90,7 @@ export const deckRelinks = sqliteTable(
     /** The source deck the deck followed from this change on. */
     externalId: text('external_id').notNull(),
     url: text('url').notNull(),
+    /** When the change was made (ISO-8601 UTC). */
     createdAt: text('created_at').notNull(),
   },
   (t) => [index('deck_relinks_deck_idx').on(t.deckId, t.createdAt)],
@@ -152,7 +156,9 @@ export const branches = sqliteTable(
       .references(() => decks.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     kind: text('kind', { enum: ['main', 'experiment'] }).notNull(),
+    /** Newest commit on the branch, `null` before the first version. */
     headCommitId: text('head_commit_id').references((): AnySQLiteColumn => commits.id),
+    /** Commit an experiment branch was started from (`null` for `main`). */
     baseCommitId: text('base_commit_id').references((): AnySQLiteColumn => commits.id),
     description: text('description'),
     createdAt: text('created_at').notNull(),
@@ -319,9 +325,10 @@ export const users = sqliteTable('users', {
     .references(() => workspaces.id),
   displayName: text('display_name').notNull(),
   /** `admin` manages users and invites; grants no access to other users' decks. */
-  role: text('role', { enum: ['admin', 'member'] }).notNull(),
+  role: text('role', { enum: USER_ROLES }).notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
+  /** Last request made with one of the user's sessions (recorded at most hourly). */
   lastSeenAt: text('last_seen_at'),
   /** Disabled users cannot sign in; their sessions and keys stop working. Data is kept. */
   disabledAt: text('disabled_at'),
@@ -435,7 +442,7 @@ export const loginLinks = sqliteTable(
 export const invites = sqliteTable('invites', {
   id: text('id').primaryKey(),
   tokenHash: text('token_hash').notNull().unique(),
-  role: text('role', { enum: ['admin', 'member'] }).notNull(),
+  role: text('role', { enum: USER_ROLES }).notNull(),
   /** Who the invite is for, as a reminder for the admin ("Mikko"). */
   note: text('note').notNull().default(''),
   /** Null for invites created from the CLI. */

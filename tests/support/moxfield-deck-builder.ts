@@ -10,6 +10,11 @@
 import { createHash } from 'node:crypto';
 
 import { CAPTURE_ENVELOPE_KIND, CAPTURE_PROTOCOL_VERSION } from '@/integrations/moxfield/capture-protocol';
+import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
+
+import { cardFacts } from './card-facts';
+import { parseCardSpecString } from './card-spec';
+import { answerMoxfieldApi, requestUrl, type MockMode } from './moxfield-api';
 
 /** `'Island'`, `'3 Island'`, or an object for printing/finish control. */
 export type MoxCardSpec =
@@ -25,6 +30,11 @@ export type MoxCardSpec =
       manaCost?: string;
       isProxy?: boolean;
       isAlter?: boolean;
+      /**
+       * The name the card's ids, printing and facts derive from (default: `name`): a card
+       * Wizards renamed keeps them, so Moxfield shows the same card under its new name.
+       */
+      oracleName?: string;
     };
 
 export interface MoxDeckSpec {
@@ -52,6 +62,7 @@ export interface MoxDeckSpec {
 
 interface NormalizedSpec {
   name: string;
+  oracleName: string;
   quantity: number;
   set: string;
   collectorNumber: string;
@@ -62,35 +73,6 @@ interface NormalizedSpec {
   isProxy: boolean;
   isAlter: boolean;
 }
-
-const KNOWN_TYPES: Record<string, { typeLine: string; manaCost: string }> = {
-  island: { typeLine: 'Basic Land — Island', manaCost: '' },
-  swamp: { typeLine: 'Basic Land — Swamp', manaCost: '' },
-  plains: { typeLine: 'Basic Land — Plains', manaCost: '' },
-  mountain: { typeLine: 'Basic Land — Mountain', manaCost: '' },
-  forest: { typeLine: 'Basic Land — Forest', manaCost: '' },
-  'command tower': { typeLine: 'Land', manaCost: '' },
-  'sol ring': { typeLine: 'Artifact', manaCost: '{1}' },
-  'tymna the weaver': { typeLine: 'Legendary Creature — Human Cleric', manaCost: '{1}{W}{B}' },
-  "kraum, ludevic's opus": { typeLine: 'Legendary Creature — Zombie Horror', manaCost: '{3}{U}{R}' },
-  'tana, the bloodsower': { typeLine: 'Legendary Creature — Elf Druid', manaCost: '{2}{R}{G}' },
-  "thassa's oracle": { typeLine: 'Creature — Merfolk Wizard', manaCost: '{U}{U}' },
-  'orcish bowmasters': { typeLine: 'Creature — Orc Archer', manaCost: '{1}{B}' },
-  'dress down': { typeLine: 'Enchantment', manaCost: '{1}{U}' },
-  'underworld breach': { typeLine: 'Enchantment', manaCost: '{1}{R}' },
-  'rhystic study': { typeLine: 'Enchantment', manaCost: '{2}{U}' },
-  'mnemonic betrayal': { typeLine: 'Sorcery', manaCost: '{1}{U}{B}' },
-  'demonic tutor': { typeLine: 'Sorcery', manaCost: '{1}{B}' },
-  'beseech the mirror': { typeLine: 'Sorcery', manaCost: '{1}{B}{B}{B}' },
-  'final fortune': { typeLine: 'Instant', manaCost: '{R}{R}' },
-  'peer into the abyss': { typeLine: 'Sorcery', manaCost: '{4}{B}{B}{B}' },
-  'force of will': { typeLine: 'Instant', manaCost: '{3}{U}{U}' },
-  'mana vault': { typeLine: 'Artifact', manaCost: '{1}' },
-  'birgi, god of storytelling // harnfel, horn of bounty': {
-    typeLine: 'Legendary Creature — God // Legendary Artifact',
-    manaCost: '',
-  },
-};
 
 function shortHash(value: string, length: number): string {
   return createHash('sha256').update(value).digest('base64url').slice(0, length);
@@ -111,13 +93,15 @@ function uuidFrom(value: string): string {
 }
 
 function normalizeSpec(spec: MoxCardSpec): NormalizedSpec {
-  const s: Exclude<MoxCardSpec, string> = typeof spec === 'string' ? parseString(spec) : spec;
-  const known = KNOWN_TYPES[s.name.toLowerCase()];
+  const s: Exclude<MoxCardSpec, string> = typeof spec === 'string' ? parseCardSpecString(spec) : spec;
+  const oracleName = s.oracleName ?? s.name;
+  const known = cardFacts(oracleName);
   return {
     name: s.name,
+    oracleName,
     quantity: s.quantity ?? 1,
     set: s.set ?? 'tst',
-    collectorNumber: s.collectorNumber ?? syntheticCollectorNumber(s.name),
+    collectorNumber: s.collectorNumber ?? syntheticCollectorNumber(oracleName),
     finish: s.finish ?? 'nonFoil',
     lang: s.lang ?? 'en',
     typeLine: s.typeLine ?? known?.typeLine ?? 'Instant',
@@ -125,13 +109,6 @@ function normalizeSpec(spec: MoxCardSpec): NormalizedSpec {
     isProxy: s.isProxy ?? false,
     isAlter: s.isAlter ?? false,
   };
-}
-
-function parseString(spec: string): { name: string; quantity: number } {
-  const match = /^(\d+)\s+(.+)$/.exec(spec.trim());
-  if (!match) return { name: spec.trim(), quantity: 1 };
-  const [, quantity = '1', name = ''] = match;
-  return { name, quantity: Number(quantity) };
 }
 
 function colorIdentity(manaCost: string): string[] {
@@ -143,10 +120,10 @@ function colorIdentity(manaCost: string): string[] {
 export function moxCard(spec: NormalizedSpec): Record<string, unknown> {
   const isDfc = spec.name.includes(' // ');
   const faces = isDfc ? spec.name.split(' // ') : [];
-  const printingKey = `${spec.name}|${spec.set}|${spec.collectorNumber}`;
+  const printingKey = `${spec.oracleName}|${spec.set}|${spec.collectorNumber}`;
   return {
     id: shortHash(`printing:${printingKey}`, 5),
-    uniqueCardId: shortHash(`oracle:${spec.name.toLowerCase()}`, 5),
+    uniqueCardId: shortHash(`oracle:${spec.oracleName.toLowerCase()}`, 5),
     scryfall_id: uuidFrom(`scryfall:${printingKey}`),
     set: spec.set,
     set_name: `Set ${spec.set.toUpperCase()}`,
@@ -211,6 +188,28 @@ export function moxfieldInternalId(spec: MoxDeckSpec): string {
   return spec.id ?? shortHash(`deck:${spec.publicId}`, 5);
 }
 
+/** What the builder fills in for a spec that leaves the deck's name or its last update out. */
+export const BUILDER_DEFAULTS = {
+  name: 'Fixture Deck',
+  lastUpdatedAtUtc: '2026-10-01T12:00:00.000Z',
+} as const;
+
+/** The boards `buildMoxfieldDeck` always emits, which a spec's `extraBoards` must not override. */
+export const BUILDER_BOARD_NAMES = [
+  'mainboard',
+  'sideboard',
+  'maybeboard',
+  'commanders',
+  'companions',
+  'signatureSpells',
+  'attractions',
+  'stickers',
+  'contraptions',
+  'planes',
+  'schemes',
+  'tokens',
+] as const;
+
 /** Builds a `GET /v3/decks/all/{publicId}` response body. */
 export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
   const user = { userName: 'fixture-user', displayName: 'Fixture User', badges: [] };
@@ -219,7 +218,7 @@ export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
   Object.values(commanderBoard.cards).forEach((entry, index) => {
     if (index > 0) (entry as { boardType: string }).boardType = 'partners';
   });
-  const boards: Record<string, unknown> = {
+  const boards: Record<string, unknown> & Record<(typeof BUILDER_BOARD_NAMES)[number], unknown> = {
     mainboard: board('mainboard', spec.mainboard),
     sideboard: board('sideboard', spec.sideboard),
     maybeboard: board('maybeboard', spec.considering),
@@ -236,11 +235,11 @@ export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
   for (const [name, cards] of Object.entries(spec.extraBoards ?? {})) boards[name] = board(name, cards);
   return {
     id: moxfieldInternalId(spec),
-    name: spec.name ?? 'Fixture Deck',
+    name: spec.name ?? BUILDER_DEFAULTS.name,
     description: spec.description ?? '',
     format: spec.format ?? 'commander',
     visibility: 'public',
-    publicUrl: `https://moxfield.com/decks/${spec.publicId}`,
+    publicUrl: moxfieldDeckUrl(spec.publicId),
     publicId: spec.publicId,
     likeCount: 0,
     viewCount: 0,
@@ -253,7 +252,7 @@ export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
     tokens: [],
     hubs: (spec.hubs ?? []).map((name) => ({ name, description: '' })),
     createdAtUtc: '2026-01-01T00:00:00.000Z',
-    lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? '2026-10-01T12:00:00.000Z',
+    lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? BUILDER_DEFAULTS.lastUpdatedAtUtc,
     exportId: uuidFrom(`export:${spec.publicId}`),
     authorTags: spec.authorTags ?? {},
     enableMultiplePrintings: false,
@@ -265,7 +264,7 @@ export function buildMoxfieldDeck(spec: MoxDeckSpec): Record<string, unknown> {
 export function buildMoxfieldPrimer(spec: MoxDeckSpec): Record<string, unknown> {
   return {
     content: spec.primer ?? '',
-    lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? '2026-10-01T12:00:00.000Z',
+    lastUpdatedAtUtc: spec.lastUpdatedAtUtc ?? BUILDER_DEFAULTS.lastUpdatedAtUtc,
     lastUpdatedByUser: { userName: 'fixture-user', displayName: 'Fixture User', badges: [] },
   };
 }
@@ -279,7 +278,7 @@ export function buildCaptureEnvelope(
     kind: CAPTURE_ENVELOPE_KIND,
     version: CAPTURE_PROTOCOL_VERSION,
     source: 'moxfield',
-    pageUrl: `https://moxfield.com/decks/${spec.publicId}`,
+    pageUrl: moxfieldDeckUrl(spec.publicId),
     capturedAt,
     deck: buildMoxfieldDeck(spec),
     primer: buildMoxfieldPrimer(spec),
@@ -293,7 +292,7 @@ export function buildCaptureEnvelope(
  */
 export class FakeMoxfieldApi {
   readonly decks = new Map<string, MoxDeckSpec>();
-  mode: 'ok' | 'blocked' | 'rate-limited' | 'down' | 'primer-down' = 'ok';
+  mode: MockMode = 'ok';
   readonly requests: string[] = [];
 
   constructor(readonly apiBaseUrl = 'https://api2.moxfield.test') {}
@@ -303,48 +302,29 @@ export class FakeMoxfieldApi {
   }
 
   readonly fetch: typeof fetch = (input) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    const url = new URL(requestUrl(input));
     this.requests.push(url.pathname);
     return Promise.resolve(this.respond(url));
   };
 
   private respond(url: URL): Response {
-    if (this.mode === 'blocked') {
-      return new Response(
-        '<!DOCTYPE html><title>Attention Required! | Cloudflare</title>Sorry, you have been blocked',
-        {
-          status: 403,
-          headers: { 'content-type': 'text/html; charset=UTF-8', 'cf-ray': 'test-ray' },
-        },
-      );
-    }
-    if (this.mode === 'rate-limited') {
-      return new Response('{}', {
-        status: 429,
-        headers: { 'content-type': 'application/json', 'retry-after': '30' },
-      });
-    }
-    if (this.mode === 'down') return new Response('upstream error', { status: 502 });
-
-    const deckMatch = /^\/v3\/decks\/all\/([^/]+)$/.exec(url.pathname);
-    if (deckMatch?.[1]) {
-      const spec = this.decks.get(decodeURIComponent(deckMatch[1]));
-      return spec ? json(buildMoxfieldDeck(spec)) : new Response('', { status: 404 });
-    }
-    const primerMatch = /^\/v1\/decks\/([^/]+)\/primer$/.exec(url.pathname);
-    if (primerMatch?.[1]) {
-      if (this.mode === 'primer-down') return new Response('upstream error', { status: 503 });
-      const id = decodeURIComponent(primerMatch[1]);
-      const spec = [...this.decks.values()].find((d) => moxfieldInternalId(d) === id);
-      return spec ? json(buildMoxfieldPrimer(spec)) : new Response('', { status: 404 });
-    }
-    return new Response('', { status: 404 });
+    const answer = answerMoxfieldApi(url.pathname, {
+      mode: this.mode,
+      client: 'server',
+      rayId: 'test-ray',
+      deck: (publicId) => {
+        const spec = this.decks.get(publicId);
+        return spec && buildMoxfieldDeck(spec);
+      },
+      primer: (internalId) => {
+        const spec = [...this.decks.values()].find((d) => moxfieldInternalId(d) === internalId);
+        return spec && buildMoxfieldPrimer(spec);
+      },
+    });
+    if (answer === null) return new Response('', { status: 404 });
+    return new Response(answer.body, {
+      status: answer.status,
+      headers: { 'content-type': answer.contentType, ...answer.headers },
+    });
   }
-}
-
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-  });
 }

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { invitePath, loginLinkPath, safeRedirectPath, sharedDeckPath, signInPath } from './paths';
+import {
+  handoffConfirmPath,
+  handoffPath,
+  invitePath,
+  loginLinkPath,
+  safeRedirectPath,
+  sharedDeckPath,
+  signInPath,
+  tokenOfLinkPath,
+} from './paths';
 
 describe('safeRedirectPath', () => {
   it.each([
@@ -61,9 +70,27 @@ describe('account paths', () => {
     expect(signInPath('/%2e%2e//evil.example/x')).toBe('/signin');
   });
 
+  it('builds the hand-off paths with the same safe next target', () => {
+    expect(handoffPath('/decks/abc?captured=1')).toBe('/api/auth/handoff?next=%2Fdecks%2Fabc%3Fcaptured%3D1');
+    expect(handoffPath('/')).toBe('/api/auth/handoff');
+    expect(handoffPath('//evil.example')).toBe('/api/auth/handoff');
+    expect(handoffConfirmPath()).toBe('/signin/bookmarklet');
+    expect(handoffConfirmPath('/capture?mode=paste')).toBe(
+      '/signin/bookmarklet?next=%2Fcapture%3Fmode%3Dpaste',
+    );
+    expect(handoffConfirmPath('https://evil.example')).toBe('/signin/bookmarklet');
+  });
+
   it('puts link tokens into the path', () => {
     expect(loginLinkPath('gml_x')).toBe('/signin/gml_x');
     expect(invitePath('gmi_x')).toBe('/invite/gmi_x');
     expect(sharedDeckPath('gmv_x')).toBe('/s/gmv_x');
+  });
+
+  it('reads the token back out of a link path', () => {
+    expect(tokenOfLinkPath(loginLinkPath('gml_x'))).toBe('gml_x');
+    expect(tokenOfLinkPath(invitePath('gmi_x'))).toBe('gmi_x');
+    expect(tokenOfLinkPath(sharedDeckPath('gmv_x'))).toBe('gmv_x');
+    expect(tokenOfLinkPath('gmv_x')).toBe('gmv_x');
   });
 });

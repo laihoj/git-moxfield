@@ -8,21 +8,9 @@ import { shortId } from '@/core/hash';
 import type { ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import type { ZoneId } from '@/core/zones';
-import type {
-  CommitNoteRecord,
-  CommitRecord,
-  FetchErrorRecord,
-  ObservationRecord,
-} from '@/server/repositories';
+import type { CommitNoteRecord, CommitRecord, ObservationRecord } from '@/server/repositories';
 
-import type {
-  CommitNoteDTO,
-  DeckStatus,
-  FetchErrorDTO,
-  ObservationDTO,
-  VersionListItemDTO,
-  VersionRefDTO,
-} from './types';
+import type { CommitNoteDTO, DeckStatus, ObservationDTO, VersionListItemDTO, VersionRefDTO } from './types';
 
 export function toVersionRefDTO(commit: CommitRecord): VersionRefDTO {
   return {
@@ -55,6 +43,7 @@ export function toVersionListItemDTO(input: {
     stats: diff.stats,
     primer: diff.primer,
     commanders: commanderNames(snapshot),
+    commandersChanged: parent !== null && diff.commanders.changed,
     playedCardCount: playedCardCount(snapshot),
     ingestMethod: commit.ingestMethod,
   };
@@ -68,15 +57,6 @@ export function toObservationDTO(observation: ObservationRecord): ObservationDTO
     sourceVersion: observation.sourceVersion,
     sourceUpdatedAt: observation.sourceUpdatedAt,
     snapshotHash: observation.snapshotHash,
-  };
-}
-
-export function toFetchErrorDTO(error: FetchErrorRecord): FetchErrorDTO {
-  return {
-    code: error.code,
-    message: error.message,
-    at: error.at,
-    retryAfterSeconds: error.retryAfterSeconds,
   };
 }
 

@@ -1,7 +1,6 @@
 /**
- * Bounded request body reading for the capture endpoints. Bodies are untrusted and may
- * be large, so they are read incrementally and abandoned as soon as they exceed the
- * limit, instead of being buffered whole by `request.text()`.
+ * Body limits of the capture endpoints, derived from the capture codec's limits and the
+ * hosting limits. The bodies are read with `../request-body`.
  */
 import 'server-only';
 
@@ -51,43 +50,3 @@ export const CAPTURE_JSON_BODY_LIMIT =
  */
 export const CAPTURE_FORM_BODY_LIMIT =
   Math.max(MAX_ENCODED_CAPTURE_CHARS + 2, 3 * MAX_PLAIN_CAPTURE_BYTES) + BODY_OVERHEAD_BYTES;
-
-export type BodyReadResult =
-  { ok: true; bytes: Uint8Array<ArrayBuffer> } | { ok: false; reason: 'too-large' | 'unreadable' };
-
-/** Rejects early when `Content-Length` already announces a body over the limit. */
-export function declaredTooLarge(headers: Headers, limit: number): boolean {
-  const declared = headers.get('content-length');
-  if (declared === null) return false;
-  const length = Number(declared);
-  return Number.isFinite(length) && length > limit;
-}
-
-/** Reads the whole body as bytes, counting while reading; gives up past `limit` bytes. */
-export async function readBodyLimited(request: Request, limit: number): Promise<BodyReadResult> {
-  if (request.body === null) return { ok: true, bytes: new Uint8Array() };
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limit) {
-        await reader.cancel();
-        return { ok: false, reason: 'too-large' };
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return { ok: false, reason: 'unreadable' };
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { ok: true, bytes };
-}

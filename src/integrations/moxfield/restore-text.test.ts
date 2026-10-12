@@ -54,6 +54,7 @@ describe('moxfieldRestoreExport — golden', () => {
       {
         zone: 'commanders',
         label: 'Commanders',
+        kind: 'manual',
         target: 'Deck page › More › Change Commander / Add Partner',
         text: "1 Kraum, Ludevic's Opus (C16) 34\n1 Tymna the Weaver (C16) 48 *F*\n",
         cardCount: 2,
@@ -61,6 +62,7 @@ describe('moxfieldRestoreExport — golden', () => {
       {
         zone: 'companions',
         label: 'Companion',
+        kind: 'manual',
         target: 'Card menu › Set as Companion (the card must be in the Sideboard)',
         text: '1 Lurrus of the Dream-Den (IKO) 226\n',
         cardCount: 1,
@@ -68,6 +70,7 @@ describe('moxfieldRestoreExport — golden', () => {
       {
         zone: 'mainboard',
         label: 'Mainboard',
+        kind: 'paste',
         target: 'Bulk Edit › Main Deck',
         text: [
           '1 Island (UNF) 235★ *F*',
@@ -82,6 +85,7 @@ describe('moxfieldRestoreExport — golden', () => {
       {
         zone: 'sideboard',
         label: 'Sideboard',
+        kind: 'paste',
         target: 'Bulk Edit › Sideboard',
         text: '1 Orcish Bowmasters (LTR) 103\n',
         cardCount: 1,
@@ -89,22 +93,24 @@ describe('moxfieldRestoreExport — golden', () => {
       {
         zone: 'considering',
         label: 'Considering',
-        target: 'Bulk Edit › Considering (clear the tab: this version has no cards there)',
+        kind: 'paste',
+        target: 'Bulk Edit › Considering',
         text: '',
         cardCount: 0,
       },
       {
         zone: 'tokens',
         label: 'Tokens',
-        target: 'Not restorable via Bulk Edit (the Tokens tab cannot be edited); listed for reference',
+        kind: 'reference',
+        target: 'Not restorable via Bulk Edit (the Tokens tab cannot be edited)',
         text: '1 Treasure (TLTR) 5\n',
         cardCount: 1,
       },
       {
         zone: 'other:dungeon-deck',
         label: 'Dungeon deck',
-        target:
-          'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board); listed for reference',
+        kind: 'reference',
+        target: 'Not restorable via Bulk Edit (Moxfield has no Bulk Edit tab for this board)',
         text: '1 Tomb of Annihilation (AFR) 1\n',
         cardCount: 1,
       },
@@ -225,21 +231,24 @@ describe('moxfieldRestoreExport — simple and empty decks', () => {
       {
         zone: 'mainboard',
         label: 'Mainboard',
-        target: 'Bulk Edit › Main Deck (clear the tab: this version has no cards there)',
+        kind: 'paste',
+        target: 'Bulk Edit › Main Deck',
         text: '',
         cardCount: 0,
       },
       {
         zone: 'sideboard',
         label: 'Sideboard',
-        target: 'Bulk Edit › Sideboard (clear the tab: this version has no cards there)',
+        kind: 'paste',
+        target: 'Bulk Edit › Sideboard',
         text: '',
         cardCount: 0,
       },
       {
         zone: 'considering',
         label: 'Considering',
-        target: 'Bulk Edit › Considering (clear the tab: this version has no cards there)',
+        kind: 'paste',
+        target: 'Bulk Edit › Considering',
         text: '',
         cardCount: 0,
       },
@@ -260,8 +269,8 @@ describe('moxfieldRestoreExport — simple and empty decks', () => {
     expect(result.sections.map((s) => [s.zone, s.target])).toEqual([
       ['signatureSpells', 'Deck page › More › Change Signature Spell'],
       ['mainboard', 'Bulk Edit › Main Deck'],
-      ['sideboard', 'Bulk Edit › Sideboard (clear the tab: this version has no cards there)'],
-      ['considering', 'Bulk Edit › Considering (clear the tab: this version has no cards there)'],
+      ['sideboard', 'Bulk Edit › Sideboard'],
+      ['considering', 'Bulk Edit › Considering'],
       ['attractions', 'Bulk Edit › Other › Attraction Deck'],
     ]);
     expect(result.instructions).toContain(

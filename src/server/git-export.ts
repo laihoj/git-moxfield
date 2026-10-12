@@ -24,10 +24,13 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { devNull } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { CodedError } from '@/core/coded-error';
 import { snapshotToFileTree, type FileTree } from '@/core/file-tree';
+import { deckReference } from '@/core/hash';
 import { DEFAULT_MOXFIELD_SITE_ORIGIN } from '@/integrations/moxfield/constants';
-import { parseMoxfieldDeckInput } from '@/integrations/moxfield/url';
 import type { CommitRecord, DeckLocation, DeckRecord, Repositories } from '@/server/repositories';
+
+import { parseDeckReference } from './deck-reference';
 
 /** Author and committer of every exported commit. */
 export const EXPORT_AUTHOR = { name: 'git-moxfield', email: 'git-moxfield@localhost' } as const;
@@ -79,14 +82,8 @@ export type GitExportErrorCode =
   /** The stored history is inconsistent (missing snapshot, invalid timestamp). */
   | 'corrupt-history';
 
-export class GitExportError extends Error {
+export class GitExportError extends CodedError<GitExportErrorCode> {
   override readonly name = 'GitExportError';
-  readonly code: GitExportErrorCode;
-
-  constructor(code: GitExportErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.code = code;
-  }
 }
 
 export interface ExportedVersion {
@@ -256,50 +253,23 @@ export function defaultExportDirectory(deck: Pick<DeckRecord, 'externalId'>): st
 }
 
 /**
- * Resolves what a user typed on the command line to a tracked deck: a git-moxfield deck
- * id, a Moxfield public deck id, or a Moxfield deck URL on one of `siteOrigins`
- * (default: moxfield.com). Returns `null` when nothing matches.
- */
-export async function findDeckForExport(
-  repos: Repositories,
-  reference: string,
-  options: { siteOrigins?: readonly string[] } = {},
-): Promise<DeckRecord | null> {
-  const input = reference.trim();
-  if (input === '') return null;
-  const byId = await repos.decks.getById(input);
-  if (byId) return byId;
-  for (const origin of options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]) {
-    const parsed = parseMoxfieldDeckInput(input, origin);
-    if (!parsed.ok) continue;
-    const deck = await repos.decks.getBySourceExternal(parsed.ref.source, parsed.ref.externalId);
-    if (deck) return deck;
-  }
-  return null;
-}
-
-/**
- * Like {@link findDeckForExport}, but across every workspace (for the command line, which
- * acts for the operator, not for a user): the decks a reference names, with their
- * workspace and owner. A git-moxfield deck id names one deck; a Moxfield deck id or URL
- * names every user's copy of that Moxfield deck.
+ * Resolves what an operator typed on the command line to tracked decks, across every
+ * workspace (the command line acts for the operator, not for a user): the decks a
+ * reference names, with their workspace and owner. A git-moxfield deck id names one
+ * deck; a Moxfield deck id or URL on one of `siteOrigins` (default: moxfield.com) names
+ * every user's copy of that Moxfield deck.
  */
 export async function locateDecksForExport(
   repos: Repositories,
   reference: string,
   options: { siteOrigins?: readonly string[] } = {},
 ): Promise<DeckLocation[]> {
-  const input = reference.trim();
-  if (input === '') return [];
-  const byId = await repos.workspaces.locateDeck(input);
+  const parsed = parseDeckReference(reference, options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]);
+  if (parsed === null) return [];
+  const byId = await repos.workspaces.locateDeck(parsed.id);
   if (byId) return [byId];
-  for (const origin of options.siteOrigins ?? [DEFAULT_MOXFIELD_SITE_ORIGIN]) {
-    const parsed = parseMoxfieldDeckInput(input, origin);
-    if (!parsed.ok) continue;
-    const decks = await repos.workspaces.locateDecksBySource(parsed.ref.source, parsed.ref.externalId);
-    if (decks.length > 0) return decks;
-  }
-  return [];
+  if (parsed.moxfield === null) return [];
+  return repos.workspaces.locateDecksBySource(parsed.moxfield.source, parsed.moxfield.externalId);
 }
 
 interface PlannedVersion {
@@ -468,7 +438,7 @@ function writeHistory(
   versions: readonly PlannedVersion[],
   exportedAt: Date,
 ): { exported: ExportedVersion[]; warnings: string[] } {
-  const deckRef = `${deck.source}:${deck.externalId}`;
+  const deckRef = deckReference(deck);
   git.run(['init', '--quiet', '--template=', '.']);
   git.run(['symbolic-ref', 'HEAD', `refs/heads/${EXPORT_BRANCH}`]);
   git.run(['config', EXPORT_MARKER_KEY, deckRef]);
@@ -549,7 +519,7 @@ export async function exportDeckToGit(options: ExportDeckToGitOptions): Promise<
 
   // Fail before touching the file system when git cannot run.
   new GitRepository(runner, process.cwd()).run(['--version']);
-  const created = prepareTarget(git, `${deck.source}:${deck.externalId}`);
+  const created = prepareTarget(git, deckReference(deck));
   try {
     const { exported, warnings } = writeHistory(git, deck, versions, (options.now ?? (() => new Date()))());
     const head = exported.at(-1)?.gitCommit;

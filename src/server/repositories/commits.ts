@@ -4,21 +4,23 @@
  */
 import { and, count, desc, eq, getTableColumns, gte, lt, max } from 'drizzle-orm';
 
-import { commitId } from '@/core/hash';
+import { commitId, commitObjectOf, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, SourceDeckMetadata } from '@/core/model';
 import type { IngestMethod } from '@/integrations/deck-source';
 import { branches, commits, decks, snapshots } from '@/server/db/schema';
 
 import { corruptData, decodeIngestMethod, decodeSourceMetadata, encodeJson } from './codec';
 import {
+  allOf,
   deckInWorkspace,
   inWorkspace,
+  ownDeck,
   referencing,
   withTransaction,
   type RepositoryContext,
 } from './context';
 import { RepositoryError } from './errors';
-import { decodeSnapshot } from './snapshots';
+import { requireJoinedSnapshot } from './snapshots';
 
 export interface CommitRecord {
   /** SHA-256 of the serialized commit object (`commitId` in `@/core/hash`). */
@@ -49,7 +51,17 @@ export interface CommitWithSnapshot {
 }
 
 /** Shortest commit id prefix accepted by {@link CommitRepository.findByIdPrefix}. */
-export const MIN_COMMIT_ID_PREFIX_LENGTH = 4;
+const MIN_COMMIT_ID_PREFIX_LENGTH = 4;
+
+/** Length of a full commit id (a hex SHA-256 digest). */
+const COMMIT_ID_LENGTH = 64;
+
+/** Whether `text` (already lower-cased) can be a commit id prefix: 4 to 64 hex characters. */
+export function isCommitIdPrefix(text: string): boolean {
+  return (
+    /^[0-9a-f]+$/.test(text) && text.length >= MIN_COMMIT_ID_PREFIX_LENGTH && text.length <= COMMIT_ID_LENGTH
+  );
+}
 
 export interface CommitRepository {
   /**
@@ -113,10 +125,10 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
         const deck = await db
           .select({ source: decks.source, externalId: decks.externalId })
           .from(decks)
-          .where(and(eq(decks.id, commit.deckId), eq(decks.workspaceId, ctx.workspaceId)))
+          .where(ownDeck(ctx, commit.deckId))
           .get();
         if (!deck) throw new RepositoryError('not-found', `Deck ${commit.deckId} does not exist`);
-        assertContentAddressed(commit, `${deck.source}:${deck.externalId}`);
+        assertContentAddressed(commit, deckReference(deck));
 
         // Installation-wide on purpose: commit ids are the table's primary key.
         const existing = await db
@@ -209,7 +221,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
 
     async findByIdPrefix(deckId, prefix) {
       const normalized = prefix.trim().toLowerCase();
-      if (!/^[0-9a-f]+$/.test(normalized) || normalized.length < MIN_COMMIT_ID_PREFIX_LENGTH) return null;
+      if (!isCommitIdPrefix(normalized)) return null;
       // Ids are lowercase hex, so every id starting with the prefix sorts within
       // [prefix, prefix + 'g'): a primary-key range scan instead of LIKE.
       const [match, another] = await ctx.db
@@ -232,9 +244,9 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select(getTableColumns(commits))
         .from(decks)
-        .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
+        .innerJoin(branches, headBranchOfDeck)
         .innerJoin(commits, eq(commits.id, branches.headCommitId))
-        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .where(ownDeck(ctx, deckId))
         .get();
       return row ? toCommitRecord(row) : null;
     },
@@ -243,17 +255,17 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
       const row = await ctx.db
         .select({ commit: commits, snapshot: snapshots })
         .from(decks)
-        .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
+        .innerJoin(branches, headBranchOfDeck)
         .innerJoin(commits, eq(commits.id, branches.headCommitId))
         .leftJoin(snapshots, eq(snapshots.hash, commits.snapshotHash))
-        .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+        .where(ownDeck(ctx, deckId))
         .get();
       if (!row) return null;
       const commit = toCommitRecord(row.commit);
-      if (row.snapshot === null) {
-        throw corruptData(`Commit ${commit.id}`, `its snapshot ${commit.snapshotHash} is missing`);
-      }
-      return { commit, snapshot: decodeSnapshot(row.snapshot) };
+      return {
+        commit,
+        snapshot: requireJoinedSnapshot(`Commit ${commit.id}`, commit.snapshotHash, row.snapshot),
+      };
     },
 
     async lineage(deckId, fromCommitId) {
@@ -324,14 +336,7 @@ export function createCommitRepository(ctx: RepositoryContext): CommitRepository
 function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   let expected: string;
   try {
-    expected = commitId({
-      deck: deckRef,
-      snapshotHash: commit.snapshotHash,
-      parentId: commit.parentId,
-      createdAt: commit.createdAt,
-      sourceVersion: commit.sourceVersion,
-      message: commit.message,
-    });
+    expected = commitId(commitObjectOf(commit, deckRef));
   } catch (cause) {
     throw new RepositoryError('invalid-input', 'Commit cannot be serialized as a commit object', { cause });
   }
@@ -343,12 +348,15 @@ function assertContentAddressed(commit: CommitRecord, deckRef: string): void {
   }
 }
 
+/** Joins a deck to its HEAD branch. */
+const headBranchOfDeck = allOf(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName));
+
 async function headCommitId(ctx: RepositoryContext, deckId: string): Promise<string | null> {
   const row = await ctx.db
     .select({ headCommitId: branches.headCommitId })
     .from(decks)
-    .innerJoin(branches, and(eq(branches.deckId, decks.id), eq(branches.name, decks.headBranchName)))
-    .where(and(eq(decks.id, deckId), eq(decks.workspaceId, ctx.workspaceId)))
+    .innerJoin(branches, headBranchOfDeck)
+    .where(ownDeck(ctx, deckId))
     .get();
   return row?.headCommitId ?? null;
 }

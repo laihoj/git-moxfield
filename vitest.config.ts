@@ -1,16 +1,11 @@
-import { fileURLToPath } from 'node:url';
-
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
+import { sharedResolve } from './vitest.shared.ts';
+
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    tsconfigPaths: true,
-    alias: {
-      'server-only': fileURLToPath(new URL('./tests/support/server-only-stub.ts', import.meta.url)),
-    },
-  },
+  resolve: sharedResolve,
   test: {
     environment: 'node',
     include: [

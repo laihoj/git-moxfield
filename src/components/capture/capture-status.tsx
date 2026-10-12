@@ -4,21 +4,20 @@ import { History, Plus } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 
 import { Alert } from '@/components/ui/alert';
-import { Button, ButtonLink } from '@/components/ui/button';
+import { Button, ButtonLink, type ButtonVariant } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
+import { foldInlineText } from '@/core/text';
 import { pluralize } from '@/lib/format';
 import { routes } from '@/lib/routes';
 import type { RelinkCandidateDTO } from '@/server/services/types';
 
-import type { SubmissionPhase } from './use-capture-submission';
+import type { CaptureSubmission } from './use-capture-submission';
 
 export interface CaptureStatusProps {
-  phase: SubmissionPhase;
-  onTrack: () => void;
-  /** Continues the history of the user's deck `deckId` with the untracked deck. */
-  onRelink: (deckId: string) => void;
-  onCancel: () => void;
+  submission: Pick<CaptureSubmission, 'phase' | 'track' | 'relink' | 'reset'>;
+  /** Called by Cancel (of the tracking question); by default the submission is reset. */
+  onCancel?: () => void;
 }
 
 /**
@@ -26,7 +25,14 @@ export interface CaptureStatusProps {
  * continuing one of the user's decks with it instead), success ("Updated from Moxfield",
  * then the deck page opens) and failures.
  */
-export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureStatusProps) {
+export function CaptureStatus({ submission, onCancel = submission.reset }: CaptureStatusProps) {
+  const { phase } = submission;
+  const onTrack = (): void => {
+    void submission.track();
+  };
+  const onRelink = (deckId: string): void => {
+    void submission.relink(deckId);
+  };
   switch (phase.kind) {
     case 'idle':
       return null;
@@ -93,13 +99,9 @@ export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureSta
           }
           actions={
             phase.code === 'invalid-key' ? (
-              <ButtonLink href={routes.setup()} variant="secondary" size="sm">
-                Make a new bookmarklet
-              </ButtonLink>
+              <CaptureRemedyAction remedy="new-bookmarklet" />
             ) : phase.code === 'unauthenticated' ? (
-              <ButtonLink href={routes.signIn(routes.capturePaste())} variant="secondary" size="sm">
-                Sign in
-              </ButtonLink>
+              <CaptureRemedyAction remedy="sign-in" />
             ) : undefined
           }
         >
@@ -107,11 +109,6 @@ export function CaptureStatus({ phase, onTrack, onRelink, onCancel }: CaptureSta
         </Alert>
       );
   }
-}
-
-/** Folds a deck name for comparing: case, spacing and Unicode form do not matter. */
-function foldName(name: string): string {
-  return name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 /**
@@ -130,8 +127,8 @@ function ContinueDeck({
 }) {
   const id = useId();
   const [selected, setSelected] = useState(() => {
-    const wanted = foldName(capturedName);
-    const sameName = decks.filter((deck) => wanted !== '' && foldName(deck.name) === wanted);
+    const wanted = foldInlineText(capturedName);
+    const sameName = decks.filter((deck) => wanted !== '' && foldInlineText(deck.name) === wanted);
     return sameName.length === 1 ? (sameName[0]?.id ?? '') : '';
   });
   const deck = decks.find((candidate) => candidate.id === selected);
@@ -205,5 +202,24 @@ export function WaitingPanel({ title, children }: { title: string; children?: Re
       <p className="text-base font-semibold text-fg">{title}</p>
       {children !== undefined && <div className="max-w-md text-sm text-muted">{children}</div>}
     </div>
+  );
+}
+
+/** An Alert action out of a refused capture: a new bookmarklet, or signing in (back to the paste page). */
+export function CaptureRemedyAction({
+  remedy,
+  variant = 'secondary',
+}: {
+  remedy: 'new-bookmarklet' | 'sign-in';
+  variant?: ButtonVariant;
+}) {
+  return remedy === 'new-bookmarklet' ? (
+    <ButtonLink href={routes.setup()} variant={variant} size="sm">
+      Make a new bookmarklet
+    </ButtonLink>
+  ) : (
+    <ButtonLink href={routes.signIn(routes.capturePaste())} variant={variant} size="sm">
+      Sign in
+    </ButtonLink>
   );
 }

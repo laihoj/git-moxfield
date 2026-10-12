@@ -9,6 +9,17 @@ export function roleLabel(role: UserRole): string {
   return role === 'admin' ? 'Admin' : 'Member';
 }
 
+/** Who made an invite or recovery link: `By Mikko`, or the command line (`createdBy` is `null`). */
+export function describeCreator(createdBy: string | null): string {
+  return createdBy === null ? 'Created on the command line' : `By ${createdBy}`;
+}
+
+/** The share links a revocation reaches, as a phrase: `any share links`, `the share link`, `the 3 share links`. */
+export function theShareLinks(count: number): string {
+  if (count === 0) return 'any share links';
+  return count === 1 ? 'the share link' : `the ${count} share links`;
+}
+
 /** How a signed-in browser got its session, as a phrase: `Signed in with the bookmarklet`. */
 export function describeSessionOrigin(origin: SessionOrigin): string {
   switch (origin) {

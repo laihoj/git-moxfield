@@ -40,7 +40,7 @@ export function SiteChrome({ homeHref, actions, banner, children }: SiteChromePr
     <>
       {/* Above the page's own positioned elements, so the account menu's panel overlaps them. */}
       <header className="relative z-40 border-b border-border bg-surface/85 pt-[env(safe-area-inset-top)] backdrop-blur-md">
-        <div className="page-gutter mx-auto flex h-14 w-full max-w-[1080px] items-center justify-between gap-4">
+        <div className="page-gutter mx-auto flex h-14 w-full max-w-page items-center justify-between gap-4">
           {homeHref === undefined ? (
             <span className={WORDMARK}>{wordmark}</span>
           ) : (
@@ -52,14 +52,11 @@ export function SiteChrome({ homeHref, actions, banner, children }: SiteChromePr
         </div>
         {banner}
       </header>
-      <main
-        id="main"
-        className="page-gutter mx-auto w-full max-w-[1080px] flex-1 pt-6 pb-10 md:pt-8 md:pb-16"
-      >
+      <main id="main" className="page-gutter mx-auto w-full max-w-page flex-1 pt-6 pb-10 md:pt-8 md:pb-16">
         {children}
       </main>
       <footer className="border-t border-border">
-        <div className="page-gutter mx-auto flex w-full max-w-[1080px] flex-wrap items-center justify-between gap-x-4 gap-y-1 py-5 text-xs text-subtle">
+        <div className="page-gutter mx-auto flex w-full max-w-page flex-wrap items-center justify-between gap-x-4 gap-y-1 py-5 text-xs text-subtle">
           <p>
             git-moxfield <span className="tabular">v{packageJson.version}</span>
           </p>

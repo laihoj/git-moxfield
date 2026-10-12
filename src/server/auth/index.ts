@@ -33,12 +33,6 @@ export {
   type AuthServiceDependencies,
 } from './service';
 export type * from './types';
-export {
-  MAX_DISPLAY_NAME_LENGTH,
-  MAX_INVITE_NOTE_LENGTH,
-  MAX_KEY_LABEL_LENGTH,
-  MAX_SHARE_LINK_LABEL_LENGTH,
-} from './validation';
 
 const globalForAuth = globalThis as unknown as { __gitMoxfieldSetupCodeAnnounced?: boolean };
 

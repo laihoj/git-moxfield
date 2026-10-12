@@ -1,8 +1,8 @@
-import { ChevronLeft, ShieldCheck } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
 import { RestorePanel } from '@/components/deck/restore-panel';
 import { VersionBadge } from '@/components/deck/version-row';
-import { Link } from '@/components/ui/navigation';
+import { BackLink } from '@/components/ui/back-link';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 import type { SharedRestoreDTO } from '@/server/services/types';
@@ -29,13 +29,7 @@ export function RestoreContent({ scope, restore, deckUrl }: RestoreContentProps)
   const routes = deckRoutes(scope);
   return (
     <div className="flex flex-col gap-5 md:gap-6">
-      <Link
-        href={routes.version(version.sequence)}
-        className="-ml-2 inline-flex min-h-11 w-fit items-center gap-1 rounded-lg px-2 text-sm font-medium text-muted hover:text-fg md:min-h-9"
-      >
-        <ChevronLeft aria-hidden="true" className="size-4" />
-        Back to {versionLabel(version.sequence)}
-      </Link>
+      <BackLink href={routes.version(version.sequence)}>Back to {versionLabel(version.sequence)}</BackLink>
 
       <header className="flex flex-col gap-2">
         <div className="flex items-start gap-3">

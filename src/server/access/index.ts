@@ -49,6 +49,7 @@ import type { SessionUser } from '@/server/auth/types';
 import { getConfig } from '@/server/config';
 import { getDb } from '@/server/db/client';
 import { createLogger } from '@/server/logger';
+import { processSingleton } from '@/server/process-singleton';
 import {
   createServices,
   createShareLinkServices,
@@ -62,15 +63,13 @@ import {
 } from '@/server/services';
 import { getDeckSourceRegistry } from '@/server/sources';
 
-const globalForAccess = globalThis as unknown as { __gitMoxfieldDeckLocks?: KeyedMutex };
-
 /**
  * Per-deck locks shared by every service instance of the process. They live on
  * `globalThis`, like the database connection and the deck source registry, so they
  * survive dev-server reloads and are shared by every module graph Next.js builds.
  */
 function deckLocks(): KeyedMutex {
-  return (globalForAccess.__gitMoxfieldDeckLocks ??= new KeyedMutex());
+  return processSingleton(Symbol.for('git-moxfield.deckLocks'), () => new KeyedMutex());
 }
 
 /**

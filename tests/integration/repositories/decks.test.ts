@@ -169,6 +169,11 @@ describe('decks repository', () => {
 
     await expectRepositoryError(repos.decks.recordFetchAttempt('missing', error.at), 'not-found');
     await expectRepositoryError(repos.decks.recordFetchError('missing', null), 'not-found');
+    // An error that cannot be stored is a rejected promise, never a synchronous throw.
+    await expectRepositoryError(
+      repos.decks.recordFetchError(deck.id, { ...error, retryAfterSeconds: 10n as unknown as number }),
+      'invalid-input',
+    );
   });
 
   it('reports a damaged fetch error column as corrupt data', async () => {
@@ -176,6 +181,45 @@ describe('decks repository', () => {
     const deck = await createTestDeck(repos);
     await db.run(sql`UPDATE decks SET last_fetch_error_json = ${'{"code":"teapot"}'} WHERE id = ${deck.id}`);
     await expectRepositoryError(() => repos.decks.getById(deck.id), 'corrupt-data');
+  });
+
+  it('reads only the fields of a fetch error from the stored JSON (the record reaches the client)', async () => {
+    const { db, repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const error: FetchErrorRecord = {
+      code: 'timeout',
+      message: 'Timed out',
+      at: deck.createdAt,
+      retryAfterSeconds: null,
+    };
+    const stored = JSON.stringify({ ...error, debug: 'stack trace', status: 504 });
+    await db.run(sql`UPDATE decks SET last_fetch_error_json = ${stored} WHERE id = ${deck.id}`);
+    expect((await repos.decks.getById(deck.id))?.lastFetchError).toStrictEqual(error);
+  });
+
+  it('keeps content that a commit of another deck still references when a deck is deleted', async () => {
+    const { repos } = await createTestRepositories();
+    const deck = await createTestDeck(repos);
+    const other = await createTestDeck(repos);
+    const state = buildSnapshot(baseDeckSpec());
+    const raw = { mediaType: 'application/json', data: { shared: 'payload' } };
+
+    // The deleted deck's commit and observation and the other deck's commit hold the same
+    // snapshot and raw blob (a commit's blob is optional; an observation's is not).
+    const rawBlobHash = await repos.rawBlobs.put(raw);
+    await commitTestSnapshot(repos, deck, state, { rawBlobHash });
+    await observeTestSnapshot(repos, deck, state, { raw: raw.data });
+    const { snapshotHash } = await commitTestSnapshot(repos, other, state, { rawBlobHash });
+
+    expect(await repos.decks.delete(deck.id)).toBe(true);
+
+    expect(await repos.rawBlobs.get(rawBlobHash)).toEqual(raw);
+    expect(await repos.snapshots.get(snapshotHash)).toEqual(state);
+
+    // Once the last reference goes, both kinds of content go with it.
+    expect(await repos.decks.delete(other.id)).toBe(true);
+    expect(await repos.rawBlobs.get(rawBlobHash)).toBeNull();
+    expect(await repos.snapshots.get(snapshotHash)).toBeNull();
   });
 
   it('deletes a deck with its entire history, bypassing commit immutability', async () => {

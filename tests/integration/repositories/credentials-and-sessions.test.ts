@@ -69,8 +69,13 @@ describe('credential repository', () => {
       () => repos.credentials.createKey({ userId: 'nope', label: 'Laptop', secretHash: HASH_B }),
       'not-found',
     );
+    // A rejected promise, never a synchronous throw.
     await expectRepositoryError(
-      () => repos.credentials.createKey({ userId: mikko.id, label: ' ', secretHash: HASH_B }),
+      repos.credentials.createKey({ userId: mikko.id, label: ' ', secretHash: HASH_B }),
+      'invalid-input',
+    );
+    await expectRepositoryError(
+      repos.credentials.createKey({ userId: mikko.id, label: 'Laptop', secretHash: '' }),
       'invalid-input',
     );
   });
@@ -285,6 +290,10 @@ describe('session repository', () => {
       () =>
         repos.sessions.create({ userId: 'nope', tokenHash: HASH_B, createdVia: 'claim', expiresAt: LATER }),
       'not-found',
+    );
+    await expectRepositoryError(
+      repos.sessions.create({ userId: mikko.id, tokenHash: '', createdVia: 'claim', expiresAt: LATER }),
+      'invalid-input',
     );
   });
 });

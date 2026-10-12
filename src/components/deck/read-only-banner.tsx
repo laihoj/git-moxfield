@@ -8,7 +8,7 @@ import { Eye } from 'lucide-react';
 export function ReadOnlyBanner({ ownerName }: { ownerName: string }) {
   return (
     <div className="border-t border-border bg-surface-2/70">
-      <p className="page-gutter mx-auto flex w-full max-w-[1080px] items-center gap-2 py-2 text-sm text-muted">
+      <p className="page-gutter mx-auto flex w-full max-w-page items-center gap-2 py-2 text-sm text-muted">
         <Eye aria-hidden="true" className="size-4 shrink-0 text-accent" />
         {/* The spaces between the flex items are not rendered; they keep the copied text readable. */}
         <span className="min-w-0 truncate">

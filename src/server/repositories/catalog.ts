@@ -18,7 +18,16 @@ import type { CardFacts, CardKey } from '@/core/model';
 import { cardCatalog } from '@/server/db/schema';
 
 import { decodeStringArray, encodeJson } from './codec';
-import { batches, distinct, valuesTable, writeAll, type RepositoryContext } from './context';
+import {
+  batches,
+  excluded,
+  selectInBatches,
+  valuesTable,
+  writeAll,
+  type LibsqlExecutor,
+  type RepositoryContext,
+  type WriteSet,
+} from './context';
 
 export interface CatalogRepository {
   /**
@@ -51,48 +60,35 @@ export function createCatalogRepository(ctx: RepositoryContext): CatalogReposito
         scryfallId: fact.scryfallId ?? null,
         updatedAt,
       }));
-      const [first = [], ...rest] = batches(rows);
-      await writeAll(ctx, (db) => {
-        const upsert = (batch: typeof rows) =>
-          db
-            .insert(cardCatalog)
-            .values(batch)
-            .onConflictDoUpdate({
-              target: [cardCatalog.workspaceId, cardCatalog.key],
-              set: {
-                ...Object.fromEntries(FACT_COLUMNS.map(([field, column]) => [field, excluded(column)])),
-                updatedAt: excluded(cardCatalog.updatedAt),
-              },
-              // Only rows whose facts changed (`IS NOT`: NULL-safe, for `scryfall_id`).
-              setWhere: or(...FACT_COLUMNS.map(([, column]) => sql`${column} IS NOT ${excluded(column)}`)),
-            });
-        return [upsert(first), ...rest.map(upsert)] as const;
-      });
+      await writeAll(ctx, (db) =>
+        catalogUpserts(
+          db,
+          rows,
+          // Only rows whose facts changed (`IS NOT`: NULL-safe, for `scryfall_id`).
+          or(...FACT_COLUMNS.map(([, column]) => sql`${column} IS NOT ${excluded(column)}`)),
+        ),
+      );
     },
 
     async getMany(keys) {
       const result = new Map<CardKey, CardFacts>();
       // One row read per card (a version page asks for every card of the deck).
-      const pages = await Promise.all(
-        batches(distinct(keys)).map((batch) =>
-          ctx.db.all<CatalogRow>(catalogLookupQuery(ctx.workspaceId, batch)),
-        ),
+      const rows = await selectInBatches(keys, (batch) =>
+        ctx.db.all<CatalogRow>(catalogLookupQuery(ctx.workspaceId, batch)),
       );
-      for (const rows of pages) {
-        for (const row of rows) {
-          const facts: CardFacts = {
-            key: row.key,
-            name: row.name,
-            typeLine: row.typeLine,
-            primaryType: row.primaryType,
-            manaCost: row.manaCost,
-            cmc: row.cmc,
-            colorIdentity: decodeStringArray(row.colorIdentityJson, `Color identity of ${row.key}`),
-            layout: row.layout,
-          };
-          if (row.scryfallId !== null) facts.scryfallId = row.scryfallId;
-          result.set(row.key, facts);
-        }
+      for (const row of rows) {
+        const facts: CardFacts = {
+          key: row.key,
+          name: row.name,
+          typeLine: row.typeLine,
+          primaryType: row.primaryType,
+          manaCost: row.manaCost,
+          cmc: row.cmc,
+          colorIdentity: decodeStringArray(row.colorIdentityJson, `Color identity of ${row.key}`),
+          layout: row.layout,
+        };
+        if (row.scryfallId !== null) facts.scryfallId = row.scryfallId;
+        result.set(row.key, facts);
       }
       return result;
     },
@@ -129,12 +125,32 @@ export function catalogLookupQuery(workspaceId: string, keys: readonly string[])
     WHERE c.workspace_id = ${workspaceId} AND c.key = wanted.column1`;
 }
 
+/**
+ * Upserts non-empty `rows` in batches (a write set for `writeAll`): an existing key takes every
+ * fact column (see `FACT_COLUMNS`) and `updated_at` of the row where `setWhere` holds.
+ */
+export function catalogUpserts(
+  db: LibsqlExecutor,
+  rows: readonly (typeof cardCatalog.$inferInsert)[],
+  setWhere: SQL | undefined,
+): WriteSet {
+  const [first = [], ...rest] = batches(rows);
+  const upsert = (batch: typeof first) =>
+    db
+      .insert(cardCatalog)
+      .values(batch)
+      .onConflictDoUpdate({
+        target: [cardCatalog.workspaceId, cardCatalog.key],
+        set: {
+          ...Object.fromEntries(FACT_COLUMNS.map(([field, column]) => [field, excluded(column)])),
+          updatedAt: excluded(cardCatalog.updatedAt),
+        },
+        setWhere,
+      });
+  return [upsert(first), ...rest.map(upsert)] as const;
+}
+
 /** The columns holding a card's facts: every column but the workspace, the key and `updated_at`. */
 const FACT_COLUMNS: readonly (readonly [string, SQLiteColumn])[] = Object.entries(
   getTableColumns(cardCatalog),
 ).filter(([field]) => field !== 'workspaceId' && field !== 'key' && field !== 'updatedAt');
-
-/** The value an upsert tried to insert into `column` (SQLite's `excluded` pseudo-table). */
-function excluded(column: SQLiteColumn): SQL {
-  return sql.raw(`excluded."${column.name}"`);
-}

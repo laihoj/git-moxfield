@@ -1,6 +1,7 @@
 import { LifeBuoy } from 'lucide-react';
 
-import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { ItemList, ItemRow, ItemTitle } from '@/components/ui/item-list';
+import { MetaItem } from '@/components/ui/meta-list';
 import { RelativeTime } from '@/components/ui/relative-time';
 import type { RecoveryUseDTO } from '@/server/auth/types';
 
@@ -12,29 +13,30 @@ import type { RecoveryUseDTO } from '@/server/auth/types';
  */
 export function RecoveryHistory({ uses }: { uses: readonly RecoveryUseDTO[] }) {
   return (
-    <ul aria-label="Recovery links used" className="divide-y divide-border">
+    <ItemList label="Recovery links used">
       {uses.map((use) => (
-        <li key={`${use.usedAt}-${use.createdAt}`} className="flex items-center gap-3 px-4 py-3.5 md:px-5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
-            <LifeBuoy aria-hidden="true" className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium break-words text-fg">
+        <ItemRow
+          key={`${use.usedAt}-${use.createdAt}`}
+          icon={<LifeBuoy aria-hidden="true" />}
+          title={
+            <ItemTitle>
               {use.createdBy === null
                 ? 'Recovery link from the server’s command line'
                 : `Recovery link from ${use.createdBy}`}
-            </p>
-            <MetaList className="text-xs text-muted">
+            </ItemTitle>
+          }
+          meta={
+            <>
               <MetaItem>
                 Used <RelativeTime value={use.usedAt} />
               </MetaItem>
               <MetaItem>
                 Made <RelativeTime value={use.createdAt} />
               </MetaItem>
-            </MetaList>
-          </div>
-        </li>
+            </>
+          }
+        />
       ))}
-    </ul>
+    </ItemList>
   );
 }

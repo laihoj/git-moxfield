@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { CardHistoryContent, cardKeySegment } from '@/components/deck-pages/card-history-content';
+import { deckPageTitle, deckTitle } from '@/lib/presentation';
 
 import { deckServices, decodeSegment } from '../../data';
 
@@ -19,7 +20,9 @@ export async function generateMetadata({
   params,
 }: PageProps<'/decks/[deckId]/cards/[cardKey]'>): Promise<Metadata> {
   const card = await loadHistory(params);
-  return { title: card === null ? 'Card not found' : `${card.history.name} · ${card.deck.name}` };
+  return {
+    title: card === null ? 'Card not found' : deckPageTitle(card.history.name, deckTitle(card.deck)),
+  };
 }
 
 /** History of one card across the deck's versions and the current Moxfield deck. */

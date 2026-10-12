@@ -4,7 +4,7 @@ import { cache } from 'react';
 import { RestoreContent } from '@/components/deck-pages/restore-content';
 import { parseSequence } from '@/app/route-segments';
 import { versionLabel } from '@/lib/format';
-import { sharedDeckTitle } from '@/lib/presentation';
+import { deckPageTitle, sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckRoutes } from '@/lib/routes';
 
 import { loadSharedDeck, sharedPageMetadata } from '../../../data';
@@ -26,7 +26,12 @@ export async function generateMetadata({
   return sharedPageMetadata(token, async () => {
     const restore = await loadRestore(token, sequence);
     if (restore === null) return { title: 'Version not found' };
-    return { title: `Restore ${versionLabel(restore.version.sequence)} · ${sharedDeckTitle(restore.deck)}` };
+    return {
+      title: deckPageTitle(
+        `Restore ${versionLabel(restore.version.sequence)}`,
+        sharedDeckTitle(restore.deck),
+      ),
+    };
   });
 }
 

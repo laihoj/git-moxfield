@@ -6,8 +6,9 @@
  * `corrupt-data` {@link RepositoryError} instead of an `undefined` deep inside the UI.
  */
 import { stableStringify } from '@/core/canonical';
+import { isRecord } from '@/core/guards';
 import type { IngestWarning, SourceDeckMetadata } from '@/core/model';
-import type { IngestMethod } from '@/integrations/deck-source';
+import { isIngestMethod, type IngestMethod } from '@/integrations/deck-source';
 
 import { assertStorableSize } from './context';
 import { RepositoryError } from './errors';
@@ -37,26 +38,12 @@ export function decodeJson(text: string, what: string): unknown {
   }
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 export function corruptData(what: string, problem: string): RepositoryError {
   return new RepositoryError('corrupt-data', `${what}: ${problem}`);
-}
-
-const INGEST_METHODS: Record<IngestMethod, true> = {
-  server: true,
-  'browser-capture': true,
-  'manual-paste': true,
-};
-
-export function isIngestMethod(value: string): value is IngestMethod {
-  return Object.hasOwn(INGEST_METHODS, value);
 }
 
 export function decodeIngestMethod(value: string, what: string): IngestMethod {

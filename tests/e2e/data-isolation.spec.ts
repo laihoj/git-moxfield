@@ -5,7 +5,7 @@
  * Signed-out visitors are sent to sign in, and on to the deck afterwards.
  */
 import { createDeviceLink, expectSignedInAs, signIn, signInWithLink, uniqueName } from './support/accounts';
-import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
+import { trackAndCommitV1, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -16,13 +16,14 @@ test('one person’s decks are invisible to everyone else', async ({
   consoleErrors,
 }, testInfo) => {
   // The browser reports each 404 page in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+  consoleErrors.allowHttpStatus(404);
   const { user: alice } = await signIn(context, { displayName: uniqueName('Alice') });
-  const deck = await createBlueFarmCopy(testInfo, 'Private Farm');
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Private Farm',
+    message: 'Secret tech',
+    confirm: 'status',
+  });
   const moxfieldUrl = mockMoxfield.deckPageUrl(deck.publicId);
-  const deckId = await trackDeck(page, moxfieldUrl);
-  await commitVersion(page, { sequence: 1, message: 'Secret tech' });
-  await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v1' })).toBeVisible();
 
   const bobContext = await newContext();
   const { user: bob } = await signIn(bobContext, { displayName: uniqueName('Bob') });

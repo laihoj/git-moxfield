@@ -6,6 +6,7 @@
  * service layer can map failures to user-facing outcomes without parsing SQLite
  * messages. Raw driver errors only escape for genuinely unexpected conditions.
  */
+import { CodedError } from '@/core/coded-error';
 
 export type RepositoryErrorCode =
   /** The caller violated a documented precondition (invalid tag, non-canonical snapshot, bad commit id, ...). */
@@ -19,14 +20,8 @@ export type RepositoryErrorCode =
   /** Stored data uses a schema version or encoding this build cannot read. */
   | 'unsupported-version';
 
-export class RepositoryError extends Error {
+export class RepositoryError extends CodedError<RepositoryErrorCode> {
   override readonly name = 'RepositoryError';
-  readonly code: RepositoryErrorCode;
-
-  constructor(code: RepositoryErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.code = code;
-  }
 }
 
 /** Type guard, optionally narrowing to a specific error code. */

@@ -11,19 +11,7 @@ import { RepositoryError } from './errors';
 
 export type BranchKind = (typeof branches.$inferSelect)['kind'];
 
-export interface BranchRecord {
-  id: string;
-  deckId: string;
-  name: string;
-  kind: BranchKind;
-  /** Newest commit on the branch, `null` before the first version. */
-  headCommitId: string | null;
-  /** Commit an experiment branch was started from (`null` for `main`). */
-  baseCommitId: string | null;
-  description: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+export type BranchRecord = typeof branches.$inferSelect;
 
 export interface SetHeadOptions {
   /**

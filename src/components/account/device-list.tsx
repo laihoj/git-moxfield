@@ -6,8 +6,10 @@ import { useState, useTransition } from 'react';
 import { revokeSessionAction, signOutOtherDevicesAction } from '@/app/account-actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ErrorText } from '@/components/ui/field';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
-import { MetaItem, MetaList } from '@/components/ui/meta-list';
+import { ItemList, ItemRow, ItemTitle } from '@/components/ui/item-list';
+import { MetaItem } from '@/components/ui/meta-list';
 import { RelativeTime } from '@/components/ui/relative-time';
 import { describeSessionOrigin } from '@/lib/accounts';
 import { describeDevice, type DeviceKind } from '@/lib/devices';
@@ -32,11 +34,11 @@ export function DeviceList({ sessions }: { sessions: readonly SessionDTO[] }) {
   const others = sessions.filter((session) => !session.current).length;
   return (
     <div className="flex flex-col">
-      <ul aria-label="Signed-in devices" className="divide-y divide-border">
+      <ItemList label="Signed-in devices">
         {ordered.map((session) => (
           <DeviceRow key={session.id} session={session} />
         ))}
-      </ul>
+      </ItemList>
       {others > 0 && (
         <div className="border-t border-border px-4 py-3.5 md:px-5">
           <InlineConfirm
@@ -47,10 +49,7 @@ export function DeviceList({ sessions }: { sessions: readonly SessionDTO[] }) {
             }}
             message={`Sign out ${pluralize(others, 'other device')}? ${others === 1 ? 'It needs' : 'They need'} a bookmarklet or a device link to sign in again.`}
             confirmLabel="Sign out"
-            onConfirm={async () => {
-              const result = await signOutOtherDevicesAction();
-              return result.ok ? null : result.message;
-            }}
+            onConfirm={() => signOutOtherDevicesAction()}
           />
         </div>
       )}
@@ -62,16 +61,15 @@ function DeviceRow({ session }: { session: SessionDTO }) {
   const device = describeDevice(session.userAgent);
   const Icon = DEVICE_ICONS[device.kind];
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 md:px-5">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
-        <Icon aria-hidden="true" className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-fg">
-          <span className="break-words">{device.label}</span>
-          {session.current && <Badge tone="accent">This device</Badge>}
-        </p>
-        <MetaList className="text-xs text-muted">
+    <ItemRow
+      icon={<Icon aria-hidden="true" />}
+      title={
+        <ItemTitle badges={session.current && <Badge tone="accent">This device</Badge>}>
+          {device.label}
+        </ItemTitle>
+      }
+      meta={
+        <>
           <MetaItem>
             {describeSessionOrigin(session.createdVia)} <RelativeTime value={session.createdAt} />
           </MetaItem>
@@ -80,10 +78,10 @@ function DeviceRow({ session }: { session: SessionDTO }) {
               Active <RelativeTime value={session.lastSeenAt} />
             </MetaItem>
           )}
-        </MetaList>
-      </div>
-      {!session.current && <SignOutDeviceButton session={session} label={device.label} />}
-    </li>
+        </>
+      }
+      actions={!session.current && <SignOutDeviceButton session={session} label={device.label} />}
+    />
   );
 }
 
@@ -106,11 +104,7 @@ function SignOutDeviceButton({ session, label }: { session: SessionDTO; label: s
       >
         Sign out
       </Button>
-      {error !== null && (
-        <p role="alert" className="text-xs text-remove">
-          {error}
-        </p>
-      )}
+      {error !== null && <ErrorText size="xs">{error}</ErrorText>}
     </div>
   );
 }

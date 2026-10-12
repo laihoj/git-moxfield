@@ -19,14 +19,12 @@ import {
   createBlueFarmCopy,
   deckIdFromUrl,
   expectNoHorizontalOverflow,
+  statusHeading,
+  trackAndCommitV1,
   trackDeck,
 } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
-
-function statusHeading(page: Page, label: string): Locator {
-  return page.getByRole('heading', { level: 2, name: label });
-}
 
 function moxfieldDeckPanel(page: Page): Locator {
   return page.getByRole('region', { name: 'Moxfield deck' });
@@ -139,10 +137,11 @@ test('continues a deck deleted and made again on Moxfield, keeping its history',
 
 test('changes the Moxfield deck from the deck page, on any screen', async ({ page, context }, testInfo) => {
   await signIn(context);
-  const lost = await createBlueFarmCopy(testInfo, 'Moved deck');
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(lost.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Tournament list' });
-  await expect(statusHeading(page, 'Up to date with v1')).toBeVisible();
+  const { deck: lost, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Moved deck',
+    message: 'Tournament list',
+    confirm: 'status',
+  });
 
   // Made again on Moxfield, with one change since v1.
   await mockMoxfield.deleteDeck(lost.publicId);

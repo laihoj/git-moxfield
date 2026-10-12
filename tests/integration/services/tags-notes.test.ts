@@ -1,28 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { FREE_TEXT_NOTE_KIND, MAX_NOTE_LENGTH } from '@/server/services';
+import { MAX_NOTE_LENGTH } from '@/core/text-limits';
+import { FREE_TEXT_NOTE_KIND } from '@/server/services';
 import {
-  blueFarmSpec,
-  commitReviewed,
-  committed,
   createServiceHarness,
   defined,
-  moveCard,
-  publishAndRefresh,
-  trackDeck,
+  twoVersionHistory,
   type ServiceHarness,
 } from '@tests/support/services';
 
 async function twoVersions(harness: ServiceHarness): Promise<string> {
-  const deckId = await trackDeck(harness);
-  committed(await commitReviewed(harness, deckId, 'Initial version', ['Tournament', ' tournament ']));
-  await publishAndRefresh(
-    harness,
-    deckId,
-    moveCard(blueFarmSpec({ version: 2 }), 'Dress Down', 'mainboard', 'considering'),
-  );
-  committed(await commitReviewed(harness, deckId, 'Cut Dress Down'));
-  return deckId;
+  return (await twoVersionHistory(harness, { v1Tags: ['Tournament', ' tournament '] })).deckId;
 }
 
 describe('deck services: tags', () => {
@@ -43,8 +31,8 @@ describe('deck services: tags', () => {
     expect(await services.addTag(deckId, 2, 'Tournament')).toEqual({ ok: true, tags: ['tournament'] });
 
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 1 },
-      { name: 'tournament', count: 2 },
+      { name: 'stable', count: 1, lastSequence: 1 },
+      { name: 'tournament', count: 2, lastSequence: 2 },
     ]);
     expect(
       (await services.listVersions(deckId, { tag: 'STABLE' })).map((version) => version.sequence),
@@ -53,8 +41,8 @@ describe('deck services: tags', () => {
     expect(await services.removeTag(deckId, 1, 'Tournament')).toEqual({ ok: true, tags: ['stable'] });
     expect(await services.removeTag(deckId, 1, 'never-added')).toEqual({ ok: true, tags: ['stable'] });
     expect(await services.listTags(deckId)).toEqual([
-      { name: 'stable', count: 1 },
-      { name: 'tournament', count: 1 },
+      { name: 'stable', count: 1, lastSequence: 1 },
+      { name: 'tournament', count: 1, lastSequence: 2 },
     ]);
   });
 
@@ -65,17 +53,17 @@ describe('deck services: tags', () => {
 
     expect(await services.addTag(deckId, 1, '#!?')).toEqual({
       ok: false,
-      reason: expect.any(String) as unknown,
+      message: expect.any(String) as unknown,
     });
-    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, reason: 'Tag must not be empty.' });
+    expect(await services.addTag(deckId, 1, '   ')).toEqual({ ok: false, message: 'Enter a tag.' });
     expect(await services.addTag(deckId, 1, 'x'.repeat(41))).toMatchObject({ ok: false });
     expect(await services.addTag(deckId, 9, 'stable')).toEqual({
       ok: false,
-      reason: 'Version v9 does not exist.',
+      message: 'Version v9 does not exist.',
     });
     expect(await services.removeTag(deckId, 9, 'stable')).toEqual({
       ok: false,
-      reason: 'Version v9 does not exist.',
+      message: 'Version v9 does not exist.',
     });
     expect(await services.listTags('missing')).toEqual([]);
   });

@@ -7,19 +7,12 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { parseConfig } from '@/server/config';
-import { ensureLocalWorkspace, LOCAL_WORKSPACE_ID } from '@/server/db/client';
-import { applyMigrations } from '@/server/db/migration-state';
-import { createServices, KeyedMutex, type DeckServices } from '@/server/services';
-import { createDeckSourceRegistry } from '@/server/sources';
-import {
-  buildCaptureEnvelope,
-  type MoxCardSpec,
-  type MoxDeckSpec,
-} from '@tests/support/moxfield-deck-builder';
+import type { DeckServices } from '@/server/services';
+import { captureOnlyServices, captureSpec, commitWorkingState } from '@tests/support/flows';
+import type { MoxCardSpec, MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 import { defined, recordingLogger } from '@tests/support/services';
 
-import { measure, openMetered, openRemote, wipeRemoteDatabase, type Usage } from './support';
+import { measure, openMetered, resetRemoteDatabase, type Usage } from './support';
 
 const TYPES = ['Instant', 'Sorcery', 'Creature — Elf Druid', 'Artifact', 'Enchantment', 'Land'];
 
@@ -54,28 +47,18 @@ const usage: Usage = { rowsRead: 0, rowsWritten: 0 };
 let services: DeckServices;
 let version = 0;
 
-async function capture(spec: MoxDeckSpec): Promise<string> {
-  const outcome = await services.ingestCapture({
-    data: buildCaptureEnvelope(
-      { ...spec, version: ++version },
-      new Date(Date.UTC(2026, 9, 1, 0, 0, version)).toISOString(),
-    ),
-    method: 'browser-capture',
-    track: true,
-  });
-  if (outcome.status !== 'ingested') throw new Error(`Capture not ingested: ${outcome.status}`);
-  return outcome.deckId;
+function capture(spec: MoxDeckSpec): Promise<string> {
+  return captureSpec(
+    services,
+    { ...spec, version: ++version },
+    new Date(Date.UTC(2026, 9, 1, 0, 0, version)).toISOString(),
+  );
 }
 
 /** Captures `spec` and commits it as the deck's next version. */
 async function commitState(spec: MoxDeckSpec): Promise<string> {
   const deckId = await capture(spec);
-  const overview = defined(await services.getOverview(deckId));
-  const outcome = await services.commit(deckId, {
-    message: `Version ${version}`,
-    expectedObservationId: defined(overview.working).id,
-    expectedHeadCommitId: overview.head?.commitId ?? null,
-  });
+  const outcome = await commitWorkingState(services, deckId, { message: `Version ${version}` });
   if (!outcome.ok) throw new Error(`Commit failed: ${outcome.reason}`);
   return deckId;
 }
@@ -93,24 +76,8 @@ const VERSIONS = 5;
 let deckId: string;
 
 beforeAll(async () => {
-  await wipeRemoteDatabase();
-  const handle = await openRemote();
-  try {
-    await applyMigrations(handle.db);
-    await ensureLocalWorkspace(handle.db);
-  } finally {
-    handle.close();
-  }
-  const config = parseConfig({ MOXFIELD_SERVER_FETCH: 'off' });
-  const logger = recordingLogger();
-  services = createServices({
-    db: openMetered(usage),
-    sources: createDeckSourceRegistry(config, { logger }),
-    config,
-    workspaceId: LOCAL_WORKSPACE_ID,
-    logger,
-    locks: new KeyedMutex(),
-  });
+  await resetRemoteDatabase({ migrate: true });
+  services = captureOnlyServices(openMetered(usage), { logger: recordingLogger() });
   for (let shift = 0; shift < VERSIONS; shift++) deckId = await commitState(deckSpec(MEASURED, shift));
   await addOtherDecks(3, 0);
 }, 300_000);

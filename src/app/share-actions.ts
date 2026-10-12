@@ -13,38 +13,18 @@
  * development server's log of server function calls cannot show a URL either.
  */
 import { revalidatePath } from 'next/cache';
-import { headers } from 'next/headers';
-import { z } from 'zod';
 
 import { shareLinkServicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
-import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
 import { isServiceError } from '@/server/services';
 import { routes } from '@/lib/routes';
 
 import type { AccountActionResult, CreateShareLinkResult } from './action-types';
-import { publicAppUrl } from './request-origin';
+import { failureMessage, idSchema, INVALID_REQUEST, MAX_FIELD_LENGTH } from './action-support';
+import { actionAppUrl } from './request-origin';
 
 const log = createLogger('share-actions');
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.';
-const INVALID_REQUEST = 'Invalid request.';
-const NO_APP_URL =
-  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
-
-/** Sanity bound for ids from the browser; the services look them up within the user's workspace. */
-const idSchema = z.string().trim().min(1).max(128);
-
-/** Longest label read at all; the service validates the exact rules (1–60 visible characters). */
-const MAX_LABEL_INPUT_LENGTH = 512;
-
-/** User-facing message: service errors carry one; anything else is logged (never with a URL) and hidden. */
-function failureMessage(error: unknown, what: string, user: SessionUser, deckId: string): string {
-  if (isServiceError(error)) return error.message;
-  log.error(`${what} failed`, { error, userId: user.id, deckId });
-  return GENERIC_ERROR;
-}
 
 /** The pages that show a deck's links: its Share page, and Account (counts per bookmarklet). */
 function revalidateShareLinks(deckId: string): void {
@@ -67,14 +47,14 @@ export async function createShareLinkAction(
   if (!id.success || typeof label !== 'string' || typeof includeNotes !== 'boolean') {
     return { status: 'error', message: INVALID_REQUEST };
   }
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message };
   try {
     const shareLinks = await shareLinkServicesFor(user);
     const created = await shareLinks.createShareLink(
       id.data,
-      { label: label.slice(0, MAX_LABEL_INPUT_LENGTH), includeNotes },
-      appUrl,
+      { label: label.slice(0, MAX_FIELD_LENGTH), includeNotes },
+      app.appUrl,
     );
     revalidateShareLinks(id.data);
     return { status: 'created', url: created.url, link: created.link };
@@ -82,7 +62,10 @@ export async function createShareLinkAction(
     // `includeNotes` is checked above, so invalid input is the label.
     if (isServiceError(error, 'invalid-input'))
       return { status: 'error', message: error.message, field: 'label' };
-    return { status: 'error', message: failureMessage(error, 'createShareLink', user, id.data) };
+    return {
+      status: 'error',
+      message: failureMessage(log, error, 'createShareLink', { userId: user.id, deckId: id.data }),
+    };
   }
 }
 
@@ -98,6 +81,9 @@ export async function revokeShareLinkAction(deckId: string, linkId: string): Pro
     revalidateShareLinks(id.data);
     return revoked ? { ok: true } : { ok: false, message: 'This link was already revoked.' };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeShareLink', user, id.data) };
+    return {
+      ok: false,
+      message: failureMessage(log, error, 'revokeShareLink', { userId: user.id, deckId: id.data }),
+    };
   }
 }

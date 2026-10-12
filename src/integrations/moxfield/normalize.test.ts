@@ -3,11 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { canonicalizeSnapshot, snapshotZones, stableStringify, zoneCards } from '@/core/canonical';
 import type { CanonicalSnapshot, IngestWarning } from '@/core/model';
 
-import { DeckSourceError } from '../deck-source';
-
 import { normalizeMoxfieldPayload, primaryCardType } from './normalize';
 import type { MoxfieldPayloadData } from './schema';
 import {
+  expectDeckSourceSchemaError,
   moxfieldBoard,
   moxfieldEntry,
   syntheticDeck,
@@ -32,19 +31,6 @@ function zoneSummary(snapshot: CanonicalSnapshot): Record<string, string[]> {
       zoneCards(snapshot, zone).map((c) => `${c.quantity} ${c.name}`),
     ]),
   );
-}
-
-function expectSchemaError(fn: () => unknown, ...fragments: string[]): void {
-  let caught: unknown;
-  try {
-    fn();
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(DeckSourceError);
-  const error = caught as DeckSourceError;
-  expect(error.code).toBe('schema');
-  for (const fragment of fragments) expect(error.message).toContain(fragment);
 }
 
 describe('normalizeMoxfieldPayload — v3 fixture', () => {
@@ -516,28 +502,31 @@ describe('normalizeMoxfieldPayload — synthetic variants', () => {
 describe('normalizeMoxfieldPayload — fatal schema problems', () => {
   it('requires publicId and name', () => {
     const { publicId: _p, name: _n, ...deck } = v3Deck();
-    expectSchemaError(() => normalize({ deck }), 'publicId:', 'name:');
+    expectDeckSourceSchemaError(() => normalize({ deck }), 'publicId:', 'name:');
   });
 
   it('requires boards in either shape', () => {
     const { boards: _b, ...deck } = v3Deck();
-    expectSchemaError(() => normalize({ deck }), 'boards: Invalid input');
+    expectDeckSourceSchemaError(() => normalize({ deck }), 'boards: Invalid input');
   });
 
   it('requires a mainboard board', () => {
     const deck = v3Deck();
     const { mainboard: _m, ...boards } = deck.boards;
-    expectSchemaError(() => normalize({ deck: { ...deck, boards } }), 'boards.mainboard');
+    expectDeckSourceSchemaError(() => normalize({ deck: { ...deck, boards } }), 'boards.mainboard');
   });
 
   it('fails on a known board with an unexpected shape', () => {
     const deck = { ...v3Deck(), boards: { ...v3Deck().boards, sideboard: { count: 1, cards: [] } } };
-    expectSchemaError(() => normalize({ deck }), 'boards.sideboard.cards: Invalid input: expected object');
+    expectDeckSourceSchemaError(
+      () => normalize({ deck }),
+      'boards.sideboard.cards: Invalid input: expected object',
+    );
   });
 
   it('fails on non-object decks', () => {
-    expectSchemaError(() => normalize({ deck: null }), 'not usable');
-    expectSchemaError(() => normalize({ deck: [] }), '(root)');
+    expectDeckSourceSchemaError(() => normalize({ deck: null }), 'not usable');
+    expectDeckSourceSchemaError(() => normalize({ deck: [] }), '(root)');
   });
 });
 

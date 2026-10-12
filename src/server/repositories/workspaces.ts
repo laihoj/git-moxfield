@@ -15,11 +15,7 @@ import { decks, users, workspaces } from '@/server/db/schema';
 import { write, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 
-export interface WorkspaceRecord {
-  id: string;
-  name: string;
-  createdAt: string;
-}
+export type WorkspaceRecord = typeof workspaces.$inferSelect;
 
 /** Where a deck lives: its workspace and that workspace's owner (if any). */
 export interface DeckLocation {

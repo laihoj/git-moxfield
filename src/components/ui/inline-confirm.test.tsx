@@ -3,11 +3,12 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AccountActionResult } from '@/app/action-types';
 import '@/components/test-utils';
 
 import { InlineConfirm } from './inline-confirm';
 
-function renderConfirm(onConfirm: () => Promise<string | null>) {
+function renderConfirm(onConfirm: () => Promise<AccountActionResult>) {
   return render(
     <InlineConfirm
       trigger={{ label: 'Revoke', ariaLabel: 'Revoke Laptop Chrome' }}
@@ -21,7 +22,7 @@ function renderConfirm(onConfirm: () => Promise<string | null>) {
 describe('InlineConfirm', () => {
   it('asks first, then runs the action once confirmed', async () => {
     const user = userEvent.setup();
-    const onConfirm = vi.fn().mockResolvedValue(null);
+    const onConfirm = vi.fn().mockResolvedValue({ ok: true });
     renderConfirm(onConfirm);
 
     await user.click(screen.getByRole('button', { name: 'Revoke Laptop Chrome' }));
@@ -37,7 +38,7 @@ describe('InlineConfirm', () => {
 
   it('shows the error and stays open when the action fails', async () => {
     const user = userEvent.setup();
-    renderConfirm(vi.fn().mockResolvedValue('This bookmarklet was already revoked.'));
+    renderConfirm(vi.fn().mockResolvedValue({ ok: false, message: 'This bookmarklet was already revoked.' }));
 
     await user.click(screen.getByRole('button', { name: 'Revoke Laptop Chrome' }));
     await user.click(screen.getByRole('button', { name: 'Revoke bookmarklet' }));

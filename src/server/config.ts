@@ -5,24 +5,38 @@
  */
 import 'server-only';
 
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 import { z } from 'zod';
 
-import { invalidAllowedHosts } from './host-guard';
+import { parseHttpUrl, stripTrailingSlashes } from '@/core/http-url';
+import { LOG_LEVELS } from '@/core/logger';
+import {
+  DEFAULT_MOXFIELD_API_BASE_URL,
+  DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS,
+  DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS,
+  DEFAULT_MOXFIELD_SITE_ORIGIN,
+  DEFAULT_MOXFIELD_TIMEOUT_MS,
+} from '@/integrations/moxfield/constants';
+
+import {
+  DEFAULT_DATABASE_PATH,
+  databaseLocationFromEnv,
+  databaseUrlKind,
+  SUPPORTED_DATABASE_URLS_HINT,
+  type DatabaseLocationSource,
+} from './db/database-location';
+import { invalidAllowedHosts, splitList } from './host-guard';
 import { runsOnNetlify } from './platform';
 
 const boolish = z
   .enum(['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'])
   .transform((v) => ['true', '1', 'yes', 'on'].includes(v));
 
-/** URL schemes the libSQL client accepts (see `src/server/db/libsql.ts`). */
-const DATABASE_URL = /^(?:(?:libsql|https?|wss?|file):|:memory:$)/i;
+/** An absolute http(s) URL (a base URL of the app or of Moxfield): other schemes fail at startup. */
+const httpUrl = () => z.url({ protocol: /^https?$/ });
 
 const schema = z.object({
   /** Local SQLite database file, used when `TURSO_DATABASE_URL` is not set. */
-  DATABASE_PATH: z.string().min(1).default('data/git-moxfield.db'),
+  DATABASE_PATH: z.string().min(1).default(DEFAULT_DATABASE_PATH),
   /**
    * libSQL URL of the database: `libsql://<db>-<org>.turso.io` (Turso, in production),
    * `http://127.0.0.1:8080` (a local libSQL server such as `turso dev`) or `file:path.db`.
@@ -34,17 +48,17 @@ const schema = z.object({
     .trim()
     .min(1)
     .optional()
-    .refine((value) => value === undefined || DATABASE_URL.test(value), {
-      message: 'expected a libsql:, https:, http:, wss:, ws: or file: URL',
+    .refine((value) => value === undefined || databaseUrlKind(value) !== undefined, {
+      message: `expected a URL using ${SUPPORTED_DATABASE_URLS_HINT}`,
     }),
   /** Auth token for `TURSO_DATABASE_URL` (Turso). Secret: only reachable through {@link AppConfig.database}. */
   TURSO_AUTH_TOKEN: z.string().trim().min(1).optional(),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 
   /** Base URL of the Moxfield API. Overridden in tests to point at the mock server. */
-  MOXFIELD_API_BASE_URL: z.url().default('https://api2.moxfield.com'),
+  MOXFIELD_API_BASE_URL: httpUrl().default(DEFAULT_MOXFIELD_API_BASE_URL).transform(stripTrailingSlashes),
   /** Origin of the Moxfield website (deck URLs, capture origin check). */
-  MOXFIELD_SITE_ORIGIN: z.url().default('https://moxfield.com'),
+  MOXFIELD_SITE_ORIGIN: httpUrl().default(DEFAULT_MOXFIELD_SITE_ORIGIN),
   /** User-Agent issued by Moxfield for approved projects. Server-side only. */
   MOXFIELD_USER_AGENT: z.string().trim().min(1).optional(),
   /**
@@ -53,11 +67,21 @@ const schema = z.object({
    * attempt would only cost a request and a block backoff), `auto` everywhere else.
    */
   MOXFIELD_SERVER_FETCH: z.enum(['auto', 'off']).optional(),
-  MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+  MOXFIELD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(DEFAULT_MOXFIELD_TIMEOUT_MS),
   /** Minimum spacing between any two requests to Moxfield from this process. */
-  MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).max(60_000).default(1_000),
+  MOXFIELD_MIN_REQUEST_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(60_000)
+    .default(DEFAULT_MOXFIELD_MIN_REQUEST_INTERVAL_MS),
   /** How long to pause server fetches after a bot-protection block. */
-  MOXFIELD_BLOCK_BACKOFF_SECONDS: z.coerce.number().int().min(0).max(86_400).default(3_600),
+  MOXFIELD_BLOCK_BACKOFF_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(86_400)
+    .default(DEFAULT_MOXFIELD_BLOCK_BACKOFF_SECONDS),
 
   /** Minimum seconds between two refreshes of the same deck. */
   REFRESH_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(3_600).default(10),
@@ -65,9 +89,21 @@ const schema = z.object({
   AUTO_REFRESH_AFTER_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
 
   /** Comma-separated origins allowed to hand captured decks to /capture. Defaults to the Moxfield site origin. */
-  CAPTURE_ALLOWED_ORIGINS: z.string().optional(),
+  CAPTURE_ALLOWED_ORIGINS: z
+    .string()
+    .optional()
+    .superRefine((value, ctx) => {
+      // Only http(s) URLs have an origin: `moxfield.com:443` would be the opaque origin `null`.
+      const invalid = splitList(value).filter((entry) => parseHttpUrl(entry) === null);
+      if (invalid.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `expected origins such as https://moxfield.com, got ${invalid.map((v) => JSON.stringify(v)).join(', ')}`,
+        });
+      }
+    }),
   /** Public URL of this app, baked into bookmarklets. Defaults to the request origin. */
-  PUBLIC_APP_URL: z.url().optional(),
+  PUBLIC_APP_URL: httpUrl().transform(stripTrailingSlashes).optional(),
   /**
    * Comma-separated host names (ports ignored) the app may be reached under besides IP
    * addresses, `localhost`/`*.localhost` and the host of `PUBLIC_APP_URL`, e.g. an mDNS
@@ -98,9 +134,6 @@ const schema = z.object({
   NODE_ENV: z.string().optional(),
 });
 
-/** Which setting names the database. */
-export type DatabaseLocationSource = 'TURSO_DATABASE_URL' | 'DATABASE_PATH';
-
 /**
  * Where the database is: `TURSO_DATABASE_URL` (with `TURSO_AUTH_TOKEN`) when set, else the
  * file at `DATABASE_PATH`. The URL and the token are private fields, so they never show up
@@ -119,11 +152,6 @@ export class DatabaseLocation {
     this.#authToken = authToken;
   }
 
-  /** A `file:` location for a database file (relative paths resolve against the working directory). */
-  static file(path: string): DatabaseLocation {
-    return new DatabaseLocation('DATABASE_PATH', pathToFileURL(resolve(path)).href);
-  }
-
   /** The libSQL URL to open. May carry credentials: never log it. */
   get url(): string {
     return this.#url;
@@ -132,6 +160,11 @@ export class DatabaseLocation {
   /** Auth token for a remote database (`TURSO_AUTH_TOKEN`), if any. Secret. */
   get authToken(): string | undefined {
     return this.#authToken;
+  }
+
+  /** What opening the database needs (`createLibsqlDatabase`). Holds the secrets: never log it. */
+  connection(): { url: string; authToken: string | undefined } {
+    return { url: this.#url, authToken: this.#authToken };
   }
 
   /** What `JSON.stringify` (and so the logger) shows: never the URL or the token. */
@@ -181,15 +214,11 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
     );
   }
   const moxfieldSiteOrigin = new URL(config.MOXFIELD_SITE_ORIGIN).origin;
-  const captureAllowedOrigins = (config.CAPTURE_ALLOWED_ORIGINS ?? moxfieldSiteOrigin)
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean)
-    .map((o) => new URL(o).origin);
-  const database =
-    TURSO_DATABASE_URL === undefined
-      ? DatabaseLocation.file(config.DATABASE_PATH)
-      : new DatabaseLocation('TURSO_DATABASE_URL', TURSO_DATABASE_URL, TURSO_AUTH_TOKEN);
+  const captureAllowedOrigins = splitList(config.CAPTURE_ALLOWED_ORIGINS ?? moxfieldSiteOrigin).map(
+    (o) => new URL(o).origin,
+  );
+  const location = databaseLocationFromEnv(cleaned);
+  const database = new DatabaseLocation(location.source, location.url, location.authToken);
   return {
     ...config,
     MOXFIELD_SERVER_FETCH: MOXFIELD_SERVER_FETCH ?? (runsOnNetlify(env) ? 'off' : 'auto'),

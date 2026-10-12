@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 
 export type AlertTone = 'info' | 'warn' | 'error' | 'success';
 
-const TONES: Record<AlertTone, { box: string; icon: string; Icon: typeof Info }> = {
+/** How each tone looks: the box, the icon's colour and the icon (the toasts use them too). */
+export const ALERT_TONES: Record<AlertTone, { box: string; icon: string; Icon: typeof Info }> = {
   info: { box: 'border-move/25 bg-move-bg', icon: 'text-move', Icon: Info },
   warn: { box: 'border-warn/30 bg-warn-bg', icon: 'text-warn', Icon: TriangleAlert },
   error: { box: 'border-remove/30 bg-remove-bg', icon: 'text-remove', Icon: CircleAlert },
@@ -29,7 +30,7 @@ export interface AlertProps {
 
 /** Inline banner for information, warnings and errors. Always has an icon and text. */
 export function Alert({ tone = 'info', title, children, actions, trailing, role, className }: AlertProps) {
-  const { box, icon, Icon } = TONES[tone];
+  const { box, icon, Icon } = ALERT_TONES[tone];
   return (
     <div role={role} className={clsx('flex gap-3 rounded-xl border px-4 py-3 text-sm', box, className)}>
       <Icon aria-hidden="true" className={clsx('mt-0.5 size-4 shrink-0', icon)} />

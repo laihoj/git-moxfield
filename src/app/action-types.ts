@@ -2,8 +2,10 @@
  * Result types of the server actions in `./actions.ts`. Kept in a plain module so
  * client components can import them without importing the actions' server code.
  */
+import type { UserRole } from '@/core/roles';
 import type { DeckSourceErrorCode } from '@/integrations/deck-source';
-import type { CommitOutcome, ShareLinkDTO } from '@/server/services/types';
+import type { TagOutcome } from '@/server/services/contract';
+import type { CommitFailureReason, ShareLinkDTO } from '@/server/services/types';
 
 /** State of the "Track a Moxfield deck" form (`useActionState`). */
 export type TrackDeckState = { status: 'idle' } | { status: 'error'; message: string; input: string };
@@ -13,8 +15,6 @@ export type RefreshResult =
   | { ok: true; changed: boolean }
   | { ok: false; code: DeckSourceErrorCode | 'internal'; message: string; retryAfterSeconds: number | null };
 
-type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
-
 /** State of the commit form (`useActionState`). */
 export type CommitState =
   | { status: 'idle' }
@@ -22,7 +22,7 @@ export type CommitState =
   | { status: 'error'; reason: CommitFailureReason | 'invalid-input' | 'internal'; message: string };
 
 /** Result of adding or removing a version tag. */
-export type TagResult = { ok: true; tags: string[] } | { ok: false; message: string };
+export type TagResult = TagOutcome;
 
 /** State of the notes editor (`useActionState`). */
 export type NoteState =
@@ -105,7 +105,7 @@ export type IssuedLinkState =
 /** State of the admin's "Invite someone" form. `url` contains the invite's secret token. */
 export type CreateInviteState =
   | { status: 'idle' }
-  | { status: 'created'; url: string; expiresAt: string; note: string; role: 'admin' | 'member' }
+  | { status: 'created'; url: string; expiresAt: string; note: string; role: UserRole }
   | { status: 'error'; message: string; values: { note: string; role: string } };
 
 // ---------------------------------------------------------------------------

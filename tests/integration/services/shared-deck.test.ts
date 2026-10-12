@@ -27,6 +27,7 @@ import {
   committed,
   createServiceHarness,
   defined,
+  trackDeck,
   type ServiceHarness,
 } from '@tests/support/services';
 import {
@@ -62,11 +63,10 @@ async function otherDeck(
   publicId: string,
   cards: string[],
 ): Promise<{ deckId: string; commitId: string }> {
-  harness.api.setDeck(blueFarmSpec({ publicId, name: 'Other deck', mainboard: cards, considering: [] }));
-  const tracked = await services.trackDeck(`https://moxfield.com/decks/${publicId}`);
-  if (!tracked.ok) throw new Error(tracked.reason);
-  const version = committed(await commitReviewed({ ...harness, services }, tracked.deckId, 'Other v1'));
-  return { deckId: tracked.deckId, commitId: version.commitId };
+  const spec = blueFarmSpec({ publicId, name: 'Other deck', mainboard: cards, considering: [] });
+  const deckId = await trackDeck(harness, spec, services);
+  const version = committed(await commitReviewed(harness, deckId, 'Other v1', undefined, services));
+  return { deckId, commitId: version.commitId };
 }
 
 function expectNoUncommittedState(value: unknown): void {
@@ -220,7 +220,7 @@ describe('the shared deck', () => {
       1,
     ]);
     expect(await viewer.listVersions({ tag: 'nope' })).toEqual([]);
-    expect(await viewer.listTags()).toEqual([{ name: 'tournament', count: 1 }]);
+    expect(await viewer.listTags()).toEqual([{ name: 'tournament', count: 1, lastSequence: 1 }]);
   });
 
   it('shows versions as the owner sees them, without notes unless the link includes them', async () => {
@@ -399,10 +399,11 @@ describe('the shared deck', () => {
     const harness = await createServiceHarness();
     const history = await sharedHistory(harness);
     const { viewer } = await share(harness, history);
-    const primer = '===panel: Mulligans\nKeep fast mana.\n===endpanel';
-    expect(viewer.primerToMarkdown('moxfield', primer)).toBe(
-      history.services.primerToMarkdown('moxfield', primer),
-    );
+    const owner = defined(await history.services.getVersion(history.deckId, 1));
+    const shared = defined(await viewer.getVersion(1));
+    expect(shared.primerMarkdown).toBe(owner.primerMarkdown);
+    expect(shared.primerMarkdown).toContain('Mulligans');
+    expect(shared.primerMarkdown).not.toContain('===panel');
   });
 
   it('is read-only by type and at runtime: viewing changes no deck data', async () => {

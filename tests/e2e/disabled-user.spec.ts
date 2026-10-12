@@ -13,8 +13,7 @@ import {
   uniqueName,
 } from './support/accounts';
 import { runBookmarklet } from './support/bookmarklet';
-import { APP_URL } from './support/constants';
-import { createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
+import { CAPTURED_DECK_URL, createBlueFarmCopy, expectNoHorizontalOverflow } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -25,7 +24,7 @@ test('a disabled person is signed out and cannot sign in until enabled again', a
   consoleErrors,
 }, testInfo) => {
   // The browser reports the refused capture's status in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 403/);
+  consoleErrors.allowHttpStatus(403);
   const { user: member, bookmarklets } = await signIn(context, {
     displayName: uniqueName('Benched'),
     bookmarkletLabel: 'Laptop',
@@ -84,7 +83,7 @@ test('a disabled person is signed out and cannot sign in until enabled again', a
     await runBookmarklet(page, bookmarklets['same-tab']);
     // Its sessions ended when it was disabled: the bookmarklet asks before signing in again.
     await confirmBookmarkletSignIn(page, member.displayName, 'Laptop');
-    await expect(page).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(page).toHaveURL(CAPTURED_DECK_URL);
     await expect(page.getByRole('heading', { level: 1, name: 'Benched Farm' })).toBeVisible();
 
     // The device link made before disabling stays withdrawn.

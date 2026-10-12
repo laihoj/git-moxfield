@@ -11,6 +11,8 @@ import { bundledMigrations, checkMigrationState } from '@/server/db/migration-st
 
 import { runMigrateCommand } from '../../scripts/migrate';
 
+import { runCommand } from '@tests/support/cli';
+
 import { remoteTarget, wipeRemoteDatabase } from './support';
 
 beforeAll(async () => {
@@ -19,14 +21,13 @@ beforeAll(async () => {
 
 async function migrate(platform: Record<string, string>) {
   const { url, authToken } = remoteTarget();
-  const out: string[] = [];
-  const err: string[] = [];
-  const code = await runMigrateCommand({
-    config: parseConfig({ TURSO_DATABASE_URL: url, TURSO_AUTH_TOKEN: authToken }),
-    env: platform,
-    io: { out: (line) => out.push(line), err: (line) => err.push(line) },
-  });
-  return { code, out, err };
+  return runCommand((io) =>
+    runMigrateCommand({
+      config: parseConfig({ TURSO_DATABASE_URL: url, TURSO_AUTH_TOKEN: authToken }),
+      env: platform,
+      io,
+    }),
+  );
 }
 
 describe('pnpm db:migrate on a remote database', () => {

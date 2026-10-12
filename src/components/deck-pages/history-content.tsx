@@ -9,9 +9,15 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Link } from '@/components/ui/navigation';
 import { pluralize } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { searchParamText } from '@/lib/search-params';
 import type { TagCountDTO, VersionListItemDTO } from '@/server/services/types';
 
 import { NoVersionsYet } from './no-versions-yet';
+
+/** The `?tag=` to filter by, `undefined` for none; bounded only, the service validates the tag. */
+export function historyTagParam(value: string | string[] | undefined): string | undefined {
+  return searchParamText(value, 200);
+}
 
 export interface HistoryContentProps {
   scope: DeckScope;

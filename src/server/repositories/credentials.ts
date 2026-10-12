@@ -11,7 +11,7 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 
 import { credentials, users } from '@/server/db/schema';
 
-import { isUniqueViolation, referencing, write, type RepositoryContext } from './context';
+import { insertWithUniqueHash, updateRows, type RepositoryContext } from './context';
 import { RepositoryError } from './errors';
 import type { UserRecord } from './users';
 
@@ -82,42 +82,28 @@ export const credentialRecordColumns = {
 };
 
 export function createCredentialRepository(ctx: RepositoryContext): CredentialRepository {
-  const duplicate = (cause?: unknown): RepositoryError =>
-    new RepositoryError(
-      'conflict',
-      'A credential with this secret already exists',
-      cause === undefined ? undefined : { cause },
-    );
-
   return {
     async createKey(input) {
       const label = input.label.trim();
       if (label === '') throw new RepositoryError('invalid-input', 'A key needs a label');
-      if (input.secretHash === '') throw new RepositoryError('invalid-input', 'A key needs a secret hash');
-      const taken = await ctx.db
-        .select({ id: credentials.id })
-        .from(credentials)
-        .where(eq(credentials.secretHash, input.secretHash))
-        .get();
-      if (taken) throw duplicate();
-      const values = {
-        id: ctx.newId(),
-        userId: input.userId,
-        kind: 'bookmarklet-key' as const,
-        secretHash: input.secretHash,
-        label,
-        createdByCredentialId: input.createdByCredentialId ?? null,
-        createdAt: ctx.now(),
-      };
-      try {
-        return await referencing(`Key of user ${input.userId}`, () =>
-          write(ctx, (db) => db.insert(credentials).values(values).returning(credentialRecordColumns).get()),
-        );
-      } catch (error) {
-        // The same hash stored since the check above.
-        if (isUniqueViolation(error)) throw duplicate(error);
-        throw error;
-      }
+      return insertWithUniqueHash(ctx, {
+        hashColumn: credentials.secretHash,
+        hash: input.secretHash,
+        emptyHashMessage: 'A key needs a secret hash',
+        duplicateMessage: 'A credential with this secret already exists',
+        references: `Key of user ${input.userId}`,
+        values: () => ({
+          id: ctx.newId(),
+          userId: input.userId,
+          kind: 'bookmarklet-key' as const,
+          secretHash: input.secretHash,
+          label,
+          createdByCredentialId: input.createdByCredentialId ?? null,
+          createdAt: ctx.now(),
+        }),
+        insert: (db, values) =>
+          db.insert(credentials).values(values).returning(credentialRecordColumns).get(),
+      });
     },
 
     async findActiveBySecretHash(secretHash) {
@@ -151,33 +137,26 @@ export function createCredentialRepository(ctx: RepositoryContext): CredentialRe
     },
 
     async revoke(userId, credentialId, at) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(credentials)
-          .set({ revokedAt: at })
-          .where(
-            and(
-              eq(credentials.id, credentialId),
-              eq(credentials.userId, userId),
-              isNull(credentials.revokedAt),
-            ),
-          ),
+      const changed = await updateRows(
+        ctx,
+        credentials,
+        { revokedAt: at },
+        and(eq(credentials.id, credentialId), eq(credentials.userId, userId), isNull(credentials.revokedAt)),
       );
-      return result.rowsAffected > 0;
+      return changed > 0;
     },
 
-    async revokeAllForUser(userId, at) {
-      const result = await write(ctx, (db) =>
-        db
-          .update(credentials)
-          .set({ revokedAt: at })
-          .where(and(eq(credentials.userId, userId), isNull(credentials.revokedAt))),
+    revokeAllForUser(userId, at) {
+      return updateRows(
+        ctx,
+        credentials,
+        { revokedAt: at },
+        and(eq(credentials.userId, userId), isNull(credentials.revokedAt)),
       );
-      return result.rowsAffected;
     },
 
     async touchLastUsed(id, at) {
-      await write(ctx, (db) => db.update(credentials).set({ lastUsedAt: at }).where(eq(credentials.id, id)));
+      await updateRows(ctx, credentials, { lastUsedAt: at }, eq(credentials.id, id));
     },
   };
 }

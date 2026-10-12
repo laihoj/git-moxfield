@@ -6,23 +6,16 @@ import { ImageResponse } from 'next/og';
 import type { NextRequest } from 'next/server';
 
 import { AppIcon } from '@/components/app/app-icon';
+import { PNG_ICONS, type PngIconName } from '@/lib/brand';
 
-const ICONS = {
-  '192': { size: 192, shape: 'rounded' },
-  '512': { size: 512, shape: 'rounded' },
-  'maskable-512': { size: 512, shape: 'full-bleed' },
-} as const;
-
-type IconName = keyof typeof ICONS;
-
-function isIconName(value: string): value is IconName {
-  return Object.hasOwn(ICONS, value);
+function isIconName(value: string): value is PngIconName {
+  return Object.hasOwn(PNG_ICONS, value);
 }
 
 export const dynamicParams = false;
 
-export function generateStaticParams(): { size: IconName }[] {
-  return (Object.keys(ICONS) as IconName[]).map((size) => ({ size }));
+export function generateStaticParams(): { size: PngIconName }[] {
+  return (Object.keys(PNG_ICONS) as PngIconName[]).map((size) => ({ size }));
 }
 
 export async function GET(
@@ -31,7 +24,7 @@ export async function GET(
 ): Promise<Response> {
   const { size: name } = await params;
   if (!isIconName(name)) return new Response('Not found', { status: 404 });
-  const { size, shape } = ICONS[name];
+  const { size, shape } = PNG_ICONS[name];
   return new ImageResponse(<AppIcon size={size} shape={shape} />, {
     width: size,
     height: size,

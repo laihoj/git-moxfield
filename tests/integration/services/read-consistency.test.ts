@@ -16,10 +16,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import {
-  createServices,
   KeyedMutex,
   type CommitOutcome,
   type DeckServices,
@@ -28,9 +26,10 @@ import {
 import { createDeckServices } from '@/server/services/deck-services';
 import { createSharedDeckServices } from '@/server/services/shared-deck-services';
 import { interleavedRepositories } from '@tests/support/interleaving';
-import { buildCaptureEnvelope, type MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
+import type { MoxDeckSpec } from '@tests/support/moxfield-deck-builder';
 import {
   blueFarmSpec,
+  captureNext,
   commitReviewed,
   committed,
   createServiceHarness,
@@ -58,17 +57,6 @@ interface Scenario {
   other: DeckServices;
 }
 
-async function capture(harness: ServiceHarness, instance: DeckServices, spec: MoxDeckSpec): Promise<string> {
-  harness.clock.advance(1);
-  const outcome = await instance.ingestCapture({
-    data: buildCaptureEnvelope(spec, harness.clock.iso()),
-    method: 'browser-capture',
-    track: true,
-  });
-  if (outcome.status !== 'ingested') throw new Error(`Capture not ingested: ${outcome.status}`);
-  return outcome.deckId;
-}
-
 /**
  * A deck with version 1 and an uncommitted working state that only one observation
  * references. With `serverFetch`, Moxfield serves the reviewed state (fetch on commit).
@@ -77,22 +65,19 @@ async function scenario(serverFetch: boolean): Promise<Scenario> {
   const harness = await createServiceHarness({
     env: { MOXFIELD_SERVER_FETCH: serverFetch ? 'auto' : 'off' },
   });
-  const { services, api, db, sources, config, clock, logger } = harness;
-  const deckId = await capture(harness, services, STATES.committed);
+  const { services, api } = harness;
+  const deckId = await captureNext(harness, services, STATES.committed);
   const v1 = committed(await commitReviewed(harness, deckId, 'Initial version'));
-  await capture(harness, services, STATES.reviewed);
+  await captureNext(harness, services, STATES.reviewed);
   api.setDeck(STATES.reviewed);
   const reviewed = defined(defined(await services.getOverview(deckId)).working);
-  const other = createServices({
-    db,
-    sources,
-    config,
-    workspaceId: LOCAL_WORKSPACE_ID,
-    now: clock.now,
-    logger,
-    locks: new KeyedMutex(),
-  });
-  return { harness, deckId, headCommitId: v1.commitId, reviewedObservationId: reviewed.id, other };
+  return {
+    harness,
+    deckId,
+    headCommitId: v1.commitId,
+    reviewedObservationId: reviewed.id,
+    other: harness.otherInstance(),
+  };
 }
 
 interface Failure {
@@ -141,8 +126,8 @@ async function everyPoint(
   const interfere =
     options.interfere ??
     (async ({ harness, other }: Scenario) => {
-      await capture(harness, other, STATES.later);
-      await capture(harness, other, STATES.latest);
+      await captureNext(harness, other, STATES.later);
+      await captureNext(harness, other, STATES.latest);
     });
   for (let at = 1; ; at++) {
     const scene = await scenario(options.serverFetch ?? false);

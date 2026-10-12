@@ -13,7 +13,7 @@
  * - {@link SharedDeckServices}: the viewer scope, bound to the one deck a share link
  *   grants (`sharedDeckServices(token)`); read-only by type.
  */
-import type { IngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
+import type { CapturedIngestMethod, ServerFetchStatus } from '@/integrations/deck-source';
 
 import type {
   CaptureOutcome,
@@ -50,7 +50,7 @@ export type TrackDeckOutcome =
     }
   | { ok: false; reason: string };
 
-export type TagOutcome = { ok: true; tags: string[] } | { ok: false; reason: string };
+export type TagOutcome = { ok: true; tags: string[] } | { ok: false; message: string };
 
 export type RelinkDeckOutcome =
   | {
@@ -96,6 +96,24 @@ export interface SetupInfoDTO {
  */
 export type VersionRef = string;
 
+/** A deck handed over by the user's browser or pasted (see {@link DeckServices.ingestCapture}). */
+export interface IngestCaptureInput {
+  data: unknown;
+  method: CapturedIngestMethod;
+  track: boolean;
+  relinkDeckId?: string;
+}
+
+/** A version to commit (see {@link DeckServices.commit}). */
+export interface CommitInput {
+  message: string;
+  /** The observation the user reviewed. */
+  expectedObservationId: string;
+  /** HEAD the user saw (null when committing the first version). */
+  expectedHeadCommitId: string | null;
+  tags?: string[];
+}
+
 export interface DeckServices {
   /** The workspace's decks. */
   listDecks(): Promise<DeckSummaryDTO[]>;
@@ -139,24 +157,9 @@ export interface DeckServices {
    *   another deck of the workspace tracks the captured Moxfield deck, and (`not-found`)
    *   when `relinkDeckId` is not a deck of the workspace.
    */
-  ingestCapture(input: {
-    data: unknown;
-    method: Exclude<IngestMethod, 'server'>;
-    track: boolean;
-    relinkDeckId?: string;
-  }): Promise<CaptureOutcome>;
+  ingestCapture(input: IngestCaptureInput): Promise<CaptureOutcome>;
 
-  commit(
-    deckId: string,
-    input: {
-      message: string;
-      /** The observation the user reviewed. */
-      expectedObservationId: string;
-      /** HEAD the user saw (null when committing the first version). */
-      expectedHeadCommitId: string | null;
-      tags?: string[];
-    },
-  ): Promise<CommitOutcome>;
+  commit(deckId: string, input: CommitInput): Promise<CommitOutcome>;
 
   listVersions(deckId: string, options?: { tag?: string }): Promise<VersionListItemDTO[]>;
   getVersion(deckId: string, sequence: number): Promise<VersionDetailDTO | null>;
@@ -178,13 +181,19 @@ export interface DeckServices {
   /** Sets (or clears, with empty text) the free-text note of a version. */
   setNote(deckId: string, sequence: number, text: string): Promise<CommitNoteDTO | null>;
 
-  /** Converts a deck's primer markup to portable markdown via its DeckSource. */
-  primerToMarkdown(source: string, primer: string): string;
   /**
    * Configuration facts for the setup page. Holds no secrets. (Pages without a signed-in
    * user use `getSetupInfo()` from `@/server/access`.)
    */
   getSetupInfo(): SetupInfoDTO;
+}
+
+/** A share link to create (see {@link ShareLinkServices.createShareLink}). */
+export interface ShareLinkInput {
+  /** The owner's name for the link. */
+  label: string;
+  /** Whether viewers see the owner's version notes. */
+  includeNotes: boolean;
 }
 
 /**
@@ -203,11 +212,7 @@ export interface ShareLinkServices {
    * that is not the workspace's; `forbidden` when the asking session has ended meanwhile.
    * @throws {TypeError} when `appUrl` is not an absolute http(s) URL (nothing is stored).
    */
-  createShareLink(
-    deckId: string,
-    input: { label: string; includeNotes: boolean },
-    appUrl: string,
-  ): Promise<CreatedShareLinkDTO>;
+  createShareLink(deckId: string, input: ShareLinkInput, appUrl: string): Promise<CreatedShareLinkDTO>;
   /** The deck's links that are not revoked, newest first; `[]` for a deck that is not the workspace's. */
   listShareLinks(deckId: string): Promise<ShareLinkDTO[]>;
   /**
@@ -260,8 +265,6 @@ export interface SharedDeckServices {
   restoreExport(sequence: number): Promise<SharedRestoreDTO | null>;
   /** Every tag used in the deck's versions, with counts. */
   listTags(): Promise<TagCountDTO[]>;
-  /** Converts a deck's primer markup to portable markdown via its DeckSource (pure). */
-  primerToMarkdown(source: string, primer: string): string;
 }
 
 /** What `sharedDeckServices(token)` grants: the viewer services and what the link is. */

@@ -12,6 +12,7 @@
 import 'server-only';
 
 import { commanderNames } from '@/core/canonical';
+import { isSequence } from '@/core/sequence';
 import { DEFAULT_CARD_SEARCH_LIMIT, type CommitRecord, type DeckRecord } from '@/server/repositories';
 import type { DeckSourceRegistry } from '@/server/sources';
 
@@ -99,7 +100,7 @@ class DefaultSharedDeckServices implements SharedDeckServices {
       const deck = await this.deck();
       if (!deck || !isSequence(sequence)) return null;
       const [detail, summary] = await Promise.all([
-        this.history.versionDetail(deck.id, sequence),
+        this.history.versionDetail(deck, sequence),
         this.summarizeAtHead(deck),
       ]);
       if (!detail) return null;
@@ -169,10 +170,6 @@ class DefaultSharedDeckServices implements SharedDeckServices {
     return (await this.deck()) ? this.history.listTags(this.deckId) : [];
   }
 
-  primerToMarkdown(source: string, primer: string): string {
-    return this.sources.get(source)?.primerToMarkdown(primer) ?? primer;
-  }
-
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -234,9 +231,4 @@ class DefaultSharedDeckServices implements SharedDeckServices {
 function committedRef(ref: VersionRef): CommittedVersionRef | null {
   const parsed = parseVersionRef(ref);
   return parsed === null || parsed.kind === 'working' ? null : parsed;
-}
-
-/** Whether `value` can be a version's sequence (a positive safe integer). */
-function isSequence(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 1;
 }

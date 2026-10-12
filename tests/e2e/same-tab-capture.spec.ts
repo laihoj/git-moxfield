@@ -20,7 +20,12 @@ import { CAPTURE_FORM_PATH } from '@/integrations/moxfield/capture-protocol';
 import { confirmBookmarkletSignIn, expectSignedInAs, signIn, signedInDevices } from './support/accounts';
 import { bookmarkletKey, runBookmarklet } from './support/bookmarklet';
 import { APP_URL, MOCK_MOXFIELD_PORT, MOCK_MOXFIELD_URL } from './support/constants';
-import { createBlueFarmCopy, deckIdFromUrl, expectNoHorizontalOverflow } from './support/decks';
+import {
+  CAPTURED_DECK_URL,
+  createBlueFarmCopy,
+  deckIdFromUrl,
+  expectNoHorizontalOverflow,
+} from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -68,7 +73,7 @@ test('the same-tab bookmarklet signs a fresh browser in and sends the deck to it
     await expect(phone.getByRole('main').getByRole('alert')).toHaveCount(0);
     await expectNoHorizontalOverflow(phone);
     await confirmBookmarkletSignIn(phone, owner.displayName, 'Phone');
-    await expect(phone).toHaveURL(new RegExp(`^${APP_URL}/decks/[^/?#]+\\?captured=1$`));
+    await expect(phone).toHaveURL(CAPTURED_DECK_URL);
     deckId = deckIdFromUrl(phone.url());
   });
 
@@ -122,7 +127,7 @@ test('the same-tab bookmarklet signs a fresh browser in and sends the deck to it
 
 test('rejects a same-tab capture with an unknown bookmarklet key', async ({ page, consoleErrors }) => {
   // The browser reports the rejected form post's status in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 403/);
+  consoleErrors.allowHttpStatus(403);
   const publicId = 'ForgedCaptureDeck00001';
   await mockMoxfield.setDeck({ publicId, name: 'Forged Capture Deck', mainboard: ['Sol Ring'] });
   await page.goto(mockMoxfield.deckPageUrl(publicId));

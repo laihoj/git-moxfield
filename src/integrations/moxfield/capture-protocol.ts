@@ -3,7 +3,8 @@
  * Moxfield deck page) and git-moxfield's `/capture` page and capture endpoints.
  *
  * This module is imported by client components: it must stay dependency-free and
- * browser-safe (no Node built-ins, no zod, no imports at all).
+ * browser-safe (no Node built-ins, no zod; the only runtime imports are the leaf modules of
+ * `src/core`, which have no imports of their own).
  *
  * ## Payloads and their transport encoding (ADR 0008)
  *
@@ -106,6 +107,10 @@
  * with 413, one that cannot be decoded or parsed with 400; the same-tab endpoint
  * redirects to the paste form with `error=too-large` or `error=invalid` instead.
  */
+import { isRecord } from '@/core/guards';
+import { tokenPattern } from '@/core/token-format';
+
+import type { CapturedIngestMethod } from '../deck-source';
 
 /** `kind` of a {@link CaptureEnvelope}. */
 export const CAPTURE_ENVELOPE_KIND = 'git-moxfield/capture';
@@ -147,8 +152,22 @@ export const CAPTURE_TIMEOUT_MS = 120_000;
 /** git-moxfield page opened by the bookmarklet (`#n={nonce}` appended). */
 export const CAPTURE_PAGE_PATH = '/capture';
 
+/** Query parameter of the capture page that selects its mode, and the value of manual paste mode. */
+export const CAPTURE_MODE_PARAM = 'mode';
+export const CAPTURE_PASTE_MODE = 'paste';
+
 /** Query string (without `?`) of the capture page's manual paste mode. */
-export const CAPTURE_PASTE_QUERY = 'mode=paste';
+export const CAPTURE_PASTE_QUERY = `${CAPTURE_MODE_PARAM}=${CAPTURE_PASTE_MODE}`;
+
+/** The `?error=` codes `POST {@link CAPTURE_FORM_PATH}` sends the capture page (never the payload). */
+const CAPTURE_FORM_ERRORS = ['invalid', 'too-large', 'failed'] as const;
+
+export type CaptureFormError = (typeof CAPTURE_FORM_ERRORS)[number];
+
+/** The code in a query value, or `null` for anything else (the page shows no notice then). */
+export function parseCaptureFormError(value: unknown): CaptureFormError | null {
+  return CAPTURE_FORM_ERRORS.find((code) => code === value) ?? null;
+}
 
 /** Route receiving same-tab form posts. */
 export const CAPTURE_FORM_PATH = '/api/capture/form';
@@ -159,17 +178,30 @@ export const CAPTURE_FORM_FIELD = 'payload';
 /** Form field holding the user's bookmarklet key in same-tab mode. */
 export const CAPTURE_FORM_TOKEN_FIELD = 'token';
 
-/**
- * A bookmarklet key: `gmk_` + 256 random bits, base64url without padding. Must match the
- * `key` tokens of `src/server/auth/tokens.ts` (checked by a test).
- */
-export const BOOKMARKLET_KEY_PATTERN = /^gmk_[A-Za-z0-9_-]{43}$/;
+/** A bookmarklet key: the `key` token of the account system, `gmk_` + 256 random bits as base64url. */
+export const BOOKMARKLET_KEY_PATTERN = tokenPattern('key');
+
+/** The remedy every refusal caused by an outdated or revoked bookmarklet ends with. */
+export const NEW_BOOKMARKLET_HINT = 'Create a new one on git-moxfield’s Connect Moxfield page.';
 
 /** Endpoint receiving captures from the capture page and the paste form. */
 export const CAPTURE_API_PATH = '/api/capture';
 
 /** How a capture reached git-moxfield. */
-export type CaptureRequestMethod = 'browser-capture' | 'manual-paste';
+export const CAPTURE_REQUEST_METHODS = [
+  'browser-capture',
+  'manual-paste',
+] as const satisfies readonly CapturedIngestMethod[];
+
+export type CaptureRequestMethod = (typeof CAPTURE_REQUEST_METHODS)[number];
+
+/**
+ * Machine-readable reasons for 401s: `unauthenticated` (no key and no session: sign in)
+ * or `invalid-key` (the bookmarklet's key is unknown or revoked: make a new one).
+ */
+export const CAPTURE_FAILURE_CODES = ['unauthenticated', 'invalid-key'] as const;
+
+export type CaptureFailureCode = (typeof CAPTURE_FAILURE_CODES)[number];
 
 /** JSON body of `POST {@link CAPTURE_API_PATH}`. */
 export interface CaptureRequestBody {
@@ -196,11 +228,8 @@ export interface CaptureRequestBody {
 export interface CaptureErrorBody {
   /** User-facing message. */
   error: string;
-  /**
-   * Machine-readable reason for 401s: `unauthenticated` (no key and no session: sign in)
-   * or `invalid-key` (the bookmarklet's key is unknown or revoked: make a new one).
-   */
-  code?: 'unauthenticated' | 'invalid-key';
+  /** Machine-readable reason for 401s, see {@link CAPTURE_FAILURE_CODES}. */
+  code?: CaptureFailureCode;
 }
 
 export type CaptureMessageType = (typeof CAPTURE_MESSAGE_TYPES)[keyof typeof CAPTURE_MESSAGE_TYPES];
@@ -253,10 +282,6 @@ export interface CaptureEnvelope {
   primerError: string | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * Structural check of a `postMessage` payload: a known type, a well-formed nonce, and
  * the type-specific string fields. Origin, source and nonce equality are the caller's job.
@@ -276,7 +301,27 @@ export function isCaptureMessage(value: unknown): value is CaptureMessage {
   }
 }
 
-/** Shallow check that a parsed value is a {@link CaptureEnvelope} of this protocol version. */
+/**
+ * What a captured or pasted JSON object is, for the server and the paste form's preview
+ * alike: a bookmarklet `envelope`, a `wrapper` (`{ deck, primer? }`, as the paste form
+ * builds it), the primer endpoint's JSON, or `other` (taken to be a deck).
+ */
+export function classifyCaptureJson(
+  value: Record<string, unknown>,
+): 'envelope' | 'wrapper' | 'primer' | 'other' {
+  if (value.kind === CAPTURE_ENVELOPE_KIND) return 'envelope';
+  if (Object.hasOwn(value, 'deck') && !Object.hasOwn(value, 'publicId')) return 'wrapper';
+  if (
+    typeof value.content === 'string' &&
+    !Object.hasOwn(value, 'publicId') &&
+    !Object.hasOwn(value, 'boards')
+  ) {
+    return 'primer';
+  }
+  return 'other';
+}
+
+/** Strict shallow check that a parsed value is a {@link CaptureEnvelope} of this protocol version. */
 export function isCaptureEnvelope(value: unknown): value is CaptureEnvelope {
   return (
     isRecord(value) &&

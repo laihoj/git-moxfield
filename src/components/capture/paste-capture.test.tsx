@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { envelopeJson, gzipPayload } from '@tests/support/capture-codec';
+import { sentJsonBody, stubJsonFetch } from '@tests/support/fetch-stub';
 
 import '@/components/test-utils';
 import { decodeCapturePayload } from '@/integrations/moxfield/capture-codec';
@@ -25,13 +26,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   navigation.replace.mockClear();
-  fetchMock = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ status: 'untracked', name: 'Fixture Blue Farm', externalId: 'abc' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }),
-  );
-  vi.stubGlobal('fetch', fetchMock);
+  fetchMock = stubJsonFetch(200, { status: 'untracked', name: 'Fixture Blue Farm', externalId: 'abc' });
   // jsdom's Blob has no stream(), which compressing needs; browsers' (and Node's) has.
   vi.stubGlobal('Blob', NodeBlob);
 });
@@ -49,9 +44,7 @@ interface PostedBody {
 /** The one capture request sent, with its payload decoded as the server decodes it. */
 async function postedCapture(): Promise<{ method: string; text: string; compressed: boolean }> {
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-  if (typeof init?.body !== 'string') throw new Error('No JSON body was sent');
-  const body = JSON.parse(init.body) as PostedBody;
+  const body = sentJsonBody(fetchMock) as PostedBody;
   if (typeof body.payload !== 'string') throw new Error('No payload string was sent');
   return {
     method: body.method,
@@ -145,6 +138,67 @@ describe('PasteCapture', () => {
     expect(within(primerStep).getByRole('alert')).toHaveTextContent(
       "This is not valid JSON. Copy the whole primer data page: select all, then copy. In Firefox, use the page's Copy button (or Save it and choose the file).",
     );
+  });
+});
+
+describe('PasteCapture deck data link', () => {
+  async function typeDeck(text: string): Promise<HTMLElement> {
+    const user = userEvent.setup();
+    renderPasteCapture();
+    await user.type(screen.getByLabelText('Moxfield deck URL'), text);
+    return step(/Open the deck data and copy all of it/);
+  }
+
+  it.each([
+    ['https://moxfield.com/decks/AbCdEf123456', 'AbCdEf123456'],
+    ['moxfield.com/decks/AbCdEf123456/primer?x=1', 'AbCdEf123456'],
+    ['AbCdEf123456', 'AbCdEf123456'],
+  ])('links the data page of the deck in %s', async (typed, id) => {
+    const copyStep = await typeDeck(typed);
+    expect(within(copyStep).getByRole('link')).toHaveAttribute(
+      'href',
+      `https://api2.moxfield.com/v3/decks/all/${id}`,
+    );
+  });
+
+  it.each([
+    'https://moxfield.com/decks/personal',
+    'https://moxfield.com/decks/new',
+    'https://user:secret@moxfield.com/decks/AbCdEf123456',
+    'https://example.com/decks/AbCdEf123456',
+    'javascript:alert(1)',
+  ])('does not recognize %s as a deck, as the server parser does not', async (typed) => {
+    const copyStep = await typeDeck(typed);
+    expect(within(copyStep).queryByRole('link')).not.toBeInTheDocument();
+    // Described, not announced: the message comes and goes while typing.
+    expect(screen.getByLabelText('Moxfield deck URL')).toHaveAccessibleDescription(
+      'That does not look like a Moxfield deck URL.',
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('PasteCapture pasted JSON kinds', () => {
+  async function pasteDeckField(json: string): Promise<HTMLElement> {
+    const user = userEvent.setup();
+    renderPasteCapture();
+    await user.click(screen.getByLabelText('Deck JSON'));
+    await user.paste(json);
+    return step(/Paste it here/);
+  }
+
+  it('takes a { deck, primer } pair as a complete capture, as the server does: no primer step', async () => {
+    const pasteStep = await pasteDeckField(JSON.stringify({ deck: DECK_JSON, primer: PRIMER_JSON }));
+    expect(within(pasteStep).queryByRole('alert')).not.toBeInTheDocument();
+    expect(pasteStep).toHaveTextContent('Fixture Blue Farm');
+    expect(pasteStep).toHaveTextContent('Deck and primer');
+    expect(screen.queryByRole('heading', { name: /Optional: the primer/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /import/i })).toBeEnabled();
+  });
+
+  it('calls primer JSON the primer, also when it carries a board key, as the server does', async () => {
+    const pasteStep = await pasteDeckField(JSON.stringify({ content: '# Primer', mainboard: {} }));
+    expect(within(pasteStep).getByRole('alert')).toHaveTextContent('This is the primer JSON.');
   });
 });
 

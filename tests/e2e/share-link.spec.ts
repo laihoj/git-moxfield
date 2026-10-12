@@ -11,14 +11,24 @@
 import type { Locator, Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
+import { cardWithFacts } from '../support/card-facts';
+
 import { signIn, uniqueName } from './support/accounts';
-import { APP_URL } from './support/constants';
-import { commitVersion, createBlueFarmCopy, expectNoHorizontalOverflow, trackDeck } from './support/decks';
+import { grantClipboard, readClipboard } from './support/clipboard';
+import {
+  commitVersion,
+  createBlueFarmCopy,
+  deckNav,
+  expectNoHorizontalOverflow,
+  statusHeading,
+  trackAndCommitV1,
+  trackDeck,
+} from './support/decks';
 import { expect, test } from './support/fixtures';
+import { expectBottomNavPinned, expectNothingBehindBottomNav } from './support/layout';
 import { mockMoxfield } from './support/mock';
 import {
   createShareLink,
-  deckNav,
   expectNotPartOfSharedDeck,
   expectPrivatePage,
   expectReadOnlyPage,
@@ -31,18 +41,10 @@ const DECK_NAME = 'Shared Farm';
 const UNCOMMITTED_NAME = 'Renamed On Moxfield';
 const UNCOMMITTED_CARD = 'Uncommitted Tech';
 
-function statusHeading(page: Page, label: string): Locator {
-  return page.getByRole('heading', { level: 2, name: label });
-}
-
 /** Asserts the accessible names (`v2: message`) of a list of version links, in order. */
 async function expectVersionLinks(links: Locator, names: readonly string[]): Promise<void> {
   await expect(links).toHaveCount(names.length);
   for (const [index, name] of names.entries()) await expect(links.nth(index)).toHaveAccessibleName(name);
-}
-
-async function clipboard(page: Page): Promise<string> {
-  return page.evaluate(() => navigator.clipboard.readText());
 }
 
 /** The Moxfield-facing requests git-moxfield's server made since the test began. */
@@ -54,19 +56,8 @@ async function serverFetchCount(): Promise<number> {
 async function expectPhoneLayout(page: Page, isMobile: boolean, activeTab: string): Promise<void> {
   await expectNoHorizontalOverflow(page);
   if (!isMobile) return;
-  const nav = deckNav(page);
-  const viewport = page.viewportSize();
-  const rect = await nav.boundingBox();
-  if (viewport === null || rect === null) throw new Error('No viewport or bottom bar');
-  expect(rect.y + rect.height).toBeCloseTo(viewport.height, 0);
-  await expect(nav.getByRole('link', { name: activeTab })).toHaveAttribute('aria-current', 'page');
-  await page.evaluate(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight);
-  });
-  const footer = await page.getByRole('contentinfo').boundingBox();
-  const bar = await nav.boundingBox();
-  if (footer === null || bar === null) throw new Error('No footer or bottom bar');
-  expect(footer.y + footer.height).toBeLessThanOrEqual(bar.y + 0.5);
+  await expectBottomNavPinned(page, activeTab);
+  await expectNothingBehindBottomNav(page);
 }
 
 test('a friend without an account follows a shared deck’s history, read-only', async ({
@@ -76,7 +67,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
 }, testInfo) => {
   const isMobile = testInfo.project.name === 'mobile';
   const { user: owner } = await signIn(context, { displayName: uniqueName('Aino') });
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
+  await grantClipboard(context);
   const deck = await createBlueFarmCopy(testInfo, DECK_NAME);
   const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
   const viewing: SharedDeckFacts = { ownerName: owner.displayName, publicId: deck.publicId };
@@ -90,7 +81,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
       {
         op: 'add',
         zone: 'mainboard',
-        card: { name: 'Final Fortune', typeLine: 'Instant', manaCost: '{R}{R}' },
+        card: cardWithFacts('Final Fortune'),
       },
     ]);
     await page.getByRole('button', { name: 'Refresh' }).click();
@@ -134,7 +125,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
       whileShown: async (panel, created) => {
         await panel.getByRole('button', { name: 'Copy link' }).click();
         await expect(panel.getByRole('button', { name: 'Copied' })).toBeVisible();
-        expect(await clipboard(page)).toBe(created.url);
+        expect(await readClipboard(page)).toBe(created.url);
         await expectNoHorizontalOverflow(page);
       },
     });
@@ -152,7 +143,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
   const fetchesBeforeViewing = await serverFetchCount();
 
   const friendContext = await newContext();
-  await friendContext.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: APP_URL });
+  await grantClipboard(friendContext);
   const friend = await friendContext.newPage();
 
   await test.step('a signed-out friend opens it: the latest version and what changed', async () => {
@@ -246,7 +237,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
     await expect(primer.getByRole('heading', { name: 'Win conditions' })).toBeVisible();
     await primer.getByRole('button', { name: 'Copy primer' }).click();
     await expect(primer.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await clipboard(friend)).toContain('Win conditions');
+    expect(await readClipboard(friend)).toContain('Win conditions');
     await expectReadOnlyPage(friend, shared, viewing);
     await expectPhoneLayout(friend, isMobile, 'History');
 
@@ -336,7 +327,7 @@ test('a friend without an account follows a shared deck’s history, read-only',
     expect(text).not.toContain('Final Fortune');
     await block.getByRole('button', { name: 'Copy Mainboard' }).click();
     await expect(block.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await clipboard(friend)).toBe(text);
+    expect(await readClipboard(friend)).toBe(text);
 
     const [download] = await Promise.all([
       friend.waitForEvent('download'),
@@ -375,10 +366,11 @@ test('version notes are shown only through a link that includes them', async ({
   test.skip(testInfo.project.name !== 'desktop', 'Notes are about access, not layout.');
   const note = 'Went 3-1 at the store. Cut Dress Down next.';
   const { user: owner } = await signIn(context, { displayName: uniqueName('Aino') });
-  const deck = await createBlueFarmCopy(testInfo, DECK_NAME);
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Tournament list' });
-  await expect(statusHeading(page, 'Up to date with v1')).toBeVisible();
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: DECK_NAME,
+    message: 'Tournament list',
+    confirm: 'status',
+  });
 
   await page.goto(`/decks/${deckId}/versions/1`);
   await page.getByRole('textbox', { name: 'Notes' }).fill(note);

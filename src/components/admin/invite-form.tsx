@@ -9,19 +9,16 @@ import { createInviteAction } from '@/app/admin-actions';
 import { OneTimeLink } from '@/components/account/one-time-link';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
-
-export interface InviteFormProps {
-  maxNoteLength: number;
-}
+import { Field, fieldControlProps, Input } from '@/components/ui/field';
+import type { UserRole } from '@/core/roles';
+import { MAX_INVITE_NOTE_LENGTH } from '@/core/text-limits';
 
 /**
  * "Invite someone": an optional note (a reminder for admins) and the role. The new
  * invite's link is shown above the form, once; the admin sends it to the person.
  */
-export function InviteForm({ maxNoteLength }: InviteFormProps) {
+export function InviteForm() {
   const noteId = useId();
-  const ids = fieldDescriptionIds(noteId);
   const [state, action, pending] = useActionState<CreateInviteState, FormData>(createInviteAction, {
     status: 'idle',
   });
@@ -64,13 +61,12 @@ export function InviteForm({ maxNoteLength }: InviteFormProps) {
                 ? `idle:${state.status === 'created' ? state.url : ''}`
                 : `error:${error.values.note}`
             }
-            id={noteId}
             name="note"
-            maxLength={maxNoteLength}
+            maxLength={MAX_INVITE_NOTE_LENGTH}
             autoComplete="off"
             placeholder="e.g. Mikko from the Tuesday pod"
             defaultValue={error?.values.note ?? ''}
-            aria-describedby={ids.hint}
+            {...fieldControlProps(noteId)}
           />
         </Field>
 
@@ -113,7 +109,7 @@ function RoleOption({
   title,
   children,
 }: {
-  value: 'member' | 'admin';
+  value: UserRole;
   defaultChecked: boolean;
   title: string;
   children: ReactNode;

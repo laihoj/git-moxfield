@@ -4,8 +4,11 @@
  */
 import 'server-only';
 
+import type { Metadata } from 'next';
 import { cache } from 'react';
 
+import { decodeSegment } from '@/app/route-segments';
+import { deckPageTitle, deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
@@ -24,5 +27,13 @@ export const loadOverview = cache(async (deckId: string) => (await deckServices(
 
 /** Every tag used in the deck, with counts. */
 export const loadTags = cache(async (deckId: string) => (await deckServices(deckId)).listTags(deckId));
+
+/** The `generateMetadata` of a section page of the owner's deck: `Cards · Blue Farm`. */
+export function ownerSectionMetadata(section: string) {
+  return async ({ params }: { params: Promise<{ deckId: string }> }): Promise<Metadata> => {
+    const overview = await loadOverview(decodeSegment((await params).deckId));
+    return { title: deckPageTitle(section, overview === null ? null : deckTitle(overview)) };
+  };
+}
 
 export { decodeSegment, parseSequence } from '@/app/route-segments';

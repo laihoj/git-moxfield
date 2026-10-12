@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { Crown } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { INITIAL_VERSION_MESSAGE } from '@/core/diff/present';
 import type { VersionListItemDTO } from '@/server/services/types';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { Link } from '@/components/ui/navigation';
@@ -10,15 +11,7 @@ import { pluralize, versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { DiffStatsInline } from './diff-stats';
-
-/** Whether the version changed the commanders (any strategic change in the commanders zone). */
-export function changedCommanders(version: VersionListItemDTO): boolean {
-  if (version.parentSequence === null) return false;
-  return (
-    version.stats.zones.some((zone) => zone.zone === 'commanders') ||
-    version.stats.moves.some((move) => move.from === 'commanders' || move.to === 'commanders')
-  );
-}
+import { TagChip } from './tag-chip';
 
 /** `v47` in a compact pill; the latest version is highlighted. */
 export function VersionBadge({ sequence, latest = false }: { sequence: number; latest?: boolean }) {
@@ -58,7 +51,6 @@ export function VersionRow({
   compact = false,
   selected = false,
 }: VersionRowProps) {
-  const commandersChanged = changedCommanders(version);
   return (
     <li
       className={clsx(
@@ -90,27 +82,22 @@ export function VersionRow({
           {version.tags.length > 0 && (
             <ul aria-label="Tags" className="flex flex-wrap gap-1">
               {version.tags.map((tag) => (
-                <li
-                  key={tag}
-                  className="rounded-full bg-accent-soft px-2 text-xs leading-5 font-medium text-accent"
-                >
-                  {tag}
-                </li>
+                <TagChip key={tag} tag={tag} size="sm" />
               ))}
             </ul>
           )}
           {version.parentSequence === null ? (
             <MetaList className="text-xs text-muted tabular">
               {/* The default first commit message already says it. */}
-              {version.message.trim().toLowerCase() !== 'initial version' && (
-                <MetaItem>Initial version</MetaItem>
+              {version.message.trim().toLowerCase() !== INITIAL_VERSION_MESSAGE.toLowerCase() && (
+                <MetaItem>{INITIAL_VERSION_MESSAGE}</MetaItem>
               )}
               <MetaItem>{pluralize(version.playedCardCount, 'card')}</MetaItem>
             </MetaList>
           ) : (
             <DiffStatsInline stats={version.stats} primer={version.primer} />
           )}
-          {commandersChanged && (
+          {version.commandersChanged && (
             <span className="inline-flex items-center gap-1 text-xs font-medium text-zone-commanders">
               <Crown aria-hidden="true" className="size-3" />
               Commanders

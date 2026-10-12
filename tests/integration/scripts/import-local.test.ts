@@ -6,12 +6,12 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { parseConfig, type AppConfig } from '@/server/config';
 import { openDatabase, type Db } from '@/server/db/client';
@@ -19,8 +19,9 @@ import { exportDeckToGit } from '@/server/git-export';
 import { createRepositories, type Repositories } from '@/server/repositories';
 import { createServices, type DeckServices } from '@/server/services';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
+import { runCommand, type CommandRun } from '@tests/support/cli';
 import { commitTestSnapshot, countRows, createTestDeck, openTestDatabase } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 import {
   blueFarmSpec,
   commitReviewed,
@@ -30,6 +31,7 @@ import {
   moveCard,
   publishAndRefresh,
   trackDeck,
+  twoVersionHistory,
   type ServiceHarness,
 } from '@tests/support/services';
 
@@ -41,18 +43,6 @@ const MAIN = blueFarmSpec({ publicId: 'ImportBlueFarm00000001', name: 'Blue Farm
 const OTHER = blueFarmSpec({ publicId: 'ImportOtherDeck0000002', name: 'Other deck' });
 /** OTHER, deleted on Moxfield and made again. */
 const OTHER_AGAIN = blueFarmSpec({ publicId: 'ImportOtherDeckNew0003', name: 'Other deck' });
-
-const directories: string[] = [];
-
-afterEach(() => {
-  for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function scratchDir(prefix: string): string {
-  const dir = tempDir(prefix);
-  directories.push(dir);
-  return dir;
-}
 
 interface Installation {
   /** The database file. */
@@ -71,14 +61,7 @@ async function localInstallation(): Promise<Installation> {
   const harness = await createServiceHarness({ databaseUrl: pathToFileURL(path).href });
   const { services, api, clock } = harness;
 
-  const main = await trackDeck(harness, MAIN);
-  committed(await commitReviewed(harness, main, 'Initial version', ['stable']));
-  await publishAndRefresh(
-    harness,
-    main,
-    moveCard({ ...MAIN, version: 2 }, 'Dress Down', 'mainboard', 'considering'),
-  );
-  committed(await commitReviewed(harness, main, 'Cut Dress Down'));
+  const { deckId: main } = await twoVersionHistory(harness, { spec: MAIN, v1Tags: ['stable'] });
   await services.setNote(main, 1, 'Top 4 at locals');
   await publishAndRefresh(
     harness,
@@ -130,30 +113,26 @@ async function targetDatabase(harness: ServiceHarness, name = 'Jaakko', db?: Db)
   };
 }
 
-interface Run {
-  code: number;
-  out: string[];
-  err: string[];
-}
-
 /**
  * Runs the command against `target` (named "in-memory database"), or else the database
  * `config` names. Without either, the configured database is a file in a scratch
  * directory: never a developer's database.
  */
-async function runImport(argv: string[], options: { target?: Db; config?: AppConfig } = {}): Promise<Run> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const code = await runImportCommand(argv, {
-    config:
-      options.config ??
-      parseConfig({ DATABASE_PATH: join(scratchDir('git-moxfield-import-config-'), 'never-opened.db') }),
-    io: { out: (line) => out.push(line), err: (line) => err.push(line) },
-    ...(options.target === undefined
-      ? {}
-      : { target: { db: options.target, description: 'in-memory database' } }),
-  });
-  return { code, out, err };
+async function runImport(
+  argv: string[],
+  options: { target?: Db; config?: AppConfig } = {},
+): Promise<CommandRun> {
+  return runCommand((io) =>
+    runImportCommand(argv, {
+      config:
+        options.config ??
+        parseConfig({ DATABASE_PATH: join(scratchDir('git-moxfield-import-config-'), 'never-opened.db') }),
+      io,
+      ...(options.target === undefined
+        ? {}
+        : { target: { db: options.target, description: 'in-memory database' } }),
+    }),
+  );
 }
 
 /** What a deck shows, minus what depends on the installation (fetch status, clocks). */

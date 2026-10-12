@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatClockTime, formatRelativeTime } from './format';
+import { domIdSlug, formatClockTime, formatDuration, formatRelativeTime } from './format';
 
 const NOW = Date.parse('2026-10-09T12:00:00.000Z');
 const DAY = 86_400_000;
@@ -64,5 +64,28 @@ describe('formatClockTime', () => {
 
   it('is empty for an invalid date', () => {
     expect(formatClockTime('not a date', NOW)).toBe('');
+  });
+});
+
+describe('formatDuration', () => {
+  it.each([
+    [7 * 24 * 60 * 60_000, '7 days'],
+    [2 * 24 * 60 * 60_000, '2 days'],
+    [24 * 60 * 60_000, '24 hours'],
+    [60 * 60_000, '1 hour'],
+    [15 * 60_000, '15 minutes'],
+    [5 * 60_000, '5 minutes'],
+    [90 * 60_000, '90 minutes'],
+    [30_000, '1 minute'],
+  ])('writes %i ms as %s', (ms, text) => {
+    expect(formatDuration(ms)).toBe(text);
+  });
+});
+
+describe('domIdSlug', () => {
+  it('keeps letters, digits and dashes, and turns the rest into dashes', () => {
+    expect(domIdSlug('mainboard')).toBe('mainboard');
+    expect(domIdSlug('Other Zone')).toBe('Other-Zone');
+    expect(domIdSlug('a.b_c:d')).toBe('a-b-c-d');
   });
 });

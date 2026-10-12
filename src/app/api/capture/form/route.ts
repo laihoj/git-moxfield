@@ -50,14 +50,16 @@ import { servicesFor } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { handoffCookie } from '@/server/auth/cookie-spec';
 import { appendCookie, requestCookieSecurity } from '@/server/auth/cookies';
-import { HANDOFF_PATH } from '@/server/auth/paths';
+import { handoffPath } from '@/server/auth/paths';
 import type { StartedHandoff } from '@/server/auth/types';
 import { getConfig } from '@/server/config';
+import { plainText, seeOther } from '@/server/http/responses';
 import { createLogger } from '@/server/logger';
 
+import { readFormBody } from '../../request-body';
 import { classifyRejectedCapture } from '../errors';
 import { describeRejectedKey, isAcceptableCaptureOrigin } from '../form-guard';
-import { CAPTURE_FORM_BODY_LIMIT, declaredTooLarge, readBodyLimited } from '../read-body';
+import { CAPTURE_FORM_BODY_LIMIT } from '../read-body';
 
 import { captureRejectedResponse } from './forbidden-page';
 
@@ -66,26 +68,12 @@ export const dynamic = 'force-dynamic';
 
 const log = createLogger('api/capture/form');
 
-const FORM_CONTENT_TYPES = /^(application\/x-www-form-urlencoded|multipart\/form-data)(\s*;|$)/i;
-
-/** Error codes understood by the `/capture` page (`?error=`); never the payload itself. */
-type FormError = 'invalid' | 'too-large' | 'failed';
-
-/** 303 to a same-origin path; a relative `Location` keeps working behind reverse proxies. */
-function seeOther(location: string): Response {
-  return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
-}
-
-function pastePageWithError(error: FormError): string {
-  return `${routes.capturePaste()}&error=${error}`;
-}
-
 /**
  * Redirects through the hand-off route to `target`, carrying the pending hand-off in its
  * cookie: once the key is accepted, every answer goes through the hand-off.
  */
 function handOff(request: NextRequest, started: StartedHandoff, target: string): Response {
-  const response = seeOther(`${HANDOFF_PATH}?next=${encodeURIComponent(target)}`);
+  const response = seeOther(handoffPath(target));
   return appendCookie(response, handoffCookie(started.handoff, new Date(), requestCookieSecurity(request)));
 }
 
@@ -102,25 +90,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     return captureRejectedResponse('origin');
   }
 
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!FORM_CONTENT_TYPES.test(contentType)) {
-    return new Response('Unsupported content type.\n', {
-      status: 415,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
-    });
+  // The page behind the bookmarklet is the answer to every failure but a wrong media type.
+  const body = await readFormBody(request, CAPTURE_FORM_BODY_LIMIT);
+  if (!body.ok) {
+    if (body.reason === 'unsupported-type') return plainText(415, 'Unsupported content type.');
+    return seeOther(routes.capturePaste({ error: body.reason === 'too-large' ? 'too-large' : 'invalid' }));
   }
-  if (declaredTooLarge(request.headers, CAPTURE_FORM_BODY_LIMIT))
-    return seeOther(pastePageWithError('too-large'));
-  const body = await readBodyLimited(request, CAPTURE_FORM_BODY_LIMIT);
-  if (!body.ok) return seeOther(pastePageWithError(body.reason === 'too-large' ? 'too-large' : 'invalid'));
-
-  let form: FormData;
-  try {
-    // Parse the already size-checked bytes with the platform's form parser.
-    form = await new Response(body.bytes, { headers: { 'content-type': contentType } }).formData();
-  } catch {
-    return seeOther(pastePageWithError('invalid'));
-  }
+  const { form } = body;
 
   const key = form.get(CAPTURE_FORM_TOKEN_FIELD);
   const auth = await getAuthService();
@@ -137,7 +113,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const payload = form.get(CAPTURE_FORM_FIELD);
   if (typeof payload !== 'string' || payload.trim() === '') {
-    return handOff(request, started, pastePageWithError('invalid'));
+    return handOff(request, started, routes.capturePaste({ error: 'invalid' }));
   }
 
   try {
@@ -150,11 +126,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (outcome.status === 'ingested') {
       return handOff(request, started, routes.deck(outcome.deckId, { captured: true }));
     }
-    return handOff(request, started, pastePageWithError('failed'));
+    return handOff(request, started, routes.capturePaste({ error: 'failed' }));
   } catch (error) {
     const rejected = classifyRejectedCapture(error);
-    if (rejected !== null) return handOff(request, started, pastePageWithError(rejected.formError));
+    if (rejected !== null)
+      return handOff(request, started, routes.capturePaste({ error: rejected.formError }));
     log.error('Same-tab capture failed', { error, userId: started.user.id });
-    return handOff(request, started, pastePageWithError('failed'));
+    return handOff(request, started, routes.capturePaste({ error: 'failed' }));
   }
 }

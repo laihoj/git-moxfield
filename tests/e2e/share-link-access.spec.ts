@@ -9,7 +9,7 @@
 import type { Page } from '@playwright/test';
 
 import { expectSignedInAs, signIn, uniqueName } from './support/accounts';
-import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
+import { commitVersion, createBlueFarmCopy, trackAndCommitV1, trackDeck } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 import {
@@ -52,14 +52,15 @@ test('an edited share URL reaches nothing but the shared deck', async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Access checks, not layout.');
   // The browser reports each 404 page in the console.
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+  consoleErrors.allowHttpStatus(404);
   const { user: owner } = await signIn(context, { displayName: uniqueName('Aino') });
 
   // The shared deck, and another deck of the same owner with a card only it has.
-  const sharedDeck = await createBlueFarmCopy(testInfo, 'Shared Farm');
-  const sharedDeckId = await trackDeck(page, mockMoxfield.deckPageUrl(sharedDeck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Shared list' });
-  await expect(page.getByText('Committed v1')).toBeVisible();
+  const { deck: sharedDeck, deckId: sharedDeckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Shared Farm',
+    message: 'Shared list',
+    confirm: 'toast',
+  });
 
   const otherDeck = await createBlueFarmCopy(testInfo, 'Private Farm');
   await mockMoxfield.edit(otherDeck.publicId, [
@@ -165,21 +166,23 @@ test('a signed-in member opening someone else’s link only views it, and keeps 
   consoleErrors,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Access checks, not layout.');
-  consoleErrors.allow(/Failed to load resource: the server responded with a status of 404/);
+  consoleErrors.allowHttpStatus(404);
   const { user: owner } = await signIn(context, { displayName: uniqueName('Aino') });
-  const ownerDeck = await createBlueFarmCopy(testInfo, 'Aino’s Farm');
-  const ownerDeckId = await trackDeck(page, mockMoxfield.deckPageUrl(ownerDeck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Aino’s list' });
-  await expect(page.getByText('Committed v1')).toBeVisible();
+  const { deck: ownerDeck, deckId: ownerDeckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Aino’s Farm',
+    message: 'Aino’s list',
+    confirm: 'toast',
+  });
   const link = await createShareLink(page, ownerDeckId, { label: 'For Mikko' });
 
   const memberContext = await newContext();
   const { user: member } = await signIn(memberContext, { displayName: uniqueName('Mikko') });
   const memberPage = await memberContext.newPage();
-  const memberDeck = await createBlueFarmCopy(testInfo, 'Mikko’s Farm');
-  const memberDeckId = await trackDeck(memberPage, mockMoxfield.deckPageUrl(memberDeck.publicId));
-  await commitVersion(memberPage, { sequence: 1, message: 'Mikko’s list' });
-  await expect(memberPage.getByText('Committed v1')).toBeVisible();
+  const { deckId: memberDeckId } = await trackAndCommitV1(memberPage, testInfo, {
+    name: 'Mikko’s Farm',
+    message: 'Mikko’s list',
+    confirm: 'toast',
+  });
 
   await test.step('the member sees the shared deck read-only, without their account', async () => {
     for (const path of [

@@ -35,12 +35,16 @@
  */
 import 'server-only';
 
+import { groupInto } from '@/core/collections';
+import { absoluteAppUrl } from '@/core/http-url';
+import { USER_ROLES, type UserRole } from '@/core/roles';
 import { buildBookmarklet } from '@/integrations/moxfield/capture';
 import type { AppConfig } from '@/server/config';
 import { LOCAL_WORKSPACE_ID } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
 import {
   createRepositories,
+  isActiveAdminRecord,
   type CredentialRecord,
   type InviteRecord,
   type LibsqlExecutor,
@@ -51,12 +55,13 @@ import {
   type SessionRecord,
   type UserListItem,
   type UserRecord,
-  type UserRole,
 } from '@/server/repositories';
 import { ServiceError } from '@/server/services/errors';
 
 import { SESSION_MAX_AGE_S } from './cookie-spec';
+import { oneTimeLinkState } from './link-status';
 import { CLAIM_PATH, invitePath, loginLinkPath } from './paths';
+import { requireActiveSession } from './require-session';
 import { generateSetupCode, normalizeSetupCode, SETUP_CODE_PATTERN, setupCodesEqual } from './setup-code';
 import { generateToken, hashToken, parseToken } from './tokens';
 import type {
@@ -75,9 +80,11 @@ import type {
   IssuedLink,
   KeyRefDTO,
   LoginLinkStatusDTO,
+  OneTimeLinkProblem,
   RecoveryLinkDTO,
   RecoveryUseDTO,
   RevokedKeyShareLinksDTO,
+  RevokeKeyOptions,
   SessionDTO,
   SessionUser,
   SignIn,
@@ -103,7 +110,7 @@ export const DEVICE_LINK_LIFETIME_MS = 15 * MINUTE_MS;
 export const RECOVERY_LINK_LIFETIME_MS = DAY_MS;
 export const INVITE_LIFETIME_MS = 7 * DAY_MS;
 
-const USER_ROLES: readonly string[] = ['admin', 'member'] satisfies UserRole[];
+const USER_NOT_FOUND = 'This user does not exist.';
 
 /** Settings key of the setup code of an unclaimed installation. */
 export const SETUP_CODE_SETTING = 'setup-code';
@@ -215,11 +222,7 @@ export interface AuthService {
    * {@link BookmarkletKeyDTO.shareLinkCount}); otherwise they keep working.
    * @returns whether an active key was revoked.
    */
-  revokeKey(
-    user: SessionUser,
-    keyId: string,
-    options?: { includeDerived?: boolean; includeShareLinks?: boolean },
-  ): Promise<boolean>;
+  revokeKey(user: SessionUser, keyId: string, options?: RevokeKeyOptions): Promise<boolean>;
   /**
    * The user's revoked keys through which share links that still work were made (see
    * {@link BookmarkletKeyDTO.shareLinkCount}), most recently revoked first: read access
@@ -369,7 +372,7 @@ interface ActiveSession {
   user: UserRecord;
 }
 
-const INVITE_PROBLEMS: Record<Exclude<InviteLinkStatusDTO['status'], 'valid'>, string> = {
+const INVITE_PROBLEMS: Record<OneTimeLinkProblem, string> = {
   invalid: 'This invite link is not valid. Check that you copied all of it.',
   expired: 'This invite has expired. Ask for a new one.',
   used: 'This invite has already been used.',
@@ -403,9 +406,8 @@ class DefaultAuthService implements AuthService {
     const now = this.now();
     const currentToken = options.currentSessionToken ?? null;
     const current = await this.findSession(this.repos, currentToken, now);
-    if (current !== null && currentToken !== null && current.user.id === holder.user.id) {
-      return this.continueSession(this.repos, current, currentToken, now);
-    }
+    const kept = await this.keepSessionOf(this.repos, holder.user.id, current, currentToken, now);
+    if (kept !== null) return kept;
     const signIn = await this.issueSession(this.repos, holder.user, {
       createdVia: 'bookmarklet',
       credentialId: holder.credential.id,
@@ -437,11 +439,9 @@ class DefaultAuthService implements AuthService {
       const handoff = await this.findHandoff(tx, handoffToken, now);
       if (handoff === null) return null;
       const current = await this.findSession(tx, currentSessionToken, now);
-      if (current !== null && currentSessionToken !== null && current.user.id === handoff.user.id) {
-        // The browser is already signed in as the key's owner: nothing to ask.
-        await tx.sessions.revoke(handoff.user.id, handoff.session.id, now.toISOString());
-        return { kind: 'kept', signIn: await this.continueSession(tx, current, currentSessionToken, now) };
-      }
+      // Already signed in as the key's owner: nothing to ask.
+      const kept = await this.keepSessionOf(tx, handoff.user.id, current, currentSessionToken, now, handoff);
+      if (kept !== null) return { kind: 'kept', signIn: kept };
       return { kind: 'confirm', confirmation: toHandoffConfirmation(handoff, current) };
     });
   }
@@ -467,10 +467,15 @@ class DefaultAuthService implements AuthService {
         const handoff = await this.findHandoff(tx, handoffToken, now);
         if (handoff === null || typeof handoffToken !== 'string') return null;
         const current = await this.findSession(tx, currentSessionToken, now);
-        if (current !== null && currentSessionToken !== null && current.user.id === handoff.user.id) {
-          await tx.sessions.revoke(handoff.user.id, handoff.session.id, at);
-          return { signIn: await this.continueSession(tx, current, currentSessionToken, now) };
-        }
+        const kept = await this.keepSessionOf(
+          tx,
+          handoff.user.id,
+          current,
+          currentSessionToken,
+          now,
+          handoff,
+        );
+        if (kept !== null) return { signIn: kept };
         const expiresAt = new Date(now.getTime() + SESSION_LIFETIME_MS).toISOString();
         if (!(await tx.sessions.promoteHandoff(handoff.session.id, at, expiresAt))) return null;
         return {
@@ -514,28 +519,12 @@ class DefaultAuthService implements AuthService {
     await this.repos.sessions.revokeByTokenHash(hashToken(parsed), this.now().toISOString());
   }
 
-  async endAllSessions(user: SessionUser): Promise<number> {
-    const { sessions, deviceLinks } = await this.repos.transaction(async (tx) => {
-      const at = this.now().toISOString();
-      return {
-        sessions: await tx.sessions.revokeAllForUser(user.id, at),
-        deviceLinks: await tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at),
-      };
-    });
-    this.logger.info('Signed out everywhere', { userId: user.id, sessions, deviceLinks });
-    return sessions;
+  endAllSessions(user: SessionUser): Promise<number> {
+    return this.endSessions(user, 'Signed out everywhere');
   }
 
-  async endOtherSessions(user: SessionUser): Promise<number> {
-    const { sessions, deviceLinks } = await this.repos.transaction(async (tx) => {
-      const at = this.now().toISOString();
-      return {
-        sessions: await tx.sessions.revokeAllForUser(user.id, at, { exceptSessionId: user.sessionId }),
-        deviceLinks: await tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at),
-      };
-    });
-    this.logger.info('Signed out other devices', { userId: user.id, sessions, deviceLinks });
-    return sessions;
+  endOtherSessions(user: SessionUser): Promise<number> {
+    return this.endSessions(user, 'Signed out other devices', { exceptSessionId: user.sessionId });
   }
 
   async listSessions(user: SessionUser): Promise<SessionDTO[]> {
@@ -570,7 +559,7 @@ class DefaultAuthService implements AuthService {
     // Built before anything is stored: an unusable app URL must not leave a key behind.
     const bookmarklets = this.bookmarklets(key, appUrl);
     const { record, dto } = await this.repos.transaction(async (tx) => {
-      const session = await this.requireOwnSession(tx, user);
+      const session = await requireActiveSession(tx, user, this.now().toISOString());
       const created = await tx.credentials.createKey({
         userId: user.id,
         label: validation.value,
@@ -594,11 +583,7 @@ class DefaultAuthService implements AuthService {
     return all.filter((key) => key.revokedAt === null).map((key) => toKeyDTO(key, all, links));
   }
 
-  async revokeKey(
-    user: SessionUser,
-    keyId: string,
-    options: { includeDerived?: boolean; includeShareLinks?: boolean } = {},
-  ): Promise<boolean> {
+  async revokeKey(user: SessionUser, keyId: string, options: RevokeKeyOptions = {}): Promise<boolean> {
     const revoked = await this.repos.transaction(async (tx) => {
       const at = this.now().toISOString();
       const derived =
@@ -662,7 +647,7 @@ class DefaultAuthService implements AuthService {
 
   async createDeviceLink(user: SessionUser): Promise<IssuedLink> {
     const link = await this.repos.transaction(async (tx) => {
-      const session = await this.requireOwnSession(tx, user);
+      const session = await requireActiveSession(tx, user, this.now().toISOString());
       return this.issueLoginLink(tx, {
         userId: user.id,
         purpose: 'device',
@@ -676,8 +661,7 @@ class DefaultAuthService implements AuthService {
   }
 
   async createRecoveryLink(actor: Actor, userId: string): Promise<IssuedLink> {
-    const { link, actorId, replaced } = await this.repos.transaction(async (tx) => {
-      const admin = await this.requireAdmin(tx, actor);
+    const { link, actorId, replaced } = await this.adminTransaction(actor, async (tx, admin) => {
       if (admin === userId) {
         throw new ServiceError(
           'invalid-input',
@@ -685,7 +669,7 @@ class DefaultAuthService implements AuthService {
         );
       }
       const target = await tx.users.getById(userId);
-      if (!target) throw new ServiceError('not-found', 'This user does not exist.');
+      if (!target) throw new ServiceError('not-found', USER_NOT_FOUND);
       if (target.disabledAt !== null) {
         throw new ServiceError(
           'invalid-input',
@@ -708,7 +692,7 @@ class DefaultAuthService implements AuthService {
     });
     this.logger.info('Recovery link created', {
       userId,
-      createdBy: actorId ?? 'command line',
+      createdBy: actorLabel(actorId),
       replacedLinks: replaced,
     });
     return link;
@@ -716,33 +700,28 @@ class DefaultAuthService implements AuthService {
 
   async listRecoveryLinks(actor: Actor): Promise<RecoveryLinkDTO[]> {
     await this.requireAdmin(this.repos, actor);
-    const [people, pending] = await Promise.all([
-      this.repos.users.list(),
+    const [names, pending] = await Promise.all([
+      userNames(this.repos),
       this.repos.loginLinks.listPending('recovery', this.now().toISOString()),
     ]);
-    const names = new Map(people.map((person) => [person.id, person.displayName]));
     const active = await Promise.all(pending.map((link) => this.repos.loginLinks.hasActiveCreator(link)));
     return pending
       .filter((_, index) => active[index] === true)
       .map((link) => ({
         id: link.id,
         user: { id: link.userId, displayName: names.get(link.userId) ?? '' },
-        createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
+        createdBy: nameOf(names, link.createdByUserId),
         createdAt: link.createdAt,
         expiresAt: link.expiresAt,
       }));
   }
 
   async revokeRecoveryLink(actor: Actor, linkId: string): Promise<boolean> {
-    const { revoked, actorId } = await this.repos.transaction(async (tx) => {
-      const admin = await this.requireAdmin(tx, actor);
-      return {
-        actorId: admin,
-        revoked: await tx.loginLinks.revoke(linkId, this.now().toISOString(), { purpose: 'recovery' }),
-      };
-    });
-    if (revoked)
-      this.logger.info('Recovery link withdrawn', { linkId, revokedBy: actorId ?? 'command line' });
+    const { revoked, actorId } = await this.adminTransaction(actor, async (tx, admin) => ({
+      actorId: admin,
+      revoked: await tx.loginLinks.revoke(linkId, this.now().toISOString(), { purpose: 'recovery' }),
+    }));
+    if (revoked) this.logger.info('Recovery link withdrawn', { linkId, revokedBy: actorLabel(actorId) });
     return revoked;
   }
 
@@ -756,7 +735,7 @@ class DefaultAuthService implements AuthService {
         ? []
         : [
             {
-              createdBy: link.createdByUserId === null ? null : (names.get(link.createdByUserId) ?? null),
+              createdBy: nameOf(names, link.createdByUserId),
               createdAt: link.createdAt,
               usedAt: link.usedAt,
             },
@@ -773,8 +752,8 @@ class DefaultAuthService implements AuthService {
       this.repos.loginLinks.hasActiveCreator(link),
       this.repos.users.getById(link.userId),
     ]);
-    if (link.revokedAt !== null || !creatorActive) return { status: 'revoked' };
-    if (link.expiresAt <= this.now().toISOString()) return { status: 'expired' };
+    const state = oneTimeLinkState(link, creatorActive, this.now().toISOString());
+    if (state !== 'pending') return { status: state };
     if (user?.disabledAt !== null) return { status: 'invalid' };
     return {
       status: 'valid',
@@ -802,7 +781,7 @@ class DefaultAuthService implements AuthService {
         // recovery, unnoticed.
         recovery = {
           userId: user.id,
-          createdBy: link.createdByUserId ?? 'command line',
+          createdBy: actorLabel(link.createdByUserId),
           endedSessions: await tx.sessions.revokeAllForUser(user.id, at),
           revokedKeys: await tx.credentials.revokeAllForUser(user.id, at),
           revokedLinks: await tx.loginLinks.revokeUnused({ userId: user.id }, at),
@@ -836,13 +815,12 @@ class DefaultAuthService implements AuthService {
 
   async createInvite(actor: Actor, input: { role: UserRole; note?: string }): Promise<IssuedInvite> {
     // Checked at runtime too: callers may pass a role straight from a form.
-    if (!USER_ROLES.includes(input.role)) {
+    if (!(USER_ROLES as readonly string[]).includes(input.role)) {
       throw new ServiceError('invalid-input', 'An invite is for a member or an admin.');
     }
     const note = validateInviteNote(input.note ?? '');
     if (!note.ok) throw new ServiceError('invalid-input', note.message);
-    const { issued, actorId } = await this.repos.transaction(async (tx) => {
-      const admin = await this.requireAdmin(tx, actor);
+    const { issued, actorId } = await this.adminTransaction(actor, async (tx, admin) => {
       const token = generateToken('invite');
       const expiresAt = this.expiry(INVITE_LIFETIME_MS);
       const record = await tx.invites.create({
@@ -858,7 +836,7 @@ class DefaultAuthService implements AuthService {
     this.logger.info('Invite created', {
       inviteId: issued.invite.id,
       role: issued.invite.role,
-      createdBy: actorId ?? 'command line',
+      createdBy: actorLabel(actorId),
     });
     return issued;
   }
@@ -917,10 +895,8 @@ class DefaultAuthService implements AuthService {
   async listInvites(actor: Actor): Promise<InviteDTO[]> {
     await this.requireAdmin(this.repos, actor);
     const [people, invites] = await Promise.all([this.repos.users.list(), this.repos.invites.list()]);
-    const names = new Map(people.map((person) => [person.id, person.displayName]));
-    const activeAdmins = new Set(
-      people.filter((person) => person.role === 'admin' && person.disabledAt === null).map((p) => p.id),
-    );
+    const names = namesById(people);
+    const activeAdmins = new Set(people.filter(isActiveAdminRecord).map((person) => person.id));
     return invites.map((invite) =>
       this.toInviteDTO(
         invite,
@@ -931,11 +907,11 @@ class DefaultAuthService implements AuthService {
   }
 
   async revokeInvite(actor: Actor, inviteId: string): Promise<boolean> {
-    const { revoked, actorId } = await this.repos.transaction(async (tx) => {
-      const admin = await this.requireAdmin(tx, actor);
-      return { actorId: admin, revoked: await tx.invites.revoke(inviteId, this.now().toISOString()) };
-    });
-    if (revoked) this.logger.info('Invite revoked', { inviteId, revokedBy: actorId ?? 'command line' });
+    const { revoked, actorId } = await this.adminTransaction(actor, async (tx, admin) => ({
+      actorId: admin,
+      revoked: await tx.invites.revoke(inviteId, this.now().toISOString()),
+    }));
+    if (revoked) this.logger.info('Invite revoked', { inviteId, revokedBy: actorLabel(actorId) });
     return revoked;
   }
 
@@ -949,19 +925,15 @@ class DefaultAuthService implements AuthService {
   }
 
   async disableUser(actor: Actor, userId: string): Promise<UserOutcome> {
-    const result = await this.repos.transaction(
-      async (tx): Promise<{ outcome: UserOutcome; log?: Record<string, unknown> }> => {
-        const actorId = await this.requireAdmin(tx, actor);
+    const result = await this.adminTransaction(
+      actor,
+      async (tx, actorId): Promise<{ outcome: UserOutcome; log?: Record<string, unknown> }> => {
         if (actorId === userId) {
           return { outcome: { ok: false, reason: 'self', message: 'You cannot disable your own account.' } };
         }
         const target = await tx.users.getById(userId);
         if (!target) return { outcome: userNotFound() };
-        if (
-          target.role === 'admin' &&
-          target.disabledAt === null &&
-          (await tx.users.countActiveAdmins()) <= 1
-        ) {
+        if (isActiveAdminRecord(target) && (await tx.users.countActiveAdmins()) <= 1) {
           return {
             outcome: { ok: false, reason: 'last-admin', message: 'The last admin cannot be disabled.' },
           };
@@ -978,7 +950,7 @@ class DefaultAuthService implements AuthService {
           outcome: { ok: true, user: await this.userDTO(tx, userId) },
           log: {
             userId,
-            disabledBy: actorId ?? 'command line',
+            disabledBy: actorLabel(actorId),
             endedSessions: ended,
             revokedLinks: linksForThem + linksByThem,
             revokedInvites: invites,
@@ -991,25 +963,22 @@ class DefaultAuthService implements AuthService {
   }
 
   async enableUser(actor: Actor, userId: string): Promise<UserOutcome> {
-    const result = await this.repos.transaction(
-      async (tx): Promise<{ outcome: UserOutcome; actorId?: string | null }> => {
-        const actorId = await this.requireAdmin(tx, actor);
+    const result = await this.adminTransaction(
+      actor,
+      async (tx, actorId): Promise<{ outcome: UserOutcome; actorId?: string | null }> => {
         if (!(await tx.users.getById(userId))) return { outcome: userNotFound() };
         await tx.users.setDisabled(userId, false);
         return { outcome: { ok: true, user: await this.userDTO(tx, userId) }, actorId };
       },
     );
     if (result.actorId !== undefined) {
-      this.logger.info('User enabled', { userId, enabledBy: result.actorId ?? 'command line' });
+      this.logger.info('User enabled', { userId, enabledBy: actorLabel(result.actorId) });
     }
     return result.outcome;
   }
 
   renameUser(actor: Actor, userId: string, displayName: string): Promise<UserOutcome> {
-    return this.repos.transaction(async (tx) => {
-      await this.requireAdmin(tx, actor);
-      return this.rename(tx, userId, displayName);
-    });
+    return this.adminTransaction(actor, (tx) => this.rename(tx, userId, displayName));
   }
 
   renameSelf(user: SessionUser, displayName: string): Promise<UserOutcome> {
@@ -1030,7 +999,7 @@ class DefaultAuthService implements AuthService {
     const where =
       this.config.PUBLIC_APP_URL === undefined
         ? CLAIM_PATH
-        : new URL(CLAIM_PATH, this.config.PUBLIC_APP_URL).href;
+        : absoluteAppUrl(CLAIM_PATH, this.config.PUBLIC_APP_URL);
     this.logger.warn(
       `git-moxfield has no admin yet. To claim it, open ${where} and enter the setup code ${code}`,
       { path: CLAIM_PATH },
@@ -1115,15 +1084,41 @@ class DefaultAuthService implements AuthService {
     return repos.sessions.findPendingHandoffByTokenHash(hashToken(parsed), now.toISOString());
   }
 
+  /** Ends the user's sessions (but `exceptSessionId`) and unused device links, and logs `message`. */
+  private async endSessions(
+    user: SessionUser,
+    message: string,
+    options?: { exceptSessionId: string },
+  ): Promise<number> {
+    const { sessions, deviceLinks } = await this.repos.transaction(async (tx) => {
+      const at = this.now().toISOString();
+      return {
+        sessions: await tx.sessions.revokeAllForUser(user.id, at, options),
+        deviceLinks: await tx.loginLinks.revokeUnused({ userId: user.id, purpose: 'device' }, at),
+      };
+    });
+    this.logger.info(message, { userId: user.id, sessions, deviceLinks });
+    return sessions;
+  }
+
   /**
-   * The asking session of `user`, which must still be active: what a user makes from a
-   * session (keys, device links) inherits its lineage, and nothing is made for a session
-   * that ended meanwhile (signed out everywhere, revoked key).
+   * When the browser is signed in as `ownerId` already (`current`, found with
+   * `currentToken`): keeps that session, ending `handoff` first if there is one, and
+   * returns it. `null` when the browser is signed out or signed in as someone else.
    */
-  private async requireOwnSession(repos: Repositories, user: SessionUser): Promise<SessionRecord> {
-    const session = await repos.sessions.getActive(user.id, user.sessionId, this.now().toISOString());
-    if (session === null) throw new ServiceError('forbidden', 'You were signed out. Sign in again.');
-    return session;
+  private async keepSessionOf(
+    repos: Repositories,
+    ownerId: string,
+    current: ActiveSession | null,
+    currentToken: string | null,
+    now: Date,
+    handoff?: PendingHandoff,
+  ): Promise<SignIn | null> {
+    if (current === null || currentToken === null || current.user.id !== ownerId) return null;
+    if (handoff !== undefined) {
+      await repos.sessions.revoke(handoff.user.id, handoff.session.id, now.toISOString());
+    }
+    return this.continueSession(repos, current, currentToken, now);
   }
 
   /** Keeps an existing session: records activity and returns it with its current expiry. */
@@ -1215,13 +1210,24 @@ class DefaultAuthService implements AuthService {
   }
 
   /**
+   * Runs `fn` in a transaction that first checks {@link requireAdmin}; `adminId` is `null`
+   * for the command line. Log outside `fn`: a transaction may run again.
+   */
+  private adminTransaction<T>(
+    actor: Actor,
+    fn: (tx: Repositories, adminId: string | null) => Promise<T>,
+  ): Promise<T> {
+    return this.repos.transaction(async (tx) => fn(tx, await this.requireAdmin(tx, actor)));
+  }
+
+  /**
    * Checks that `actor` may administer users and invites, against the database (a
    * session's role may be stale). @returns the admin's user id, `null` for the command line.
    */
   private async requireAdmin(repos: Repositories, actor: Actor): Promise<string | null> {
     if (actor === SYSTEM_ACTOR) return null;
     const current = await repos.users.getById(actor.id);
-    if (current?.role !== 'admin' || current.disabledAt !== null) {
+    if (current === null || !isActiveAdminRecord(current)) {
       throw new ServiceError('forbidden', 'Only admins can manage users and invites.');
     }
     return current.id;
@@ -1256,10 +1262,7 @@ class DefaultAuthService implements AuthService {
    * it came from the command line); an unused invite of anyone else counts as withdrawn.
    */
   private inviteStatus(invite: InviteRecord, creatorActive: boolean): InviteStatus {
-    if (invite.usedAt !== null) return 'used';
-    if (invite.revokedAt !== null || !creatorActive) return 'revoked';
-    if (invite.expiresAt <= this.now().toISOString()) return 'expired';
-    return 'pending';
+    return oneTimeLinkState(invite, creatorActive, this.now().toISOString());
   }
 
   private toInviteDTO(
@@ -1275,7 +1278,7 @@ class DefaultAuthService implements AuthService {
       status: this.inviteStatus(invite, creatorActive),
       createdAt: invite.createdAt,
       expiresAt: invite.expiresAt,
-      createdBy: invite.createdByUserId === null ? null : (names.get(invite.createdByUserId) ?? null),
+      createdBy: nameOf(names, invite.createdByUserId),
       usedAt: invite.usedAt,
       usedBy:
         invite.usedByUserId === null || usedByName === undefined
@@ -1370,9 +1373,7 @@ function descendantKeyIds(all: readonly CredentialRecord[], rootId: string): str
   const children = new Map<string, CredentialRecord[]>();
   for (const key of all) {
     if (key.createdByCredentialId === null) continue;
-    const siblings = children.get(key.createdByCredentialId) ?? [];
-    siblings.push(key);
-    children.set(key.createdByCredentialId, siblings);
+    groupInto(children, key.createdByCredentialId, key);
   }
   const found: CredentialRecord[] = [];
   const seen = new Set([rootId]);
@@ -1417,8 +1418,17 @@ function toUserDTO(user: UserListItem): UserDTO {
   };
 }
 
+function namesById(users: readonly { id: string; displayName: string }[]): Map<string, string> {
+  return new Map(users.map((user) => [user.id, user.displayName]));
+}
+
+/** The display name of user `id`; `null` for the command line (`id` null) and for users that no longer exist. */
+function nameOf(names: ReadonlyMap<string, string>, id: string | null): string | null {
+  return id === null ? null : (names.get(id) ?? null);
+}
+
 async function userNames(repos: Repositories): Promise<Map<string, string>> {
-  return new Map((await repos.users.list()).map((user) => [user.id, user.displayName]));
+  return namesById(await repos.users.list());
 }
 
 /**
@@ -1436,5 +1446,10 @@ async function hasUnownedLocalHistory(repos: Repositories): Promise<boolean> {
 }
 
 function userNotFound(): UserOutcome {
-  return { ok: false, reason: 'not-found', message: 'This user does not exist.' };
+  return { ok: false, reason: 'not-found', message: USER_NOT_FOUND };
+}
+
+/** How the logs name an admin: the user id, or `command line` for the {@link SYSTEM_ACTOR}. */
+function actorLabel(adminId: string | null): string {
+  return adminId ?? 'command line';
 }

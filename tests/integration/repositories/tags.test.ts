@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_VERSION_TAG_LENGTH, normalizeVersionTag } from '@/server/repositories';
 import { baseDeckSpec, buildSnapshot } from '@tests/support/builders';
 import {
   commitTestSnapshot,
@@ -14,36 +13,6 @@ import {
 function version(n: number): ReturnType<typeof buildSnapshot> {
   return buildSnapshot({ ...baseDeckSpec(), primer: `v${n}` });
 }
-
-describe('normalizeVersionTag', () => {
-  it.each([
-    ['tournament', 'tournament'],
-    ['  Tournament ', 'tournament'],
-    ['Top \t  8', 'top 8'],
-    ['Pre-Ban_v1.2', 'pre-ban_v1.2'],
-    ['Présence', 'présence'],
-    ['ÉTÉ', 'été'],
-    ['東京 2026', '東京 2026'],
-    ['x'.repeat(MAX_VERSION_TAG_LENGTH), 'x'.repeat(MAX_VERSION_TAG_LENGTH)],
-  ])('normalizes %j to %j', (input, expected) => {
-    expect(normalizeVersionTag(input)).toEqual({ ok: true, name: expected });
-  });
-
-  it.each([
-    ['', 'empty'],
-    ['   ', 'empty'],
-    ['x'.repeat(MAX_VERSION_TAG_LENGTH + 1), 'at most 40'],
-    ['tournament/finals', 'may contain'],
-    ['stable!', 'may contain'],
-    ['🔥', 'may contain'],
-    ['...', 'may contain'],
-    ['-_-', 'may contain'],
-  ])('rejects %j', (input, reason) => {
-    const result = normalizeVersionTag(input);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain(reason);
-  });
-});
 
 describe('version tags repository', () => {
   it('adds normalized tags idempotently and lists them sorted', async () => {
@@ -67,7 +36,7 @@ describe('version tags repository', () => {
     const v1 = await commitTestSnapshot(repos, deck, version(1));
 
     expect((await expectRepositoryError(() => repos.tags.add(v1.id, '  '), 'invalid-input')).message).toBe(
-      'Tag must not be empty.',
+      'Enter a tag.',
     );
     await expectRepositoryError(() => repos.tags.add(v1.id, 'a/b'), 'invalid-input');
     await expectRepositoryError(() => repos.tags.add('missing', 'stable'), 'not-found');
@@ -104,7 +73,7 @@ describe('version tags repository', () => {
     expect((await repos.tags.listForCommits([])).size).toBe(0);
   });
 
-  it('counts tag usage per deck', async () => {
+  it('counts tag usage per deck, with the newest version carrying each tag', async () => {
     const { repos } = await createTestRepositories();
     const deck = await createTestDeck(repos);
     const other = await createTestDeck(repos);
@@ -119,9 +88,9 @@ describe('version tags repository', () => {
     await repos.tags.add(foreign.id, 'casual');
 
     expect(await repos.tags.listForDeck(deck.id)).toEqual([
-      { name: 'budget', count: 1 },
-      { name: 'stable', count: 2 },
-      { name: 'tournament', count: 1 },
+      { name: 'budget', count: 1, lastSequence: 3 },
+      { name: 'stable', count: 2, lastSequence: 3 },
+      { name: 'tournament', count: 1, lastSequence: 2 },
     ]);
     expect(await repos.tags.listForDeck((await createTestDeck(repos)).id)).toEqual([]);
   });

@@ -1,8 +1,7 @@
-import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { sql } from 'drizzle-orm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LibsqlDatabase, LibsqlExecutor } from '@/server/db/libsql';
 import { createRepositories } from '@/server/repositories';
@@ -12,7 +11,7 @@ import {
   expectRepositoryError,
   openTestDatabaseHandle,
 } from '@tests/support/db';
-import { tempDir } from '@tests/support/libsql';
+import { scratchDir } from '@tests/support/libsql';
 
 interface SettingRow {
   key: string;
@@ -97,30 +96,26 @@ describe('settings repository', () => {
     });
 
     describe('with several connections to one database file', () => {
-      let dir: string | undefined;
-      const open: LibsqlDatabase[] = [];
+      let dir: string;
 
-      afterEach(() => {
-        for (const handle of open.splice(0)) handle.close();
-        if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
-        dir = undefined;
+      beforeEach(() => {
+        dir = scratchDir('git-moxfield-settings-');
       });
 
-      async function connect(): Promise<LibsqlDatabase> {
-        dir ??= tempDir('git-moxfield-settings-');
-        const handle = await openTestDatabaseHandle({ url: `file:${join(dir, 'settings.db')}` });
-        open.push(handle);
-        return handle;
+      function connect(): Promise<LibsqlDatabase> {
+        return openTestDatabaseHandle({ url: `file:${join(dir, 'settings.db')}` });
       }
 
       it('agrees on the first value stored, also after reopening the database', async () => {
-        const first = createRepositories((await connect()).db);
-        const second = createRepositories((await connect()).db);
+        const [firstHandle, secondHandle] = [await connect(), await connect()];
+        const first = createRepositories(firstHandle.db);
+        const second = createRepositories(secondHandle.db);
 
         expect(await first.settings.getOrCreate('capture-token', () => 'from-first')).toBe('from-first');
         expect(await second.settings.getOrCreate('capture-token', () => 'from-second')).toBe('from-first');
 
-        for (const handle of open.splice(0)) handle.close();
+        firstHandle.close();
+        secondHandle.close();
         const reopened = createRepositories((await connect()).db);
         expect(await reopened.settings.getOrCreate('capture-token', () => 'after-restart')).toBe(
           'from-first',

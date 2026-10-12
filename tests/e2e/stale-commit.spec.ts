@@ -4,7 +4,7 @@
  * is refused, the page shows the new changes, and committing again saves them.
  */
 import { signIn } from './support/accounts';
-import { commitVersion, createBlueFarmCopy, trackDeck } from './support/decks';
+import { commitVersion, trackAndCommitV1 } from './support/decks';
 import { expect, test } from './support/fixtures';
 import { mockMoxfield } from './support/mock';
 
@@ -13,10 +13,11 @@ test('a commit is refused when Moxfield changed after the review, and succeeds a
   context,
 }, testInfo) => {
   await signIn(context);
-  const deck = await createBlueFarmCopy(testInfo, 'Stale Farm');
-  const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message: 'Baseline' });
-  await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v1' })).toBeVisible();
+  const { deck, deckId } = await trackAndCommitV1(page, testInfo, {
+    name: 'Stale Farm',
+    message: 'Baseline',
+    confirm: 'status',
+  });
 
   const changes = page.getByRole('region', { name: 'Changes since v1' });
 
@@ -39,8 +40,11 @@ test('a commit is refused when Moxfield changed after the review, and succeeds a
     ]);
     await commitVersion(page, { sequence: 2, message: 'Null Rod main' });
 
-    const alert = page.getByRole('alert').filter({ hasText: 'Moxfield changed since you looked.' });
-    await expect(alert).toContainText('Review the new changes below and commit again.');
+    // The alert says what the server found: the deck changed on Moxfield since the review.
+    const alert = page.getByRole('alert').filter({ hasText: 'The version was not committed.' });
+    await expect(alert).toContainText(
+      'The deck changed on Moxfield since you reviewed it. Review the new changes and commit again.',
+    );
     // The page now shows what Moxfield has, including the change made after the review.
     await expect(changes).toContainText('2 changes');
     await expect(changes.getByRole('listitem').filter({ hasText: 'Snuff Out' })).toContainText(
@@ -56,7 +60,7 @@ test('a commit is refused when Moxfield changed after the review, and succeeds a
   await test.step('committing again saves both changes', async () => {
     await commitVersion(page, { sequence: 2, message: 'Null Rod and Snuff Out main' });
     await expect(page.getByRole('heading', { level: 2, name: 'Up to date with v2' })).toBeVisible();
-    await expect(page.getByText('Moxfield changed since you looked.')).toHaveCount(0);
+    await expect(page.getByText('The version was not committed.')).toHaveCount(0);
 
     await page.goto(`/decks/${deckId}/versions/2`);
     const committed = page.getByRole('region', { name: 'Changes since v1' });

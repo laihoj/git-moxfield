@@ -47,29 +47,16 @@ import {
   requestCookieSecurity,
 } from '@/server/auth/cookies';
 import { handoffConfirmPath, safeRedirectPath } from '@/server/auth/paths';
+import { plainText, seeOther } from '@/server/http/responses';
 
 import { isSameOriginRequest } from '../../../request-origin';
-import { declaredTooLarge, readBodyLimited } from '../../capture/read-body';
+import { readFormBody } from '../../request-body';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** The confirmation form is two short fields; anything bigger is not it. */
 const FORM_BODY_LIMIT = 8 * 1024;
-
-const FORM_CONTENT_TYPES = /^(application\/x-www-form-urlencoded|multipart\/form-data)(\s*;|$)/i;
-
-/** 303 to a same-origin path; a relative `Location` keeps working behind reverse proxies. */
-function seeOther(location: string): Response {
-  return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
-}
-
-function plainText(status: number, text: string): Response {
-  return new Response(`${text}\n`, {
-    status,
-    headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-  });
-}
 
 /** `response`, clearing the hand-off cookie. */
 function settled(request: NextRequest, response: Response): Response {
@@ -93,17 +80,19 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isSameOriginRequest(request)) {
     return plainText(403, 'Confirm signing in on git-moxfield’s own page.');
   }
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!FORM_CONTENT_TYPES.test(contentType)) return plainText(415, 'Unsupported content type.');
-  if (declaredTooLarge(request.headers, FORM_BODY_LIMIT)) return plainText(413, 'Request too large.');
-  const body = await readBodyLimited(request, FORM_BODY_LIMIT);
-  if (!body.ok) return plainText(body.reason === 'too-large' ? 413 : 400, 'The request could not be read.');
-  let form: FormData;
-  try {
-    form = await new Response(body.bytes, { headers: { 'content-type': contentType } }).formData();
-  } catch {
-    return plainText(400, 'The request could not be read.');
+  const body = await readFormBody(request, FORM_BODY_LIMIT);
+  if (!body.ok) {
+    switch (body.reason) {
+      case 'unsupported-type':
+        return plainText(415, 'Unsupported content type.');
+      case 'too-large':
+        return plainText(413, 'Request too large.');
+      case 'unreadable':
+      case 'malformed':
+        return plainText(400, 'The request could not be read.');
+    }
   }
+  const { form } = body;
 
   const intent = form.get('intent');
   const rawNext = form.get('next');

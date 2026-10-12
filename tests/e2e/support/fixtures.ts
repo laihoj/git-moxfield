@@ -10,7 +10,8 @@
  * - fails on browser console errors and warnings (React's hydration mismatches among
  *   them) and on uncaught page errors, from every page of its browser contexts, popups
  *   included. A test that provokes an error on purpose declares it with
- *   `consoleErrors.allow(pattern)`.
+ *   `consoleErrors.allow(pattern)`, or with `consoleErrors.allowHttpStatus(…)` for the
+ *   report of an error status (a deliberate 403 or 404).
  *
  * `newContext()` opens another browser context: a second device or browser, sharing no
  * cookies with `context` (signed out until something signs it in). It gets the project's
@@ -32,8 +33,14 @@ import { mockMoxfield } from './mock';
 export { expect };
 
 export interface ConsoleErrors {
-  /** Expects console errors or warnings matching `pattern` in this test (e.g. a deliberate 403). */
+  /** Expects console errors or warnings matching `pattern` in this test. */
   allow(pattern: RegExp): void;
+  /**
+   * Expects the browser's console report of a failed request for each of the HTTP `statuses`
+   * (`Failed to load resource: the server responded with a status of 404 (Not Found)`):
+   * every page or request the test provokes to be refused on purpose.
+   */
+  allowHttpStatus(...statuses: number[]): void;
 }
 
 /**
@@ -85,13 +92,33 @@ async function isolateNetwork(context: BrowserContext): Promise<void> {
   );
 }
 
+/**
+ * A React development-build bug, not the app's: after a server component throws (every
+ * `notFound()` page, such as a dead share link), React draws its Server Components
+ * performance track and passes `performance.measure` a negative end time when the dev
+ * server's clock is behind the browser's (a `next dev` that lived through a sleep is
+ * enough), so the measure throws a moment after the page has rendered. Production builds
+ * have no such track. `tests/e2e/react-dev-timing.spec.ts` provokes it; when that spec
+ * fails because the error no longer happens, React is fixed: delete both.
+ */
+const REACT_DEV_TIMING_ERROR =
+  /^Uncaught TypeError: Failed to execute 'measure' on 'Performance': '[^']*' cannot have a negative time stamp\.$/;
+
 /** Console errors, warnings and uncaught errors of the test's browser contexts. */
 class BrowserProblems implements ConsoleErrors {
   readonly problems: string[] = [];
-  private readonly allowed: RegExp[] = [];
+  private readonly allowed: RegExp[] = [REACT_DEV_TIMING_ERROR];
 
   allow(pattern: RegExp): void {
     this.allowed.push(pattern);
+  }
+
+  allowHttpStatus(...statuses: number[]): void {
+    this.allow(
+      new RegExp(
+        `Failed to load resource: the server responded with a status of (?:${statuses.join('|')})\\b`,
+      ),
+    );
   }
 
   /** Records the problems of every page of `context`, popups included. */

@@ -16,6 +16,9 @@
  *
  * Dependency-free (no Next.js request APIs, configuration or database), for the proxy.
  */
+import { parseToken } from '@/core/token-format';
+import type { HeaderSource } from '@/server/host-guard';
+
 import {
   cookieNames,
   freshMarkerCookie,
@@ -24,13 +27,8 @@ import {
   type CookieSpec,
 } from './cookie-spec';
 import { HANDOFF_PATH } from './paths';
-import { parseToken } from './token-format';
 
 export { SESSION_MAX_AGE_S } from './cookie-spec';
-
-interface HeaderSource {
-  get(name: string): string | null;
-}
 
 export interface RefreshableRequest {
   method: string;

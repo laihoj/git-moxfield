@@ -2,22 +2,24 @@
  * Content-addressed store of canonical snapshots plus the derived `snapshot_cards`
  * index used by card history and search.
  */
-import { and, eq, inArray, notExists, sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 
 import { canonicalizeSnapshot, stableStringify } from '@/core/canonical';
+import { isRecord } from '@/core/guards';
 import { snapshotHash } from '@/core/hash';
 import { SNAPSHOT_SCHEMA_VERSION, type CanonicalSnapshot } from '@/core/model';
-import { commits, observations, snapshotCards, snapshots } from '@/server/db/schema';
+import { snapshotCards, snapshots } from '@/server/db/schema';
 
-import { corruptData, decodeJson, isRecord } from './codec';
+import { corruptData, decodeJson } from './codec';
 import {
   assertStorableSize,
   batches,
-  distinct,
+  selectInBatches,
   valuesTable,
   writeAll,
   type LibsqlExecutor,
   type RepositoryContext,
+  type WriteSet,
 } from './context';
 import { RepositoryError } from './errors';
 
@@ -60,13 +62,13 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
       const rows = snapshotCardRows(hash, snapshot);
       // Snapshot and card index rows are written together or not at all. If another writer
       // stored the same snapshot since the check above, every insert is a no-op.
-      await writeAll(ctx, (db) => [
-        db
-          .insert(snapshots)
-          .values({ hash, schemaVersion: snapshot.schemaVersion, canonicalJson, createdAt })
-          .onConflictDoNothing(),
-        ...batches(rows).map((batch) => db.insert(snapshotCards).values(batch).onConflictDoNothing()),
-      ]);
+      await writeAll(ctx, (db) =>
+        snapshotWriteStatements(
+          db,
+          [{ hash, schemaVersion: snapshot.schemaVersion, canonicalJson, createdAt }],
+          rows,
+        ),
+      );
       return hash;
     },
 
@@ -78,12 +80,10 @@ export function createSnapshotRepository(ctx: RepositoryContext): SnapshotReposi
     async getMany(hashes) {
       const result = new Map<string, CanonicalSnapshot>();
       // One row read per snapshot (a version list loads two per version).
-      const pages = await Promise.all(
-        batches(distinct(hashes)).map((batch) =>
-          ctx.db.all<typeof snapshots.$inferSelect>(snapshotLookupQuery(batch)),
-        ),
+      const rows = await selectInBatches(hashes, (batch) =>
+        ctx.db.all<typeof snapshots.$inferSelect>(snapshotLookupQuery(batch)),
       );
-      for (const row of pages.flat()) result.set(row.hash, decodeSnapshot(row));
+      for (const row of rows) result.set(row.hash, decodeSnapshot(row));
       return result;
     },
   };
@@ -118,6 +118,21 @@ export function snapshotCardRows(
       quantity: card.quantity,
     })),
   );
+}
+
+/** Stores snapshot rows with their card index rows as one write set; existing rows are kept. */
+export function snapshotWriteStatements(
+  db: LibsqlExecutor,
+  rows: readonly [typeof snapshots.$inferInsert, ...(typeof snapshots.$inferInsert)[]],
+  cards: readonly (typeof snapshotCards.$inferInsert)[],
+): WriteSet {
+  return [
+    db
+      .insert(snapshots)
+      .values([...rows])
+      .onConflictDoNothing(),
+    ...batches(cards).map((batch) => db.insert(snapshotCards).values(batch).onConflictDoNothing()),
+  ];
 }
 
 function assertCanonical(snapshot: CanonicalSnapshot): void {
@@ -155,33 +170,14 @@ export function decodeSnapshot(row: typeof snapshots.$inferSelect): CanonicalSna
 }
 
 /**
- * Deletes those of `hashes` that no commit or observation references any more
- * (their `snapshot_cards` rows cascade). Returns the number of snapshots deleted.
+ * Decodes the snapshot one statement read joined to `owner` (`Commit abc`): the foreign
+ * key keeps it while the owner exists, so a missing row is `corrupt-data`.
  */
-export async function deleteUnreferencedSnapshots(
-  db: LibsqlExecutor,
-  hashes: readonly string[],
-): Promise<number> {
-  let deleted = 0;
-  for (const batch of batches(distinct(hashes))) {
-    const result = await db.delete(snapshots).where(
-      and(
-        inArray(snapshots.hash, batch),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(commits)
-            .where(eq(commits.snapshotHash, snapshots.hash)),
-        ),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(observations)
-            .where(eq(observations.snapshotHash, snapshots.hash)),
-        ),
-      ),
-    );
-    deleted += result.rowsAffected;
-  }
-  return deleted;
+export function requireJoinedSnapshot(
+  owner: string,
+  snapshotHash: string,
+  row: typeof snapshots.$inferSelect | null,
+): CanonicalSnapshot {
+  if (row === null) throw corruptData(owner, `its snapshot ${snapshotHash} is missing`);
+  return decodeSnapshot(row);
 }

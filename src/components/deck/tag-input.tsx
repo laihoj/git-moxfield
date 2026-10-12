@@ -1,10 +1,12 @@
 'use client';
 
-import { Plus, Tag, X } from 'lucide-react';
+import { Tag } from 'lucide-react';
 import { useId, useState, type KeyboardEvent } from 'react';
 
-import { fieldDescriptionIds } from '@/components/ui/field';
-import { normalizeTagInput, tagProblem } from '@/lib/tags';
+import { ErrorText, fieldControlProps, fieldDescriptionIds } from '@/components/ui/field';
+import { parseTagDraft } from '@/core/tags';
+
+import { TagChip, TagSuggestions } from './tag-chip';
 
 export interface TagInputProps {
   /** Form field name; one hidden input per tag is submitted under this name. */
@@ -35,18 +37,15 @@ export function TagInput({
   const [draft, setDraft] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
 
-  const available = suggestions.filter((tag) => !value.includes(tag)).slice(0, 8);
-
   function add(raw: string): boolean {
-    const tag = normalizeTagInput(raw);
-    if (tag === '') return true;
-    const issue = tagProblem(tag);
-    if (issue !== null) {
-      setProblem(issue);
+    const draft = parseTagDraft(raw);
+    if (draft.kind === 'empty') return true;
+    if (draft.kind === 'invalid') {
+      setProblem(draft.problem);
       return false;
     }
     setProblem(null);
-    if (!value.includes(tag)) onChange([...value, tag]);
+    if (!value.includes(draft.tag)) onChange([...value, draft.tag]);
     return true;
   }
 
@@ -71,32 +70,23 @@ export function TagInput({
       <div className="flex min-h-11 flex-wrap items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-2 py-1.5 shadow-card transition-[border-color,box-shadow] focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/20 md:min-h-10">
         <Tag aria-hidden="true" className="ml-1 size-4 shrink-0 text-subtle" />
         {value.map((tag) => (
-          <span
+          <TagChip
             key={tag}
-            className="inline-flex h-7 items-center gap-0.5 rounded-full bg-accent-soft pr-0.5 pl-2.5 text-sm font-medium text-accent"
+            tag={tag}
+            as="span"
+            disabled={disabled}
+            onRemove={() => {
+              remove(tag);
+            }}
           >
-            {tag}
-            <button
-              type="button"
-              disabled={disabled}
-              aria-label={`Remove tag ${tag}`}
-              className="flex size-6 items-center justify-center rounded-full hover:bg-accent/15"
-              onClick={() => {
-                remove(tag);
-              }}
-            >
-              <X aria-hidden="true" className="size-3.5" />
-            </button>
             <input type="hidden" name={name} value={tag} />
-          </span>
+          </TagChip>
         ))}
         <input
-          id={id}
           value={draft}
           disabled={disabled}
           placeholder={value.length === 0 ? 'tournament, stable…' : 'Add tag'}
-          aria-invalid={problem !== null || undefined}
-          aria-describedby={problem !== null ? ids.error : ids.hint}
+          {...fieldControlProps(id, { invalid: problem !== null })}
           enterKeyHint="done"
           autoCapitalize="none"
           autoComplete="off"
@@ -112,33 +102,20 @@ export function TagInput({
         />
       </div>
       {problem !== null ? (
-        <p id={ids.error} role="alert" className="text-sm text-remove">
-          {problem}
-        </p>
+        <ErrorText id={ids.error}>{problem}</ErrorText>
       ) : (
         <p id={ids.hint} className="sr-only">
           Press Enter to add a tag.
         </p>
       )}
-      {available.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted">Recent:</span>
-          {available.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              disabled={disabled}
-              className="relative inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-border-strong px-2.5 text-xs font-medium text-muted transition-colors after:absolute after:-inset-y-2 after:inset-x-0 after:content-[''] hover:border-accent hover:text-accent md:after:hidden"
-              onClick={() => {
-                add(tag);
-              }}
-            >
-              <Plus aria-hidden="true" className="size-3" />
-              {tag}
-            </button>
-          ))}
-        </div>
-      )}
+      <TagSuggestions
+        tags={suggestions}
+        exclude={value}
+        disabled={disabled}
+        onPick={(tag) => {
+          add(tag);
+        }}
+      />
     </div>
   );
 }

@@ -4,12 +4,13 @@ import clsx from 'clsx';
 import { ChevronDown, LogOut, ShieldCheck, UserRound } from 'lucide-react';
 import type { Route } from 'next';
 import { usePathname } from 'next/navigation';
-import { useEffect, useId, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useId, useRef, useState, type ComponentType } from 'react';
 
 import { signOutAction } from '@/app/auth-actions';
 import { Avatar } from '@/components/ui/avatar';
 import { Link } from '@/components/ui/navigation';
 import { Spinner } from '@/components/ui/spinner';
+import { useDismiss } from '@/components/ui/use-dismiss';
 import { routes } from '@/lib/routes';
 
 export interface UserMenuProps {
@@ -34,33 +35,10 @@ export function UserMenu({ displayName, isAdmin }: UserMenuProps) {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent): void => {
-      if (event.target instanceof Node && root.current?.contains(event.target) !== true) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
-      setOpen(false);
-      button.current?.focus();
-    };
-    const onFocusIn = (event: FocusEvent): void => {
-      // Tabbing past the last item closes the panel.
-      if (event.target instanceof Node && root.current?.contains(event.target) !== true) setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('focusin', onFocusIn);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('focusin', onFocusIn);
-    };
-  }, [open]);
-
-  const close = (): void => {
+  const close = useCallback(() => {
     setOpen(false);
-  };
+  }, []);
+  useDismiss({ open, onDismiss: close, root, returnFocus: button });
 
   return (
     <div ref={root} className="relative">
@@ -102,7 +80,7 @@ export function UserMenu({ displayName, isAdmin }: UserMenuProps) {
           <MenuLink
             href={routes.account()}
             icon={UserRound}
-            current={pathname === '/account'}
+            current={pathname === routes.account()}
             onSelect={close}
           >
             Account
@@ -111,7 +89,7 @@ export function UserMenu({ displayName, isAdmin }: UserMenuProps) {
             <MenuLink
               href={routes.admin()}
               icon={ShieldCheck}
-              current={pathname === '/admin'}
+              current={pathname === routes.admin()}
               onSelect={close}
             >
               Admin

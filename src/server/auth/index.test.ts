@@ -8,10 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as DbClientModule from '@/server/db/client';
 import type { LibsqlDb } from '@/server/db/libsql';
 import { openTestDatabase } from '@tests/support/db';
+import type { LogEntry } from '@tests/support/recording-logger';
 
 const state = vi.hoisted(() => ({
   getDb: undefined as (() => Promise<LibsqlDb>) | undefined,
-  logs: [] as { level: string; message: string }[],
+  logs: [] as LogEntry[],
 }));
 
 vi.mock('@/server/db/client', async (importOriginal) => ({
@@ -21,14 +22,9 @@ vi.mock('@/server/db/client', async (importOriginal) => ({
     return state.getDb();
   },
 }));
-vi.mock('@/server/logger', () => ({
-  createLogger: () => {
-    const log = (level: string) => (message: string) => {
-      state.logs.push({ level, message });
-    };
-    return { debug: log('debug'), info: log('info'), warn: log('warn'), error: log('error') };
-  },
-}));
+vi.mock('@/server/logger', async () =>
+  (await import('@tests/support/recording-logger')).recordingLoggerModule(state.logs),
+);
 
 /** The process-wide flag `getAuthService` sets once it announced the setup code. */
 const processState = globalThis as { __gitMoxfieldSetupCodeAnnounced?: boolean };
@@ -41,7 +37,7 @@ async function load() {
 
 beforeEach(() => {
   delete processState.__gitMoxfieldSetupCodeAnnounced;
-  state.logs = [];
+  state.logs.length = 0;
 });
 
 afterEach(() => {

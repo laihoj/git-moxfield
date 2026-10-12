@@ -1,4 +1,5 @@
-import { ArrowRight, ArrowUpRight, Bookmark, KeyRound, LifeBuoy, MonitorSmartphone } from 'lucide-react';
+import clsx from 'clsx';
+import { ArrowRight, Bookmark, KeyRound, LifeBuoy, MonitorSmartphone } from 'lucide-react';
 import type { Metadata, Route } from 'next';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -7,11 +8,14 @@ import { AuthPanel } from '@/components/auth/auth-panel';
 import { RefreshOnReturn } from '@/components/auth/refresh-on-return';
 import { ButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { ExternalLink } from '@/components/ui/external-link';
+import { IconTile } from '@/components/ui/item-list';
 import { routes } from '@/lib/routes';
 import { getSetupInfo } from '@/server/access';
 import { getAuthService } from '@/server/auth';
 import { getCurrentUser } from '@/server/auth/current-user';
 import { safeRedirectPath } from '@/server/auth/paths';
+import { TEXT_LINK } from '@/components/ui/text-link';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,16 +80,12 @@ export default async function SignInPage({ searchParams }: PageProps<'/signin'>)
               <span className="font-medium whitespace-nowrap text-fg">Send to git-moxfield</span> bookmark. It
               signs this browser in and brings the deck along.
             </p>
-            <a
+            <ExternalLink
               href={moxfieldSiteOrigin}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-0.5 inline-flex min-h-11 items-center gap-1 font-medium text-accent hover:underline md:mt-2 md:min-h-0"
+              className={clsx(TEXT_LINK, 'mt-0.5 inline-flex min-h-11 items-center gap-1 md:mt-2 md:min-h-0')}
             >
               Open Moxfield
-              <ArrowUpRight aria-hidden="true" className="size-4" />
-              <span className="sr-only">(opens in a new tab)</span>
-            </a>
+            </ExternalLink>
           </Way>
           <Way icon={<MonitorSmartphone aria-hidden="true" />} title="Use a device that’s signed in">
             <p>
@@ -110,9 +110,7 @@ export default async function SignInPage({ searchParams }: PageProps<'/signin'>)
 function Way({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <li className="flex gap-3.5 p-4 md:p-5">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent [&>svg]:size-4">
-        {icon}
-      </span>
+      <IconTile tone="accent">{icon}</IconTile>
       <div className="min-w-0 text-sm text-pretty text-muted">
         <h3 className="mb-0.5 text-sm font-semibold text-fg">{title}</h3>
         {children}

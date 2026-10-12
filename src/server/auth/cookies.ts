@@ -20,17 +20,17 @@ import { cookies, headers } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
 import { getConfig } from '@/server/config';
+import type { HeaderSource } from '@/server/host-guard';
 
 import {
   cookieNames,
+  establishedSessionCookies,
   expiredFreshMarkerCookie,
   expiredSessionCookie,
-  freshMarkerCookie,
   isCookieAmbiguous,
   isSecureCookieContext,
   readCookie,
   serializeCookie,
-  sessionCookie,
   type CookieSpec,
 } from './cookie-spec';
 import { getAuthService } from './index';
@@ -40,9 +40,14 @@ import type { IssuedSession } from './types';
 // Route handlers
 // ---------------------------------------------------------------------------
 
+/** Whether cookies set in answer to a request with these headers are `Secure` and `__Host-` (see `isSecureCookieContext`). */
+function cookieSecurity(requestHeaders: HeaderSource): boolean {
+  return isSecureCookieContext(requestHeaders, getConfig().PUBLIC_APP_URL);
+}
+
 /** Whether cookies set in answer to `request` are `Secure` and `__Host-` (see `isSecureCookieContext`). */
 export function requestCookieSecurity(request: NextRequest): boolean {
-  return isSecureCookieContext(request.headers, getConfig().PUBLIC_APP_URL);
+  return cookieSecurity(request.headers);
 }
 
 /** The session token cookie of the request (`null` when absent or ambiguous). */
@@ -71,11 +76,11 @@ export async function establishSessionOnResponse(
   response: Response,
   session: IssuedSession,
 ): Promise<Response> {
-  const previous = readRequestSessionToken(request);
-  if (previous !== null && previous !== session.token) await endSessionToken(previous);
-  const secure = requestCookieSecurity(request);
-  appendCookie(response, sessionCookie(session, new Date(), secure));
-  return appendCookie(response, freshMarkerCookie(secure));
+  await endReplacedSession(readRequestSessionToken(request), session.token);
+  for (const spec of establishedSessionCookies(session, new Date(), requestCookieSecurity(request))) {
+    appendCookie(response, spec);
+  }
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +105,7 @@ export async function readHandoffToken(): Promise<string | null> {
  */
 async function readContextCookie(which: 'session' | 'handoff'): Promise<string | null> {
   const requestHeaders = await headers();
-  const name = cookieNames(contextSecurity(requestHeaders))[which];
+  const name = cookieNames(cookieSecurity(requestHeaders))[which];
   if (isCookieAmbiguous(requestHeaders.get('cookie'), name)) return null;
   return (await cookies()).get(name)?.value ?? null;
 }
@@ -110,25 +115,24 @@ async function readContextCookie(which: 'session' | 'handoff'): Promise<string |
  * session cookie, and ends the session the cookie held before if it was another one.
  */
 export async function establishSession(session: IssuedSession): Promise<void> {
-  const previous = await readSessionToken();
-  if (previous !== null && previous !== session.token) await endSessionToken(previous);
-  const secure = contextSecurity(await headers());
+  await endReplacedSession(await readSessionToken(), session.token);
+  const secure = cookieSecurity(await headers());
   const store = await cookies();
-  store.set(sessionCookie(session, new Date(), secure));
-  store.set(freshMarkerCookie(secure));
+  for (const spec of establishedSessionCookies(session, new Date(), secure)) store.set(spec);
 }
 
 /** Signs this browser out (call from a server action only): ends its session and deletes the cookie. */
 export async function endBrowserSession(): Promise<void> {
   await endSessionToken(await readSessionToken());
-  const secure = contextSecurity(await headers());
+  const secure = cookieSecurity(await headers());
   const store = await cookies();
   store.set(expiredSessionCookie(secure));
   store.set(expiredFreshMarkerCookie(secure));
 }
 
-function contextSecurity(requestHeaders: { get(name: string): string | null }): boolean {
-  return isSecureCookieContext(requestHeaders, getConfig().PUBLIC_APP_URL);
+/** Ends the session the browser held before, when `next` replaces it with another one. */
+async function endReplacedSession(previous: string | null, next: string): Promise<void> {
+  if (previous !== null && previous !== next) await endSessionToken(previous);
 }
 
 /** Ends the session of a session cookie value (a no-op for `null`). */

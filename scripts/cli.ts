@@ -1,11 +1,62 @@
 /**
- * Plumbing shared by the command-line scripts: running only as the main module (tests
- * import the scripts), and turning the result of `main` into the process exit code.
+ * Plumbing shared by the command-line scripts: where their output goes, how they read
+ * their arguments and the base URL of the links they print, running only as the main
+ * module (tests import the scripts), and turning the result of `main` into the exit code.
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parseArgs, type ParseArgsConfig } from 'node:util';
 
+import { parseHttpUrl } from '@/core/http-url';
+import type { Logger } from '@/core/logger';
+import type { AppConfig } from '@/server/config';
 import { createLogger } from '@/server/logger';
+
+/** Where a command writes: tests collect the lines, the scripts print them. */
+export interface CommandIO {
+  out(line: string): void;
+  err(line: string): void;
+}
+
+/** The terminal: results on stdout, problems on stderr. */
+export const consoleIO: CommandIO = {
+  out: (line) => {
+    console.log(line);
+  },
+  err: (line) => {
+    console.error(line);
+  },
+};
+
+/** Thrown for wrong usage; the message is shown with the usage text and the exit code is 2. */
+export class UsageError extends Error {}
+
+/**
+ * The arguments of a script without the literal `--` pnpm forwards when users separate
+ * script arguments with it, and whether they ask for help (`--help`, `-h`).
+ */
+export function scriptArgs(argv: readonly string[]): { args: string[]; help: boolean } {
+  const args = argv.filter((arg) => arg !== '--');
+  return { args, help: args.includes('--help') || args.includes('-h') };
+}
+
+/** `parseArgs` that reports a wrong option as a {@link UsageError}. */
+export function parseArgsOrUsage<T extends ParseArgsConfig>(config: T): ReturnType<typeof parseArgs<T>> {
+  try {
+    return parseArgs(config);
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Whether two paths are the same file, symlinks resolved; `false` when either cannot be resolved. */
+export function sameFile(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Whether Node runs the module at `moduleUrl` (pass `import.meta.url`) as the main
@@ -13,12 +64,25 @@ import { createLogger } from '@/server/logger';
  */
 export function isEntryPoint(moduleUrl: string): boolean {
   const entryPoint = process.argv[1];
-  if (entryPoint === undefined) return false;
-  try {
-    return realpathSync(entryPoint) === realpathSync(fileURLToPath(moduleUrl));
-  } catch {
-    return false;
-  }
+  return entryPoint !== undefined && sameFile(entryPoint, fileURLToPath(moduleUrl));
+}
+
+/**
+ * A logger for a command whose own output is the point: only warnings and errors (the
+ * services log an info line for every capture and commit).
+ */
+export function quietLogger(scope: string): Logger {
+  const logger = createLogger(scope);
+  return { ...logger, debug: () => undefined, info: () => undefined };
+}
+
+/** The base URL when neither `--base-url` nor `PUBLIC_APP_URL` is set. */
+export const DEFAULT_APP_URL = 'http://localhost:3000';
+
+/** The base URL to print links with (`--base-url`, else `PUBLIC_APP_URL`); `null` unless absolute http(s). */
+export function resolveBaseUrl(option: unknown, config: Pick<AppConfig, 'PUBLIC_APP_URL'>): string | null {
+  const value = typeof option === 'string' ? option : (config.PUBLIC_APP_URL ?? DEFAULT_APP_URL);
+  return parseHttpUrl(value)?.href ?? null;
 }
 
 /**

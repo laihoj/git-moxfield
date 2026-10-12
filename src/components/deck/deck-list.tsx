@@ -1,43 +1,24 @@
 import clsx from 'clsx';
 
 import { snapshotZones, zoneCards, zoneCount } from '@/core/canonical';
+import {
+  CARD_TYPE_GROUP_PLURALS,
+  CARD_TYPE_GROUPS,
+  cardTypeGroup,
+  type CardTypeGroup,
+} from '@/core/card-types';
+import { groupInto } from '@/core/collections';
 import type { CanonicalCard, CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
-import { zoneLabel, type ZoneId } from '@/core/zones';
+import { isCommandZone, zoneLabel } from '@/core/zones';
+import { domIdSlug } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
 import { CardName } from './card-name';
 import { ManaCost } from './mana-cost';
 import { zoneTextClass } from './zone-badge';
 
-/** Type groups in Moxfield's order. Cards whose primary type is none of these go to "Other". */
-const TYPE_ORDER = [
-  'Creature',
-  'Planeswalker',
-  'Battle',
-  'Instant',
-  'Sorcery',
-  'Artifact',
-  'Enchantment',
-  'Land',
-] as const;
-
-const TYPE_PLURALS: Record<string, string> = {
-  Creature: 'Creatures',
-  Planeswalker: 'Planeswalkers',
-  Battle: 'Battles',
-  Instant: 'Instants',
-  Sorcery: 'Sorceries',
-  Artifact: 'Artifacts',
-  Enchantment: 'Enchantments',
-  Land: 'Lands',
-  Other: 'Other',
-};
-
-/** Zones listed flat (few cards, no grouping): the command zone. */
-const FLAT_ZONES: ReadonlySet<ZoneId> = new Set(['commanders', 'companions', 'signatureSpells']);
-
 interface TypeGroup {
-  type: string;
+  type: CardTypeGroup | 'Other';
   cards: CanonicalCard[];
   count: number;
 }
@@ -47,15 +28,11 @@ export function groupByType(
   cards: readonly CanonicalCard[],
   catalog: Record<CardKey, CardFacts>,
 ): TypeGroup[] {
-  const groups = new Map<string, CanonicalCard[]>();
+  const groups = new Map<CardTypeGroup | 'Other', CanonicalCard[]>();
   for (const card of cards) {
-    const primary = catalog[card.key]?.primaryType ?? 'Other';
-    const type = (TYPE_ORDER as readonly string[]).includes(primary) ? primary : 'Other';
-    const list = groups.get(type) ?? [];
-    list.push(card);
-    groups.set(type, list);
+    groupInto(groups, cardTypeGroup(catalog[card.key]?.primaryType ?? 'Other'), card);
   }
-  return [...TYPE_ORDER, 'Other']
+  return [...CARD_TYPE_GROUPS, 'Other' as const]
     .filter((type) => groups.has(type))
     .map((type) => {
       const list = groups.get(type) ?? [];
@@ -81,7 +58,7 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
     <div className="flex flex-col gap-6">
       {zones.map((zone) => {
         const cards = zoneCards(snapshot, zone);
-        const headingId = `deck-zone-${zone.replace(/[^a-z0-9-]/gi, '-')}`;
+        const headingId = `deck-zone-${domIdSlug(zone)}`;
         return (
           <section key={zone} aria-labelledby={headingId}>
             <h3
@@ -94,14 +71,14 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
               {zoneLabel(zone)}
               <span className="font-medium text-subtle tabular">{zoneCount(snapshot, zone)}</span>
             </h3>
-            {FLAT_ZONES.has(zone) ? (
+            {isCommandZone(zone) ? (
               <CardRows cards={cards} catalog={catalog} scope={scope} />
             ) : (
               <div className="gap-x-8 md:columns-2">
                 {groupByType(cards, catalog).map((group) => (
                   <div key={group.type} className="mb-4 break-inside-avoid">
                     <h4 className="mb-0.5 flex items-baseline gap-1.5 text-xs font-semibold text-muted">
-                      {TYPE_PLURALS[group.type] ?? group.type}
+                      {CARD_TYPE_GROUP_PLURALS[group.type]}
                       <span className="font-medium text-subtle tabular">{group.count}</span>
                     </h4>
                     <CardRows cards={group.cards} catalog={catalog} scope={scope} />
@@ -116,23 +93,34 @@ export function DeckList({ snapshot, catalog, scope }: DeckListProps) {
   );
 }
 
-function CardRows({
+/**
+ * Cards as rows: quantity, name (linked to the card's history, with a preview) and mana
+ * cost. `divided`: looser rows with a rule between them (an initial version's card list).
+ */
+export function CardRows({
   cards,
   catalog,
   scope,
+  divided = false,
 }: {
-  cards: readonly CanonicalCard[];
+  cards: readonly { key: CardKey; name: string; quantity: number }[];
   catalog: Record<CardKey, CardFacts>;
   scope: DeckScope;
+  divided?: boolean;
 }) {
   const routes = deckRoutes(scope);
   return (
-    <ul>
+    <ul className={clsx(divided && 'divide-y divide-border')}>
       {cards.map((card) => {
         const facts = catalog[card.key];
         return (
-          <li key={card.key} className="flex min-h-8 items-center gap-2.5 py-0.5 text-sm">
-            <span className="w-5 shrink-0 text-right text-muted tabular">{card.quantity}</span>
+          <li
+            key={card.key}
+            className={clsx('flex items-center text-sm', divided ? 'gap-3 py-1.5' : 'min-h-8 gap-2.5 py-0.5')}
+          >
+            <span className={clsx('shrink-0 text-right text-muted tabular', divided ? 'w-6' : 'w-5')}>
+              {card.quantity}
+            </span>
             <CardName
               name={card.name}
               scryfallId={facts?.scryfallId}

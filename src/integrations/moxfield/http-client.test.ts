@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { expectRejection } from '@tests/support/errors';
+
 import { DeckSourceError } from '../deck-source';
 
 import { MoxfieldHttpClient, parseRetryAfter, type MoxfieldHttpClientOptions } from './http-client';
@@ -40,15 +42,8 @@ function setup(handler: Parameters<typeof fakeFetch>[0], overrides: Partial<Moxf
   };
 }
 
-async function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
-  const error: unknown = await promise.then(
-    () => {
-      throw new Error('expected a rejection');
-    },
-    (reason: unknown) => reason,
-  );
-  expect(error).toBeInstanceOf(DeckSourceError);
-  return error as DeckSourceError;
+function failure(promise: Promise<unknown>): Promise<DeckSourceError> {
+  return expectRejection(promise, DeckSourceError);
 }
 
 function headerOf(init: RequestInit | undefined, name: string): string | undefined {
@@ -109,6 +104,25 @@ describe('MoxfieldHttpClient — success', () => {
 });
 
 describe('MoxfieldHttpClient — error mapping', () => {
+  it('refuses a response over the size limit even when its length is not announced', async () => {
+    const chunk = new Uint8Array(1_000_000);
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 40) controller.enqueue(chunk);
+        else controller.close();
+      },
+    });
+    const { client } = setup(
+      () => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    const error = await failure(client.getDeckJson(DECK_ID));
+    expect(error).toMatchObject({ code: 'schema', message: 'The Moxfield response is too large.' });
+    // Reading stopped soon after the limit; the rest of the body was never buffered.
+    expect(pulls).toBeLessThan(25);
+  });
+
   it('maps 404 to not-found without retrying', async () => {
     const { client, calls, logger } = setup(() => jsonResponse({ title: 'Not Found' }, 404));
     const error = await failure(client.getDeckJson(DECK_ID));

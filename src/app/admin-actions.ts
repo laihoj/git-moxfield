@@ -13,47 +13,27 @@
  * are returned once to the admin who asked and never logged.
  */
 import { revalidatePath } from 'next/cache';
-import { headers } from 'next/headers';
 import { z } from 'zod';
 
+import { USER_ROLES } from '@/core/roles';
 import { getAuthService } from '@/server/auth';
 import { requireUser } from '@/server/auth/current-user';
 import type { SessionUser } from '@/server/auth/types';
 import { createLogger } from '@/server/logger';
-import { isServiceError } from '@/server/services';
+import { absoluteAppUrl } from '@/core/http-url';
 import { routes } from '@/lib/routes';
 
 import type { AccountActionResult, CreateInviteState, IssuedLinkState } from './action-types';
-import { publicAppUrl } from './request-origin';
+import { failureMessage, formString, idSchema, INVALID_REQUEST } from './action-support';
+import { actionAppUrl } from './request-origin';
 
 const log = createLogger('admin-actions');
 
-const GENERIC_ERROR = 'Something went wrong. Please try again.';
-const NO_APP_URL =
-  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
-
-/** Sanity bound for ids from the browser; the auth service looks them up. */
-const idSchema = z.string().trim().min(1).max(128);
-const roleSchema = z.enum(['admin', 'member']);
-
-/** Longest form value read at all; the auth service validates the exact rules. */
-const MAX_FIELD_LENGTH = 1024;
-
-function formString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value.slice(0, MAX_FIELD_LENGTH) : '';
-}
+const roleSchema = z.enum(USER_ROLES);
 
 /** The signed-in user, who must be an admin for the service calls below to succeed. */
 async function actor(): Promise<SessionUser> {
   return requireUser({ next: routes.admin() });
-}
-
-/** User-facing message: service errors (forbidden, invalid input) carry one; others are logged. */
-function failureMessage(error: unknown, what: string, user: SessionUser): string {
-  if (isServiceError(error)) return error.message;
-  log.error(`${what} failed`, { error, userId: user.id });
-  return GENERIC_ERROR;
 }
 
 /** Creates an invite and returns its link, shown once. */
@@ -67,21 +47,25 @@ export async function createInviteAction(
   const values = { note, role: rawRole };
   const role = roleSchema.safeParse(rawRole);
   if (!role.success) return { status: 'error', message: 'Choose member or admin.', values };
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL, values };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message, values };
   try {
     const auth = await getAuthService();
     const issued = await auth.createInvite(user, { role: role.data, note });
-    revalidatePath('/admin');
+    revalidatePath(routes.admin());
     return {
       status: 'created',
-      url: new URL(issued.path, appUrl).href,
+      url: absoluteAppUrl(issued.path, app.appUrl),
       expiresAt: issued.expiresAt,
       note: issued.invite.note,
       role: issued.invite.role,
     };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'createInvite', user), values };
+    return {
+      status: 'error',
+      message: failureMessage(log, error, 'createInvite', { userId: user.id }),
+      values,
+    };
   }
 }
 
@@ -89,14 +73,16 @@ export async function createInviteAction(
 export async function revokeInviteAction(inviteId: string): Promise<AccountActionResult> {
   const user = await actor();
   const id = idSchema.safeParse(inviteId);
-  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  if (!id.success) return { ok: false, message: INVALID_REQUEST };
   try {
     const auth = await getAuthService();
     const revoked = await auth.revokeInvite(user, id.data);
-    revalidatePath('/admin');
-    return revoked ? { ok: true } : { ok: false, message: 'This invite was already used or withdrawn.' };
+    revalidatePath(routes.admin());
+    return revoked
+      ? { ok: true }
+      : { ok: false, message: 'This invite was already used, withdrawn or expired.' };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeInvite', user) };
+    return { ok: false, message: failureMessage(log, error, 'revokeInvite', { userId: user.id }) };
   }
 }
 
@@ -104,14 +90,17 @@ export async function revokeInviteAction(inviteId: string): Promise<AccountActio
 export async function setUserDisabledAction(userId: string, disabled: boolean): Promise<AccountActionResult> {
   const user = await actor();
   const id = idSchema.safeParse(userId);
-  if (!id.success || typeof disabled !== 'boolean') return { ok: false, message: 'Invalid request.' };
+  if (!id.success || typeof disabled !== 'boolean') return { ok: false, message: INVALID_REQUEST };
   try {
     const auth = await getAuthService();
     const outcome = disabled ? await auth.disableUser(user, id.data) : await auth.enableUser(user, id.data);
-    revalidatePath('/admin');
+    revalidatePath(routes.admin());
     return outcome.ok ? { ok: true } : { ok: false, message: outcome.message };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, disabled ? 'disableUser' : 'enableUser', user) };
+    return {
+      ok: false,
+      message: failureMessage(log, error, disabled ? 'disableUser' : 'enableUser', { userId: user.id }),
+    };
   }
 }
 
@@ -119,17 +108,20 @@ export async function setUserDisabledAction(userId: string, disabled: boolean): 
 export async function createRecoveryLinkAction(userId: string): Promise<IssuedLinkState> {
   const user = await actor();
   const id = idSchema.safeParse(userId);
-  if (!id.success) return { status: 'error', message: 'Invalid request.' };
-  const appUrl = publicAppUrl(await headers());
-  if (appUrl === null) return { status: 'error', message: NO_APP_URL };
+  if (!id.success) return { status: 'error', message: INVALID_REQUEST };
+  const app = await actionAppUrl();
+  if (!app.ok) return { status: 'error', message: app.message };
   try {
     const auth = await getAuthService();
     const link = await auth.createRecoveryLink(user, id.data);
     // The page lists the recovery links that can still be used.
-    revalidatePath('/admin');
-    return { status: 'created', url: new URL(link.path, appUrl).href, expiresAt: link.expiresAt };
+    revalidatePath(routes.admin());
+    return { status: 'created', url: absoluteAppUrl(link.path, app.appUrl), expiresAt: link.expiresAt };
   } catch (error) {
-    return { status: 'error', message: failureMessage(error, 'createRecoveryLink', user) };
+    return {
+      status: 'error',
+      message: failureMessage(log, error, 'createRecoveryLink', { userId: user.id }),
+    };
   }
 }
 
@@ -137,15 +129,15 @@ export async function createRecoveryLinkAction(userId: string): Promise<IssuedLi
 export async function revokeRecoveryLinkAction(linkId: string): Promise<AccountActionResult> {
   const user = await actor();
   const id = idSchema.safeParse(linkId);
-  if (!id.success) return { ok: false, message: 'Invalid request.' };
+  if (!id.success) return { ok: false, message: INVALID_REQUEST };
   try {
     const auth = await getAuthService();
     const revoked = await auth.revokeRecoveryLink(user, id.data);
-    revalidatePath('/admin');
+    revalidatePath(routes.admin());
     return revoked
       ? { ok: true }
-      : { ok: false, message: 'This recovery link was already used or withdrawn.' };
+      : { ok: false, message: 'This recovery link was already used, withdrawn or expired.' };
   } catch (error) {
-    return { ok: false, message: failureMessage(error, 'revokeRecoveryLink', user) };
+    return { ok: false, message: failureMessage(log, error, 'revokeRecoveryLink', { userId: user.id }) };
   }
 }

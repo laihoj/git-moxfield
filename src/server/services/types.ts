@@ -6,12 +6,8 @@ import type { DeckDiff, DiffStats, PrimerChange } from '@/core/diff/types';
 import type { CardHistory, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey, IngestWarning, SourceDeckMetadata } from '@/core/model';
 import type { PrimerDiff } from '@/core/primer/types';
-import type {
-  DeckSourceErrorCode,
-  IngestMethod,
-  RestoreExport,
-  ServerFetchStatus,
-} from '@/integrations/deck-source';
+import type { IngestMethod, RestoreExport, ServerFetchStatus } from '@/integrations/deck-source';
+import type { FetchErrorRecord } from '@/server/repositories';
 
 export type DeckStatus =
   /** Tracked, but Moxfield state has never been fetched/captured. */
@@ -25,12 +21,8 @@ export type DeckStatus =
   /** Current Moxfield state matches the latest version. */
   | 'clean';
 
-export interface FetchErrorDTO {
-  code: DeckSourceErrorCode;
-  message: string;
-  at: string;
-  retryAfterSeconds: number | null;
-}
+/** The most recent failed fetch of a deck: the stored record, as it is. */
+export type FetchErrorDTO = FetchErrorRecord;
 
 export interface VersionRefDTO {
   commitId: string;
@@ -75,6 +67,8 @@ export interface VersionListItemDTO extends VersionRefDTO {
   stats: DiffStats;
   primer: PrimerChange;
   commanders: string[];
+  /** The version changed its commanders (never for a first version, which has no earlier commanders to change). */
+  commandersChanged: boolean;
   /** Copies in played zones (commanders, companions, signature spells, mainboard). */
   playedCardCount: number;
   ingestMethod: IngestMethod;
@@ -103,6 +97,7 @@ export interface DeckOverviewDTO extends DeckSummaryDTO {
   /** The deck's changes of Moxfield deck, newest first. */
   relinks: DeckRelinkDTO[];
   warnings: IngestWarning[];
+  /** The newest versions, newest first (`RECENT_VERSION_COUNT` of them at most). */
   recentVersions: VersionListItemDTO[];
   serverFetch: ServerFetchStatus;
   /** Card facts for every card key referenced by `diff`. */
@@ -125,6 +120,8 @@ export interface VersionDetailDTO {
   deck: DeckSummaryDTO;
   version: VersionListItemDTO;
   snapshot: CanonicalSnapshot;
+  /** The snapshot's primer as portable markdown (converted by the deck's source); `null` without a primer. */
+  primerMarkdown: string | null;
   sourceMetadata: SourceDeckMetadata;
   /** Diff relative to the parent (or empty deck). */
   diff: DeckDiff;
@@ -232,9 +229,15 @@ export type CommitOutcome =
       message: string;
     };
 
+/** Why a commit was refused. */
+export type CommitFailureReason = Extract<CommitOutcome, { ok: false }>['reason'];
+
 export interface TagCountDTO {
   name: string;
+  /** Versions of the deck carrying the tag. */
   count: number;
+  /** Sequence of the newest version carrying the tag. */
+  lastSequence: number;
 }
 
 /** A compare side from the committed history: a version or the empty deck, never the working state. */
@@ -310,7 +313,7 @@ export interface SharedDeckDTO {
 
 /** A shared deck's overview: the deck and its newest versions. */
 export interface SharedOverviewDTO extends SharedDeckDTO {
-  /** The newest versions, newest first (at most `RECENT_VERSION_COUNT`). */
+  /** The newest versions, newest first (`RECENT_VERSION_COUNT` of them at most). */
   recentVersions: VersionListItemDTO[];
 }
 

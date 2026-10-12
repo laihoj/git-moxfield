@@ -23,6 +23,8 @@ import type {
 import { SNAPSHOT_SCHEMA_VERSION } from '@/core/model';
 import type { ZoneId } from '@/core/zones';
 
+import { cardSpecName, parseCardSpecString } from './card-spec';
+
 export interface PrintingSpec {
   set?: string;
   collectorNumber?: string;
@@ -52,13 +54,7 @@ export interface SnapshotSpec {
 }
 
 function parseSpec(spec: CardSpec): Exclude<CardSpec, string> {
-  if (typeof spec !== 'string') return spec;
-  const match = /^(\d+)\s+(.+)$/.exec(spec.trim());
-  if (match) {
-    const [, quantity = '1', name = ''] = match;
-    return { name, quantity: Number(quantity) };
-  }
-  return { name: spec.trim(), quantity: 1 };
+  return typeof spec === 'string' ? parseCardSpecString(spec) : spec;
 }
 
 function defaultPrinting(name: string, quantity: number): CanonicalPrinting {
@@ -144,4 +140,36 @@ export function baseDeckSpec(): SnapshotSpec {
     },
     primer: "# Blue Farm\n\nWin with Thassa's Oracle.\n",
   };
+}
+
+/** The card specs of each zone of a {@link SnapshotSpec}. */
+export type ZoneSpecs = Partial<Record<ZoneId, CardSpec[]>>;
+
+/** The base deck with an edit applied to (a copy of) its spec. */
+export function baseWith(
+  mutate: (zones: ZoneSpecs, spec: SnapshotSpec) => void = () => undefined,
+): CanonicalSnapshot {
+  const spec = baseDeckSpec();
+  const zones: ZoneSpecs = { ...spec.zones };
+  mutate(zones, spec);
+  return buildSnapshot({ ...spec, zones });
+}
+
+/** Removes the card called `name` from `zone`. @throws {Error} when it is not there (a typo in an edit must not pass). */
+export function removeCard(zones: ZoneSpecs, zone: ZoneId, name: string): void {
+  const before = zones[zone] ?? [];
+  const after = before.filter((card) => cardSpecName(card) !== name);
+  if (after.length === before.length) throw new Error(`${name} is not in ${zone}`);
+  zones[zone] = after;
+}
+
+/** Adds `card` to `zone`. */
+export function addCard(zones: ZoneSpecs, zone: ZoneId, card: CardSpec): void {
+  zones[zone] = [...(zones[zone] ?? []), card];
+}
+
+/** Moves the card called `name` from one zone to another. @throws {Error} when it is not in `from`. */
+export function moveCardSpec(zones: ZoneSpecs, name: string, from: ZoneId, to: ZoneId): void {
+  removeCard(zones, from, name);
+  addCard(zones, to, name);
 }

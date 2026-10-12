@@ -1,11 +1,12 @@
 'use client';
 
 import clsx from 'clsx';
-import { CircleAlert, CircleCheck, Info, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import type { Route } from 'next';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
-import { Link } from './navigation';
+import { ALERT_TONES } from './alert';
+import { TextLink } from './text-link';
 
 export type ToastTone = 'success' | 'info' | 'error';
 
@@ -39,9 +40,6 @@ export function useToast(): ShowToast {
   return show;
 }
 
-const ICONS = { success: CircleCheck, info: Info, error: CircleAlert } as const;
-const ICON_COLORS = { success: 'text-add', info: 'text-move', error: 'text-remove' } as const;
-
 /** Provides `useToast` and renders the toast stack (bottom-centered on mobile, bottom-right on desktop). */
 export function Toaster({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -74,7 +72,7 @@ export function Toaster({ children }: { children: ReactNode }) {
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
   const tone = toast.tone ?? 'success';
-  const Icon = ICONS[tone];
+  const { Icon, icon } = ALERT_TONES[tone];
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -87,20 +85,20 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
 
   return (
     <div className="toast-enter pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-sm shadow-pop">
-      <Icon aria-hidden="true" className={clsx('mt-0.5 size-4 shrink-0', ICON_COLORS[tone])} />
+      <Icon aria-hidden="true" className={clsx('mt-0.5 size-4 shrink-0', icon)} />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-fg">{toast.title}</p>
         {toast.description !== undefined && <p className="mt-0.5 text-muted">{toast.description}</p>}
         {toast.action !== undefined && (
-          <Link
+          <TextLink
             href={toast.action.href}
-            className="mt-1 inline-block font-medium text-accent hover:underline"
+            className="mt-1 inline-block"
             onClick={() => {
               onDismiss(toast.id);
             }}
           >
             {toast.action.label}
-          </Link>
+          </TextLink>
         )}
       </div>
       <button

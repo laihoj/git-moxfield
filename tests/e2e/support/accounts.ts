@@ -16,6 +16,8 @@ import { randomBytes } from 'node:crypto';
 
 import { test, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
+import type { UserRole } from '@/core/roles';
+
 import type { Bookmarklets } from './bookmarklet';
 import { APP_URL } from './constants';
 import { expect } from './fixtures';
@@ -23,7 +25,7 @@ import { expect } from './fixtures';
 export interface E2EUser {
   id: string;
   displayName: string;
-  role: 'admin' | 'member';
+  role: UserRole;
   workspaceId: string;
 }
 
@@ -42,7 +44,7 @@ export interface SignInOptions {
   /** Default: a unique `Tester <hex>`. */
   displayName?: string;
   /** Default: `member`. */
-  role?: 'admin' | 'member';
+  role?: UserRole;
   /** Creates a bookmarklet key with this label and returns its bookmarklets. */
   bookmarkletLabel?: string;
 }
@@ -115,6 +117,20 @@ export async function readSetupCode(): Promise<string | null> {
   const response = await fetch(`${APP_URL}/api/e2e/setup-code`);
   if (!response.ok) throw new Error(`GET ${APP_URL}/api/e2e/setup-code answered ${response.status}`);
   return ((await response.json()) as { setupCode: string | null }).setupCode;
+}
+
+/**
+ * Issues an invite from the command line that expires in `seconds`, for journeys in
+ * which it expires while a page shows it (`POST /api/e2e/invite`). Resolves with its expiry.
+ */
+export async function createExpiringInvite(note: string, seconds: number): Promise<Date> {
+  const response = await fetch(`${APP_URL}/api/e2e/invite`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ note, expiresInSeconds: seconds }),
+  });
+  if (!response.ok) throw new Error(`POST ${APP_URL}/api/e2e/invite answered ${response.status}`);
+  return new Date(((await response.json()) as { expiresAt: string }).expiresAt);
 }
 
 /** The header's account menu button of a signed-in page. */

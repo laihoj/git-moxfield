@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/field';
 import { IconButton } from '@/components/ui/icon-button';
 import { Form } from '@/components/ui/navigation';
+import { truncateWithEllipsis } from '@/core/text';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
 
@@ -26,11 +27,7 @@ export interface CompareFormProps {
 const MESSAGE_PREVIEW_LENGTH = 48;
 
 function optionLabel(version: VersionRefDTO): string {
-  const message =
-    version.message.length > MESSAGE_PREVIEW_LENGTH
-      ? `${version.message.slice(0, MESSAGE_PREVIEW_LENGTH - 1).trimEnd()}…`
-      : version.message;
-  return `${versionLabel(version.sequence)} · ${message}`;
+  return `${versionLabel(version.sequence)} · ${truncateWithEllipsis(version.message, MESSAGE_PREVIEW_LENGTH)}`;
 }
 
 /**

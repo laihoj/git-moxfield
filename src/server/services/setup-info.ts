@@ -18,6 +18,6 @@ export function setupInfo(config: AppConfig, sources: DeckSourceRegistry): Setup
     userAgentConfigured: config.MOXFIELD_USER_AGENT !== undefined,
     captureAllowedOrigins: [...config.captureAllowedOrigins],
     moxfieldSiteOrigin: config.moxfieldSiteOrigin,
-    moxfieldApiBaseUrl: config.MOXFIELD_API_BASE_URL.replace(/\/+$/, ''),
+    moxfieldApiBaseUrl: config.MOXFIELD_API_BASE_URL,
   };
 }

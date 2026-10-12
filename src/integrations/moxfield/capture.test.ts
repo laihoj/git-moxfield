@@ -2,9 +2,14 @@ import { createContext, runInContext, Script } from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { DeckSourceError } from '../deck-source';
+import { brokenCompressionStream } from '@tests/support/capture-codec';
 
-import { buildBookmarklet, parseMoxfieldCapture, type BookmarkletOptions } from './capture';
+import {
+  buildBookmarklet,
+  compactBookmarkletSource,
+  parseMoxfieldCapture,
+  type BookmarkletOptions,
+} from './capture';
 import { decodeCapturePayload } from './capture-codec';
 import {
   CAPTURE_GZIP_TAG,
@@ -24,44 +29,27 @@ import {
   PAYLOAD,
   READY,
 } from './capture-protocol';
-import { v1Primer, v2Deck, v3Deck } from './test-fixtures';
-
-function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    kind: CAPTURE_ENVELOPE_KIND,
-    version: CAPTURE_PROTOCOL_VERSION,
-    source: 'moxfield',
-    pageUrl: 'https://moxfield.com/decks/FixtureDeckId_00000001',
-    capturedAt: '2026-10-09T12:00:00.000Z',
-    deck: v3Deck(),
-    primer: v1Primer(),
-    primerError: null,
-    ...overrides,
-  };
-}
-
-function expectSchemaError(fn: () => unknown, fragment: string): void {
-  let caught: unknown;
-  try {
-    fn();
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(DeckSourceError);
-  expect((caught as DeckSourceError).code).toBe('schema');
-  expect((caught as DeckSourceError).message).toContain(fragment);
-}
+import {
+  expectDeckSourceSchemaError,
+  fixtureCaptureEnvelope,
+  v1Primer,
+  v2Deck,
+  v3Deck,
+} from './test-fixtures';
+import { bookmarkletSource } from '@tests/support/bookmarklet';
 
 describe('parseMoxfieldCapture', () => {
   it('accepts a bookmarklet envelope, as object or JSON string', () => {
     const expected = { deck: v3Deck(), primer: v1Primer() };
-    expect(parseMoxfieldCapture(envelope())).toEqual(expected);
-    expect(parseMoxfieldCapture(JSON.stringify(envelope()))).toEqual(expected);
+    expect(parseMoxfieldCapture(fixtureCaptureEnvelope())).toEqual(expected);
+    expect(parseMoxfieldCapture(JSON.stringify(fixtureCaptureEnvelope()))).toEqual(expected);
   });
 
   it('carries the primer error of an envelope', () => {
     expect(
-      parseMoxfieldCapture(envelope({ primer: null, primerError: 'Primer not captured: HTTP 500' })),
+      parseMoxfieldCapture(
+        fixtureCaptureEnvelope({ primer: null, primerError: 'Primer not captured: HTTP 500' }),
+      ),
     ).toEqual({
       deck: v3Deck(),
       primer: null,
@@ -70,11 +58,17 @@ describe('parseMoxfieldCapture', () => {
   });
 
   it('rejects envelopes of another protocol version or source', () => {
-    expectSchemaError(() => parseMoxfieldCapture(envelope({ version: 3 })), 'unsupported protocol version');
+    expectDeckSourceSchemaError(
+      () => parseMoxfieldCapture(fixtureCaptureEnvelope({ version: 3 })),
+      'unsupported protocol version',
+    );
     // Bookmarklets made before accounts: their envelopes are version 1.
-    expectSchemaError(() => parseMoxfieldCapture(envelope({ version: 1 })), 'the bookmarklet is out of date');
-    expectSchemaError(
-      () => parseMoxfieldCapture(envelope({ source: 'archidekt' })),
+    expectDeckSourceSchemaError(
+      () => parseMoxfieldCapture(fixtureCaptureEnvelope({ version: 1 })),
+      'the bookmarklet is out of date',
+    );
+    expectDeckSourceSchemaError(
+      () => parseMoxfieldCapture(fixtureCaptureEnvelope({ source: 'archidekt' })),
       'does not come from Moxfield',
     );
   });
@@ -105,14 +99,16 @@ describe('parseMoxfieldCapture', () => {
       primer: v1Primer(),
     });
     expect(parseMoxfieldCapture(v3Deck(), '')).toEqual({ deck: v3Deck(), primer: null });
-    expect(parseMoxfieldCapture(envelope({ primer: null, primerError: 'x' }), v1Primer())).toEqual({
+    expect(
+      parseMoxfieldCapture(fixtureCaptureEnvelope({ primer: null, primerError: 'x' }), v1Primer()),
+    ).toEqual({
       deck: v3Deck(),
       primer: v1Primer(),
     });
   });
 
   it('explains a pasted primer in place of the deck', () => {
-    expectSchemaError(() => parseMoxfieldCapture(v1Primer()), 'looks like the primer JSON');
+    expectDeckSourceSchemaError(() => parseMoxfieldCapture(v1Primer()), 'looks like the primer JSON');
   });
 
   it.each([
@@ -127,11 +123,14 @@ describe('parseMoxfieldCapture', () => {
     [{ deck: 'not json' }, 'The deck JSON is not valid JSON'],
     [{ deck: null }, 'not a usable Moxfield deck'],
   ])('rejects %j', (input, fragment) => {
-    expectSchemaError(() => parseMoxfieldCapture(input), fragment);
+    expectDeckSourceSchemaError(() => parseMoxfieldCapture(input), fragment);
   });
 
   it('rejects oversized input before parsing it', () => {
-    expectSchemaError(() => parseMoxfieldCapture(' '.repeat(MAX_CAPTURE_BYTES) + '{}'), 'too large');
+    expectDeckSourceSchemaError(
+      () => parseMoxfieldCapture(' '.repeat(MAX_CAPTURE_BYTES) + '{}'),
+      'too large',
+    );
   });
 });
 
@@ -143,11 +142,6 @@ const APP_URL = 'http://localhost:3000';
 const DECK_PAGE = 'https://moxfield.com/decks/FixtureDeckId_00000001/primer?tab=x#top';
 const NONCE = 'ab'.repeat(16);
 const KEY = 'gmk_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG';
-
-function bookmarkletBody(url: string): string {
-  expect(url.startsWith('javascript:')).toBe(true);
-  return decodeURIComponent(url.slice('javascript:'.length));
-}
 
 class FakeElement {
   readonly style: Record<string, string> = {};
@@ -211,11 +205,6 @@ class FakeClipboardItem {
  * browser without `CompressionStream`, whose bookmarklet sends plain JSON.
  */
 type Compression = 'none' | 'native' | 'broken';
-
-/** A `CompressionStream` that cannot be constructed (`new` on a function that throws). */
-function brokenCompressionStream(): never {
-  throw new TypeError('CompressionStream is broken');
-}
 
 function compressionGlobals(compression: Compression): Record<string, unknown> {
   switch (compression) {
@@ -326,7 +315,7 @@ function browser(
 
   return {
     run(bookmarklet: string): void {
-      runInContext(bookmarkletBody(bookmarklet), context);
+      runInContext(bookmarkletSource(bookmarklet), context);
     },
     dispatch(event: FakeMessageEvent): void {
       for (const listener of [...listeners]) listener(event);
@@ -361,16 +350,12 @@ describe('buildBookmarklet', () => {
     ['popup', popupBookmarklet],
     ['same-tab', sameTabBookmarklet],
   ])('%s mode decodes to valid, self-contained JavaScript', (_mode, bookmarklet) => {
-    const body = bookmarkletBody(bookmarklet);
+    const body = bookmarkletSource(bookmarklet);
     expect(() => new Script(body)).not.toThrow();
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- parsing (not running) our own bookmarklet
     expect(() => new Function(body)).not.toThrow();
     // The payload encoder, as the builder compacts it (lines trimmed).
-    expect(body).toContain(
-      `const encode = ${ENCODE_CAPTURE_PAYLOAD_SOURCE.split('\n')
-        .map((line) => line.trim())
-        .join('\n')};`,
-    );
+    expect(body).toContain(`const encode = ${compactBookmarkletSource(ENCODE_CAPTURE_PAYLOAD_SOURCE)};`);
     expect(body).toContain('"app":"http://localhost:3000"');
     expect(body).toContain('"site":"https://moxfield.com"');
     expect(body).toContain('"api":"https://api2.moxfield.com"');
@@ -380,7 +365,7 @@ describe('buildBookmarklet', () => {
   });
 
   it('embeds overridden origins and keeps an app base path', () => {
-    const body = bookmarkletBody(
+    const body = bookmarkletSource(
       buildBookmarklet({
         appUrl: 'https://tools.example/git-moxfield/?q=1#x',
         mode: 'popup',
@@ -407,11 +392,11 @@ describe('buildBookmarklet', () => {
 
   it('embeds the bookmarklet key in both modes, each with only its own configuration', () => {
     expect(BOOKMARKLET_KEY_PATTERN.test(KEY)).toBe(true);
-    const sameTab = bookmarkletBody(sameTabBookmarklet);
+    const sameTab = bookmarkletSource(sameTabBookmarklet);
     expect(sameTab).toContain(`"key":"${KEY}"`);
     expect(sameTab).toContain(`"tokenField":"${CAPTURE_FORM_TOKEN_FIELD}"`);
     expect(sameTab).not.toContain('"capturePath"');
-    const popup = bookmarkletBody(popupBookmarklet);
+    const popup = bookmarkletSource(popupBookmarklet);
     expect(popup).toContain(`"key":"${KEY}"`);
     expect(popup).not.toContain('"formPath"');
     expect(popup).not.toContain('"tokenField"');

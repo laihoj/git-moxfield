@@ -40,6 +40,7 @@ function deck(overrides: Partial<StatusPanelDeck> = {}): StatusPanelDeck {
     status: 'uncommitted',
     head: HEAD,
     working: WORKING,
+    workingStats: null,
     lastFetchError: null,
     serverFetch: { state: 'available' },
     autoRefreshSuggested: false,
@@ -120,7 +121,7 @@ describe('StatusPanel', () => {
     expect(screen.getByText(/so it is paused until/).textContent).toMatch(
       /paused until (\w{3} \d{1,2}, )?\d{1,2}:\d{2}\s[AP]M \(in 1 hour\)\. Use the bookmarklet/,
     );
-    const update = screen.getByRole('link', { name: 'Update from Moxfield' });
+    const update = screen.getByRole('link', { name: /^Update from Moxfield/ });
     expect(update).toHaveAttribute('href', 'https://moxfield.com/decks/abc');
     expect(update).toHaveAttribute('target', '_blank');
     expect(screen.getByRole('link', { name: 'Setup' })).toHaveAttribute('href', '/setup');
@@ -158,7 +159,7 @@ describe('StatusPanel', () => {
       />,
     );
     expect(screen.getByText('Moxfield blocked the server')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open deck in Moxfield' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Open deck in Moxfield/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Bookmarklet setup' })).toHaveAttribute('href', '/setup');
   });
 
@@ -204,7 +205,7 @@ describe('StatusPanel', () => {
     expect(screen.getByText('Moxfield blocked server-side requests.')).toBeInTheDocument();
     // One way to each next step: the steps' links, not the banner's buttons as well.
     expect(screen.getAllByRole('link', { name: /Moxfield/ }).map((link) => link.textContent)).toEqual([
-      'Update from Moxfield',
+      expect.stringMatching(/^Update from Moxfield/),
     ]);
     expect(screen.getByRole('link', { name: 'Set it up' })).toHaveAttribute('href', '/setup');
     expect(screen.getByRole('link', { name: 'paste instead' })).toHaveAttribute(

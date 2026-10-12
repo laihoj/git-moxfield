@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   compareZones,
+  isCommandZone,
   isKnownZone,
   isPlayedZone,
   isZoneId,
   KNOWN_ZONES,
   otherZone,
   sortZones,
+  zoneEntries,
   zoneLabel,
   type ZoneId,
 } from './zones';
@@ -191,5 +193,39 @@ describe('isPlayedZone', () => {
       'mainboard',
     ]);
     expect(isPlayedZone('other:foo')).toBe(false);
+  });
+});
+
+describe('zoneEntries', () => {
+  it('lists a zone-keyed map in canonical zone order, whatever its insertion order', () => {
+    const map = new Map<ZoneId, number>([
+      ['other:zebra', 1],
+      ['sideboard', 2],
+      ['commanders', 3],
+      ['mainboard', 4],
+    ]);
+    expect(zoneEntries(map)).toEqual([
+      ['commanders', 3],
+      ['mainboard', 4],
+      ['sideboard', 2],
+      ['other:zebra', 1],
+    ]);
+  });
+
+  it('copies: the map is left alone', () => {
+    const map = new Map<ZoneId, string>([['sideboard', 'a']]);
+    expect(zoneEntries(map)).not.toBe(zoneEntries(map));
+    expect([...map]).toEqual([['sideboard', 'a']]);
+  });
+});
+
+describe('the command zone', () => {
+  it('is commanders, companions and signature spells, all of them played', () => {
+    const commandZones = KNOWN_ZONES.filter((zone) => isCommandZone(zone));
+    expect(commandZones).toEqual(['commanders', 'companions', 'signatureSpells']);
+    expect(commandZones.every((zone) => isPlayedZone(zone))).toBe(true);
+    expect(isPlayedZone('mainboard')).toBe(true);
+    expect(isCommandZone('mainboard')).toBe(false);
+    expect(isCommandZone('other:contraptions')).toBe(false);
   });
 });

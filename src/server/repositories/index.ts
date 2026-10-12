@@ -157,7 +157,7 @@ export type {
   ObservationWithSnapshot,
 } from './observations';
 export {
-  MIN_COMMIT_ID_PREFIX_LENGTH,
+  isCommitIdPrefix,
   type CommitRecord,
   type CommitRepository,
   type CommitWithSnapshot,
@@ -169,18 +169,14 @@ export {
   type CardSearchHit,
   type CardVersionZones,
 } from './card-index';
-export {
-  MAX_VERSION_TAG_LENGTH,
-  normalizeVersionTag,
-  type TagCount,
-  type VersionTagRepository,
-  type VersionTagValidation,
-} from './tags';
+export type { TagCount, VersionTagRepository } from './tags';
 export type { CommitNoteRecord, CommitNoteRepository } from './notes';
 export type { CatalogRepository } from './catalog';
 export type { SettingsRepository } from './settings';
 export type { DeckLocation, WorkspaceRecord, WorkspaceRepository } from './workspaces';
-export type { NewUser, UserListItem, UserRecord, UserRepository, UserRole } from './users';
+export { foldName, isActiveAdminRecord } from './users';
+export type { NewUser, UserListItem, UserRecord, UserRepository } from './users';
+export type { UserRole } from '@/core/roles';
 export type {
   CredentialKind,
   CredentialRecord,
@@ -200,6 +196,8 @@ export type { ActiveShareLink, NewShareLink, ShareLinkRecord, ShareLinkRepositor
 export {
   assertCommitsContentAddressed,
   deckReferences,
+  historyRowIds,
+  TRANSFER_ID_KINDS,
   type BranchRow,
   type CardCatalogRow,
   type CommitLocation,

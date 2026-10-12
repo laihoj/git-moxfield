@@ -6,8 +6,9 @@ import { revokeShareLinkAction } from '@/app/share-actions';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InlineConfirm } from '@/components/ui/inline-confirm';
-import { MetaItem, MetaList } from '@/components/ui/meta-list';
-import { RelativeTime } from '@/components/ui/relative-time';
+import { ItemList, ItemRow, ItemTitle } from '@/components/ui/item-list';
+import { MetaItem } from '@/components/ui/meta-list';
+import { LabeledTime, RelativeTime } from '@/components/ui/relative-time';
 import type { ShareLinkDTO } from '@/server/services/types';
 
 export interface ShareLinkListProps {
@@ -33,52 +34,45 @@ export function ShareLinkList({ deckId, links }: ShareLinkListProps) {
     );
   }
   return (
-    <ul aria-label="Share links" className="divide-y divide-border">
+    <ItemList label="Share links">
       {links.map((link) => (
-        <li key={link.id} className="flex flex-wrap items-center gap-x-3 gap-y-3 px-4 py-3.5 md:px-5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
-            <Link2 aria-hidden="true" className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium break-words text-fg">
-              <span className="min-w-0 break-words">{link.label}</span>
-              {link.includeNotes && <Badge tone="accent">Includes notes</Badge>}
-            </p>
-            <MetaList className="text-xs text-muted">
+        <ItemRow
+          key={link.id}
+          icon={<Link2 aria-hidden="true" />}
+          title={
+            <ItemTitle badges={link.includeNotes && <Badge tone="accent">Includes notes</Badge>}>
+              {link.label}
+            </ItemTitle>
+          }
+          meta={
+            <>
               <MetaItem>
                 Created <RelativeTime value={link.createdAt} />
               </MetaItem>
               <MetaItem>
-                {link.lastViewedAt === null ? (
-                  'Not viewed yet'
-                ) : (
-                  <>
-                    Last viewed <RelativeTime value={link.lastViewedAt} />
-                  </>
-                )}
+                <LabeledTime label="Last viewed" value={link.lastViewedAt} fallback="Not viewed yet" />
               </MetaItem>
-            </MetaList>
-          </div>
-          <InlineConfirm
-            trigger={{
-              label: 'Revoke',
-              icon: <Trash2 aria-hidden="true" className="size-4" />,
-              ariaLabel: `Revoke ${link.label}`,
-            }}
-            message={
-              <>
-                Revoke <span className="font-semibold">“{link.label}”</span>? Anyone using it loses access at
-                once. This can’t be undone, but you can always create a new link.
-              </>
-            }
-            confirmLabel="Revoke link"
-            onConfirm={async () => {
-              const result = await revokeShareLinkAction(deckId, link.id);
-              return result.ok ? null : result.message;
-            }}
-          />
-        </li>
+            </>
+          }
+          actions={
+            <InlineConfirm
+              trigger={{
+                label: 'Revoke',
+                icon: <Trash2 aria-hidden="true" className="size-4" />,
+                ariaLabel: `Revoke ${link.label}`,
+              }}
+              message={
+                <>
+                  Revoke <span className="font-semibold">“{link.label}”</span>? Anyone using it loses access
+                  at once. This can’t be undone, but you can always create a new link.
+                </>
+              }
+              confirmLabel="Revoke link"
+              onConfirm={() => revokeShareLinkAction(deckId, link.id)}
+            />
+          }
+        />
       ))}
-    </ul>
+    </ItemList>
   );
 }

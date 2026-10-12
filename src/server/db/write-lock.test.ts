@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { sharedWriteLock, WriteLock, WriteLockError } from './write-lock';
+import { deferred } from '@tests/support/async';
 
-/** A promise plus the function that resolves it. */
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { sharedWriteLock, WriteLock, WriteLockError } from './write-lock';
 
 /** Lets every pending microtask and immediate run. */
 async function settle(): Promise<void> {

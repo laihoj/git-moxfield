@@ -6,7 +6,9 @@ import { useActionState, useId, useState } from 'react';
 import type { NoteState } from '@/app/action-types';
 import { setNoteAction } from '@/app/actions';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/field';
 import { RelativeTime } from '@/components/ui/relative-time';
+import { MAX_NOTE_LENGTH } from '@/core/text-limits';
 
 export interface NotesEditorProps {
   deckId: string;
@@ -48,14 +50,13 @@ export function NotesEditor({ deckId, sequence, text, updatedAt }: NotesEditorPr
       <label htmlFor={id} className="sr-only">
         Notes
       </label>
-      <textarea
+      <Textarea
         id={id}
         name="text"
         value={draft}
         rows={4}
-        maxLength={20_000}
+        maxLength={MAX_NOTE_LENGTH}
         placeholder="Tournament results, matchups, why cards were cut…"
-        className="block min-h-28 w-full resize-y rounded-lg border border-border-strong bg-surface px-3 py-2.5 text-base leading-relaxed text-fg shadow-card placeholder:text-subtle focus:border-accent focus:ring-3 focus:ring-accent/20 focus:outline-none md:text-sm"
         onChange={(event) => {
           setDraft(event.target.value);
         }}

@@ -4,29 +4,40 @@ import { gzipSync } from 'node:zlib';
 import { Linter } from 'eslint';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { envelopeJson, gzipPayload, incompressibleJson, UNICODE_SAMPLE } from '@tests/support/capture-codec';
+import {
+  envelopeJson,
+  gzipPayload,
+  incompressibleJson,
+  largestEncodedPayload,
+  NETLIFY_MAX_PAYLOAD_BYTES,
+  UNICODE_SAMPLE,
+} from '@tests/support/capture-codec';
+import { rejectionOf } from '@tests/support/errors';
+
+import { formatBytes } from '@/core/text';
 
 import { DeckSourceError, isDeckSourceError } from '../deck-source';
 
+import { CapturePayloadError, decodeCapturePayload, isCapturePayloadError } from './capture-codec';
 import {
-  CapturePayloadError,
-  decodeCapturePayload,
-  isCapturePayloadError,
-  type CapturePayloadErrorReason,
-} from './capture-codec';
-import {
+  base64UrlToBytes,
   CAPTURE_GZIP_TAG,
+  decodeUtf8Strict,
   DEFAULT_CAPTURE_CODEC_LIMITS,
   ENCODE_CAPTURE_PAYLOAD_SOURCE,
   encodeCapturePayload,
   exceedsCapturePayloadLimit,
+  exceedsUtf8Bytes,
   isEncodedCapturePayload,
   MAX_DECODED_CAPTURE_BYTES,
   MAX_ENCODED_CAPTURE_CHARS,
   MAX_PLAIN_CAPTURE_BYTES,
+  parseCapturePayload,
   type CaptureCodecLimits,
+  type CapturePayloadFailure,
 } from './capture-codec-protocol';
 import { CAPTURE_FORM_FIELD, CAPTURE_FORM_TOKEN_FIELD, MAX_CAPTURE_BYTES } from './capture-protocol';
+import { compactBookmarkletSource } from './capture';
 
 type Encoder = (text: string) => Promise<string>;
 
@@ -37,28 +48,15 @@ function sourceEncoder(source = ENCODE_CAPTURE_PAYLOAD_SOURCE): Encoder {
   return new Script(`(${source})`).runInThisContext() as Encoder;
 }
 
-/** The bookmarklet builder's compaction (`buildBookmarklet` in `./capture.ts`). */
-function compact(source: string): string {
-  return source
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .join('\n');
-}
-
 async function rejection(promise: Promise<unknown>): Promise<CapturePayloadError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (isCapturePayloadError(error)) return error;
-    throw error;
-  }
-  throw new Error('Expected the payload to be rejected');
+  const error = await rejectionOf(promise);
+  if (isCapturePayloadError(error)) return error;
+  throw error;
 }
 
 async function expectRejected(
   input: string,
-  reason: CapturePayloadErrorReason,
+  reason: CapturePayloadFailure,
   limits?: CaptureCodecLimits,
 ): Promise<CapturePayloadError> {
   const error = await rejection(decodeCapturePayload(input, limits));
@@ -84,11 +82,27 @@ describe('decodeCapturePayload: compressed payloads', () => {
 
   it('round-trips the bookmarklet encoder, also after the bookmarklet compaction', async () => {
     const json = envelopeJson();
-    for (const encode of [sourceEncoder(), sourceEncoder(compact(ENCODE_CAPTURE_PAYLOAD_SOURCE))]) {
+    for (const encode of [
+      sourceEncoder(),
+      sourceEncoder(compactBookmarkletSource(ENCODE_CAPTURE_PAYLOAD_SOURCE)),
+    ]) {
       const encoded = await encode(json);
       expect(encoded).toMatch(/^gm-gzip-base64url:[A-Za-z0-9_-]+$/);
       expect(encoded.length).toBeLessThan(json.length);
       await expect(decodeCapturePayload(encoded)).resolves.toBe(json);
+    }
+  });
+
+  it('encodes exactly like the typed encoder, for short, unicode and multi-chunk text', async () => {
+    const texts = ['', 'a', '{}', envelopeJson(), UNICODE_SAMPLE, incompressibleJson(200_000)];
+    for (const source of [
+      ENCODE_CAPTURE_PAYLOAD_SOURCE,
+      compactBookmarkletSource(ENCODE_CAPTURE_PAYLOAD_SOURCE),
+    ]) {
+      const encode = sourceEncoder(source);
+      for (const text of texts) {
+        expect(await encode(text)).toBe(await encodeCapturePayload(text));
+      }
     }
   });
 
@@ -124,13 +138,71 @@ describe('decodeCapturePayload: compressed payloads', () => {
   });
 });
 
+describe('exceedsUtf8Bytes', () => {
+  it('agrees with the UTF-8 size Buffer reports, for every kind of character', () => {
+    const samples = ['', 'abc', 'é', '€', '😀', 'a😀b€é', UNICODE_SAMPLE, '\ud800', 'x\udc00y', 'ab\ud83d'];
+    for (const text of samples) {
+      const size = Buffer.byteLength(text, 'utf8');
+      expect(exceedsUtf8Bytes(text, size), JSON.stringify(text)).toBe(false);
+      if (size > 0) expect(exceedsUtf8Bytes(text, size - 1), JSON.stringify(text)).toBe(true);
+    }
+  });
+
+  it('answers from the length alone for text that is too long whatever it contains', () => {
+    expect(exceedsUtf8Bytes('x'.repeat(11), 10)).toBe(true);
+    expect(exceedsUtf8Bytes('x'.repeat(10), 10)).toBe(false);
+  });
+});
+
+describe('the shared steps of reading a payload', () => {
+  it('parseCapturePayload tells plain from compressed, and refuses in the order the decoders do', () => {
+    expect(parseCapturePayload('  {"a":1} ', 100)).toEqual({ kind: 'plain' });
+    expect(parseCapturePayload(` \n${CAPTURE_GZIP_TAG}QUJD `, 100)).toEqual({
+      kind: 'compressed',
+      data: 'QUJD',
+    });
+    expect(parseCapturePayload('gm-other:x', 100)).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported-encoding',
+    });
+    // The tag is checked before the length: an unknown tag is unsupported however long it is.
+    expect(parseCapturePayload(`gm-other:${'x'.repeat(200)}`, 100)).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported-encoding',
+    });
+    const atLimit = `${CAPTURE_GZIP_TAG}${'A'.repeat(100 - CAPTURE_GZIP_TAG.length)}`;
+    expect(parseCapturePayload(atLimit, 100).kind).toBe('compressed');
+    expect(parseCapturePayload(`${atLimit}A`, 100)).toEqual({ kind: 'rejected', reason: 'too-large' });
+  });
+
+  it('base64UrlToBytes reads canonical base64url only', () => {
+    for (const bytes of [
+      new Uint8Array(),
+      new Uint8Array([0xfb, 0xff, 0xfe]),
+      new Uint8Array(100_000).fill(0xab),
+    ]) {
+      expect(base64UrlToBytes(Buffer.from(bytes).toString('base64url'))).toEqual(bytes);
+    }
+    for (const invalid of ['A', 'AAAAA', 'AA==', 'a+b/', 'AB', 'ABC', 'AAAA\n']) {
+      expect(base64UrlToBytes(invalid), JSON.stringify(invalid)).toBeNull();
+    }
+    expect(base64UrlToBytes('AA')).toEqual(new Uint8Array([0]));
+  });
+
+  it('decodeUtf8Strict refuses invalid UTF-8 and keeps a byte order mark', () => {
+    expect(decodeUtf8Strict(new Uint8Array([0xff, 0xfe]))).toBeNull();
+    expect(decodeUtf8Strict(Buffer.from('\ufeff{}'))).toBe('\ufeff{}');
+    expect(decodeUtf8Strict(Buffer.from(UNICODE_SAMPLE))).toBe(UNICODE_SAMPLE);
+  });
+});
+
 describe('decodeCapturePayload: limits', () => {
   it('rejects a compressed payload over the length limit before decoding it', async () => {
     const encoded = gzipPayload('x'.repeat(10));
     await expectRejected(encoded, 'too-large', { ...SMALL_LIMITS, maxEncodedChars: encoded.length - 1 });
     // Even when its data is garbage: the length is checked first.
     const error = await expectRejected(`${CAPTURE_GZIP_TAG}${'!'.repeat(300)}`, 'too-large', SMALL_LIMITS);
-    expect(error.message).toBe('The deck data is too large (limit 200 characters compressed).');
+    expect(error.message).toBe('The deck data is too large (limit 200 B compressed).');
   });
 
   it('stops inflating one byte past the decoded limit', async () => {
@@ -139,7 +211,7 @@ describe('decodeCapturePayload: limits', () => {
       'too-large',
       SMALL_LIMITS,
     );
-    expect(error.message).toBe('The deck data is too large (limit 100 bytes uncompressed).');
+    expect(error.message).toBe('The deck data is too large (limit 100 B uncompressed).');
   });
 
   it('defuses a decompression bomb with the default limits', async () => {
@@ -147,7 +219,7 @@ describe('decodeCapturePayload: limits', () => {
     const bomb = gzipPayload(new Uint8Array(32 * 1024 * 1024));
     expect(bomb.length).toBeLessThan(MAX_ENCODED_CAPTURE_CHARS / 10);
     const error = await expectRejected(bomb, 'too-large');
-    expect(error.message).toContain(`limit ${MAX_DECODED_CAPTURE_BYTES} bytes uncompressed`);
+    expect(error.message).toContain(`limit ${formatBytes(MAX_DECODED_CAPTURE_BYTES)} uncompressed`);
   });
 
   it('rejects a plain payload over the limit, counted in UTF-8 bytes', async () => {
@@ -156,7 +228,7 @@ describe('decodeCapturePayload: limits', () => {
     await expectRejected(`${ascii}x`, 'too-large', SMALL_LIMITS);
     // 25 characters, but 75 bytes of UTF-8.
     const error = await expectRejected('龍'.repeat(25), 'too-large', SMALL_LIMITS);
-    expect(error.message).toContain('too large to send uncompressed (limit 50 bytes)');
+    expect(error.message).toContain('too large to send uncompressed (limit 50 B)');
   });
 
   it('refuses limits that are not positive integers', async () => {
@@ -212,6 +284,7 @@ describe('decodeCapturePayload: malformed payloads', () => {
     for (const bytes of [[0xff, 0xfe], [0xc3], [0xed, 0xa0, 0x80] /* an encoded surrogate */]) {
       const error = await expectRejected(gzipPayload(new Uint8Array(bytes)), 'malformed');
       expect(error.message).toBe('The compressed deck data is damaged (it is not valid UTF-8 text).');
+      expect(error.cause).toBeInstanceOf(TypeError);
     }
   });
 
@@ -258,7 +331,10 @@ describe('browser-side encoders', () => {
     const es2020 = { languageOptions: { ecmaVersion: 2020, sourceType: 'script' } } as const;
     // The check itself works: numeric separators are ES2021.
     expect(linter.verify('const n = 1_000;', es2020)).toEqual([expect.objectContaining({ fatal: true })]);
-    for (const source of [ENCODE_CAPTURE_PAYLOAD_SOURCE, compact(ENCODE_CAPTURE_PAYLOAD_SOURCE)]) {
+    for (const source of [
+      ENCODE_CAPTURE_PAYLOAD_SOURCE,
+      compactBookmarkletSource(ENCODE_CAPTURE_PAYLOAD_SOURCE),
+    ]) {
       expect(linter.verify(`const encode = ${source};`, es2020)).toEqual([]);
     }
   });
@@ -289,9 +365,8 @@ describe('browser-side encoders', () => {
 });
 
 describe('limits', () => {
-  /** Netlify's request body cap, and what fits in it if the body is base64-encoded. */
-  const NETLIFY_BODY_CAP = 6_000_000;
-  const BASE64_SAFE_BODY = (NETLIFY_BODY_CAP * 3) / 4;
+  /** What fits in Netlify's request body cap if the body is base64-encoded. */
+  const BASE64_SAFE_BODY = (NETLIFY_MAX_PAYLOAD_BYTES * 3) / 4;
   const ROUTE_OVERHEAD = 64 * 1024;
   const key = `gmk_${'A'.repeat(43)}`;
 
@@ -306,7 +381,7 @@ describe('limits', () => {
   });
 
   it('keep the largest compressed capture far below Netlify’s body cap on both routes', () => {
-    const payload = `${CAPTURE_GZIP_TAG}${'A'.repeat(MAX_ENCODED_CAPTURE_CHARS - CAPTURE_GZIP_TAG.length)}`;
+    const payload = largestEncodedPayload();
     const form = new URLSearchParams({ [CAPTURE_FORM_TOKEN_FIELD]: key, [CAPTURE_FORM_FIELD]: payload });
     const json = JSON.stringify({ payload, method: 'browser-capture', track: true, key });
     for (const body of [form.toString(), json]) {

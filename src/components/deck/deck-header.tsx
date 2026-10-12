@@ -1,8 +1,8 @@
 import clsx from 'clsx';
-import { ArrowUpRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { Badge } from '@/components/ui/badge';
+import { ExternalLink } from '@/components/ui/external-link';
 import { MetaItem, MetaList } from '@/components/ui/meta-list';
 import { formatLabel } from '@/lib/presentation';
 
@@ -76,15 +76,8 @@ export const DECK_HEADER_LINK =
 
 function MoxfieldLink({ url }: { url: string }) {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={clsx(DECK_HEADER_LINK, '-mr-2.5 text-muted')}
-    >
+    <ExternalLink href={url} className={clsx(DECK_HEADER_LINK, '-mr-2.5 text-muted')}>
       Moxfield
-      <ArrowUpRight aria-hidden="true" className="size-4" />
-      <span className="sr-only">(opens in a new tab)</span>
-    </a>
+    </ExternalLink>
   );
 }

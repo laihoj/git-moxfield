@@ -1,14 +1,19 @@
 import clsx from 'clsx';
-import { ArrowUpRight, Download, Eraser, Eye, Hand, Info } from 'lucide-react';
+import { Download, Eraser, Eye, Hand, Info } from 'lucide-react';
 
-import { isKnownZone, type ZoneId } from '@/core/zones';
-import type { RestoreExport, RestorePrimer, RestoreSection } from '@/integrations/deck-source';
+import type {
+  RestoreExport,
+  RestorePrimer,
+  RestoreSection,
+  RestoreSectionKind,
+} from '@/integrations/deck-source';
 import { Badge } from '@/components/ui/badge';
 import { buttonClasses, ExternalButtonLink } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CopyButton } from '@/components/ui/copy-button';
 import { Disclosure } from '@/components/ui/disclosure';
-import { pluralize } from '@/lib/format';
+import { domIdSlug, pluralize } from '@/lib/format';
+import { PAGE_ANCHORS } from '@/lib/routes';
 
 import { zoneTextClass } from './zone-badge';
 
@@ -47,12 +52,7 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
           </h2>
           <div className="flex flex-wrap gap-2">
             {deckUrl !== undefined && (
-              <ExternalButtonLink
-                href={deckUrl}
-                size="sm"
-                variant="primary"
-                trailingIcon={<ArrowUpRight aria-hidden="true" className="size-4" />}
-              >
+              <ExternalButtonLink href={deckUrl} size="sm" variant="primary">
                 Open deck in Moxfield
               </ExternalButtonLink>
             )}
@@ -129,23 +129,8 @@ export function RestorePanel({ restore, deckUrl, downloadHref }: RestorePanelPro
   );
 }
 
-/**
- * How a section is restored. Only Bulk Edit boards are pasted (the primary action of
- * the page); the command zone is set with deck-page actions on Moxfield, and boards
- * without a Bulk Edit tab (tokens, boards git-moxfield does not know) are listed for
- * reference only.
- */
-type SectionKind = 'paste' | 'manual' | 'reference';
-
-const MANUAL_ZONES: ReadonlySet<ZoneId> = new Set<ZoneId>(['commanders', 'companions', 'signatureSpells']);
-
-function sectionKind(zone: ZoneId): SectionKind {
-  if (MANUAL_ZONES.has(zone)) return 'manual';
-  if (zone === 'tokens' || !isKnownZone(zone)) return 'reference';
-  return 'paste';
-}
-
-const KIND_NOTES: Record<Exclude<SectionKind, 'paste'>, { badge: string; note: string }> = {
+/** What a section that is not pasted says about itself (see `RestoreSectionKind`). */
+const KIND_NOTES: Record<Exclude<RestoreSectionKind, 'paste'>, { badge: string; note: string }> = {
   manual: {
     badge: 'Manual step',
     note: 'Bulk Edit does not change this. Set it by hand on Moxfield with the action above.',
@@ -157,9 +142,9 @@ const KIND_NOTES: Record<Exclude<SectionKind, 'paste'>, { badge: string; note: s
 };
 
 function SectionBlock({ section }: { section: RestoreSection }) {
-  const id = `restore-${section.zone.replace(/[^a-z0-9-]/gi, '-')}`;
+  const id = `restore-${domIdSlug(section.zone)}`;
   const empty = section.cardCount === 0;
-  const kind = sectionKind(section.zone);
+  const { kind } = section;
   const lines = lineCount(section.text);
   return (
     <Card
@@ -244,7 +229,7 @@ function PrimerBlock({ primer }: { primer: RestorePrimer }) {
   return (
     <Card
       as="article"
-      id="restore-primer"
+      id={PAGE_ANCHORS.restorePrimer}
       aria-labelledby="restore-primer-label"
       className="flex scroll-mt-4 flex-col gap-3"
     >

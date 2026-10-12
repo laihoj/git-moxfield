@@ -4,17 +4,10 @@
  */
 import 'server-only';
 
+import { headers } from 'next/headers';
+
 import { getConfig } from '@/server/config';
-
-interface HeaderSource {
-  get(name: string): string | null;
-}
-
-/** First value of a possibly comma-separated forwarding header. */
-function firstValue(value: string | null): string | null {
-  const first = value?.split(',')[0]?.trim() ?? '';
-  return first === '' ? null : first;
-}
+import { firstHeaderValue, forwardedHost, type HeaderSource } from '@/server/host-guard';
 
 /**
  * The origin the request was addressed to, from `X-Forwarded-Host`/`Host` and
@@ -25,9 +18,9 @@ export function requestOrigin(
   headers: HeaderSource,
   fallbackProtocol: 'http' | 'https' = 'http',
 ): string | null {
-  const host = firstValue(headers.get('x-forwarded-host')) ?? firstValue(headers.get('host'));
+  const host = forwardedHost(headers);
   if (host === null) return null;
-  const forwardedProto = firstValue(headers.get('x-forwarded-proto'));
+  const forwardedProto = firstHeaderValue(headers.get('x-forwarded-proto'));
   const protocol =
     forwardedProto === 'https' || forwardedProto === 'http' ? forwardedProto : fallbackProtocol;
   try {
@@ -53,8 +46,17 @@ export function requestOrigin(
  */
 export function publicAppUrl(headers: HeaderSource): string | null {
   const configured = getConfig().PUBLIC_APP_URL;
-  if (configured !== undefined) return configured.replace(/\/+$/, '');
+  if (configured !== undefined) return configured;
   return requestOrigin(headers);
+}
+
+const NO_APP_URL_MESSAGE =
+  'git-moxfield could not tell its own address from this request. Set PUBLIC_APP_URL (for example http://localhost:3000) and try again.';
+
+/** {@link publicAppUrl} for the current server action, or the message to show when there is none. */
+export async function actionAppUrl(): Promise<{ ok: true; appUrl: string } | { ok: false; message: string }> {
+  const appUrl = publicAppUrl(await headers());
+  return appUrl === null ? { ok: false, message: NO_APP_URL_MESSAGE } : { ok: true, appUrl };
 }
 
 /**

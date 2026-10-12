@@ -9,6 +9,7 @@ import { ButtonLink } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { versionLabel } from '@/lib/format';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
+import { WORKING_REF } from '@/lib/version-refs';
 
 import { VersionRow } from './version-row';
 
@@ -158,7 +159,7 @@ function SelectionBar({
           )}
           {hasWorking && (
             <ButtonLink
-              href={routes.compare({ from: versionLabel(first), to: 'working' })}
+              href={routes.compare({ from: versionLabel(first), to: WORKING_REF })}
               variant="secondary"
               size="sm"
             >

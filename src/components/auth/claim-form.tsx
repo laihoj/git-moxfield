@@ -4,21 +4,19 @@ import { useActionState, useId } from 'react';
 
 import type { SignInFormState } from '@/app/action-types';
 import { claimAction } from '@/app/auth-actions';
+import { DisplayNameInput } from '@/components/account/display-name-input';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Disclosure } from '@/components/ui/disclosure';
-import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
-
-export interface ClaimFormProps {
-  /** Longest display name the server accepts. */
-  maxNameLength: number;
-}
+import { Field, fieldControlProps, Input } from '@/components/ui/field';
+import { MAX_SETUP_CODE_INPUT_LENGTH } from '@/core/text-limits';
+import { InlineCode } from '@/components/ui/inline-code';
 
 /**
  * First-run claim: the setup code from the server log and the first admin's name. On
  * success the server action signs this browser in and continues to creating a bookmarklet.
  */
-export function ClaimForm({ maxNameLength }: ClaimFormProps) {
+export function ClaimForm() {
   const codeId = useId();
   const nameId = useId();
   const [state, action, pending] = useActionState<SignInFormState, FormData>(claimAction, { status: 'idle' });
@@ -38,10 +36,9 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
       >
         <Input
           key={`code:${attempt}`}
-          id={codeId}
           name="code"
           required
-          maxLength={64}
+          maxLength={MAX_SETUP_CODE_INPUT_LENGTH}
           autoComplete="one-time-code"
           autoCapitalize="characters"
           autoCorrect="off"
@@ -49,8 +46,7 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
           autoFocus
           placeholder="XXXX-XXXX-XXXX"
           defaultValue={error?.values?.code ?? ''}
-          aria-invalid={codeError !== undefined || undefined}
-          aria-describedby={fieldDescriptionIds(codeId)[codeError === undefined ? 'hint' : 'error']}
+          {...fieldControlProps(codeId, { invalid: codeError !== undefined })}
           className="font-mono tracking-wider uppercase placeholder:tracking-wider"
         />
       </Field>
@@ -60,16 +56,10 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
         hint="Shown to the people you invite and on your share links. You can change it later."
         error={nameError}
       >
-        <Input
+        <DisplayNameInput
           key={`name:${attempt}`}
-          id={nameId}
-          name="name"
-          required
-          maxLength={maxNameLength}
-          autoComplete="nickname"
           defaultValue={error?.values?.name ?? ''}
-          aria-invalid={nameError !== undefined || undefined}
-          aria-describedby={fieldDescriptionIds(nameId)[nameError === undefined ? 'hint' : 'error']}
+          {...fieldControlProps(nameId, { invalid: nameError !== undefined })}
         />
       </Field>
       {error !== null && error.field === undefined && (
@@ -84,9 +74,9 @@ export function ClaimForm({ maxNameLength }: ClaimFormProps) {
         <p className="text-sm text-pretty text-muted">
           git-moxfield writes it to its log every time it starts, in a line that says “enter the setup code”.
           On the computer that runs git-moxfield, you can also print it with{' '}
-          <code className="rounded bg-surface-2 px-1 py-0.5 text-[0.8125rem] whitespace-nowrap text-fg">
+          <InlineCode className="text-[0.8125rem] whitespace-nowrap text-fg">
             pnpm users claim-code
-          </code>
+          </InlineCode>
           .
         </p>
       </Disclosure>

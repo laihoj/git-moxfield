@@ -21,6 +21,8 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 
+import { pluralize } from '@/core/text';
+
 import bundledJournal from '../../../drizzle/meta/_journal.json';
 import type { LibsqlDb, LibsqlExecutor } from './libsql';
 import { runWrite } from './transaction';
@@ -111,26 +113,22 @@ export function readMigrationJournal(migrationsFolder: string): readonly Migrati
   return parseMigrationJournal(JSON.parse(readFileSync(path, 'utf8')) as unknown, path);
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
-}
-
 /** A one-line, user-facing explanation of `state`. */
 export function describeMigrationState(state: MigrationState): string {
   switch (state.status) {
     case 'up-to-date':
-      return `The database is up to date (${plural(state.expected, 'migration')} applied).`;
+      return `The database is up to date (${pluralize(state.expected, 'migration')} applied).`;
     case 'missing':
       return 'The database has not been migrated yet. Run `pnpm db:migrate` against it.';
     case 'behind':
       return (
-        `The database is ${plural(state.pending.length, 'migration')} behind ` +
+        `The database is ${pluralize(state.pending.length, 'migration')} behind ` +
         `(${state.pending.join(', ')}). Run \`pnpm db:migrate\` against it.`
       );
     case 'ahead':
       return (
         `The database was migrated by a newer version of git-moxfield ` +
-        `(${plural(state.unknown, 'unknown migration')}` +
+        `(${pluralize(state.unknown, 'unknown migration')}` +
         (state.pending.length > 0 ? `; not applied: ${state.pending.join(', ')}` : '') +
         '). Upgrade git-moxfield or restore a backup made with this version.'
       );
@@ -164,15 +162,11 @@ export async function checkMigrationState(
   return { status, applied: rows.length, expected: journal.length, pending, unknown };
 }
 
-/**
- * Resolves when the database has exactly the migrations this build ships.
- *
- * @throws {MigrationStateError} otherwise, with a message that says what to do.
- */
-export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<MigrationState> {
-  const state = await checkMigrationState(db);
-  if (state.status !== 'up-to-date') throw new MigrationStateError(state);
-  return state;
+interface AssertMigrationsOptions {
+  /** The migrations the database must have. Default: the ones this build ships. */
+  journal?: readonly MigrationJournalEntry[];
+  /** Accept a database a newer build migrated, when nothing is pending. Default: true. */
+  allowAhead?: boolean;
 }
 
 /**
@@ -181,7 +175,8 @@ export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<Migr
  * applied, with the state. That is `up-to-date`, or `ahead` with nothing pending: a newer
  * build added migrations, which are backward compatible with the deploy that was live when
  * they were applied (ADR 0008: expand, then contract). The caller should log an `ahead`
- * state.
+ * state. With `allowAhead: false` the database must have exactly the migrations of
+ * `journal`: `ahead` fails too.
  *
  * Tolerating `ahead` keeps the live deploy working while a new deploy is published (its
  * migrations run before the publish, and stay applied if the publish fails), and after an
@@ -194,10 +189,11 @@ export async function assertMigrationsUpToDate(db: LibsqlExecutor): Promise<Migr
  */
 export async function assertMigrationsApplied(
   db: LibsqlExecutor,
-  journal: readonly MigrationJournalEntry[] = bundledMigrations(),
+  { journal = bundledMigrations(), allowAhead = true }: AssertMigrationsOptions = {},
 ): Promise<MigrationState> {
   const state = await checkMigrationState(db, journal);
-  const servable = state.status === 'up-to-date' || (state.status === 'ahead' && state.pending.length === 0);
+  const servable =
+    state.status === 'up-to-date' || (allowAhead && state.status === 'ahead' && state.pending.length === 0);
   if (!servable) throw new MigrationStateError(state);
   return state;
 }
@@ -215,7 +211,7 @@ async function assertNoForeignKeyViolations(db: LibsqlDb): Promise<void> {
   if (violations.length === 0) return;
   const tables = [...new Set(violations.map((violation) => violation.table))].sort().join(', ');
   throw new Error(
-    `The database has ${plural(violations.length, 'foreign key violation')} after migrating ` +
+    `The database has ${pluralize(violations.length, 'foreign key violation')} after migrating ` +
       `(in ${tables}). Restore a backup made before the upgrade, or fix the rows that ` +
       'PRAGMA foreign_key_check lists.',
   );
