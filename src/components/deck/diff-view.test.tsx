@@ -4,6 +4,7 @@ import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { emptySnapshot } from '@/core/canonical';
+import { viewSnapshot } from '@/core/deck-view';
 import { diffSnapshots } from '@/core/diff';
 import { renderWithProviders, facts } from '@/components/test-utils';
 import type { DeckScope } from '@/lib/routes';
@@ -42,6 +43,73 @@ function changedDeck() {
   });
   return { before, after, diff: diffSnapshots(before, after) };
 }
+
+describe('DiffView in the cEDH view', () => {
+  /** The changed deck as a cEDH reader gets it: both sides projected to the played zones. */
+  function sleevedDiff() {
+    const { before, after } = changedDeck();
+    return diffSnapshots(viewSnapshot(before, 'cedh'), viewSnapshot(after, 'cedh'));
+  }
+
+  it('lists the mainboard as Add and Cut, spoken as adds and cuts, with no Considering anywhere', () => {
+    renderWithProviders(<DiffView diff={sleevedDiff()} catalog={CATALOG} scope={OWNER} view="cedh" />);
+
+    const toAdd = screen.getByRole('region', { name: /^Add/ });
+    expect(within(toAdd).getByText('Mnemonic Betrayal').closest('li')).toHaveTextContent(
+      'Add: Mnemonic Betrayal',
+    );
+    expect(within(toAdd).getByText('Beseech the Mirror').closest('li')).toHaveTextContent(
+      'Add: Beseech the Mirror',
+    );
+    expect(within(toAdd).getByText('Island').closest('li')).toHaveTextContent('Add copies: Island 3 → 4');
+    const toCut = screen.getByRole('region', { name: /^Cut/ });
+    expect(within(toCut).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(toCut).getByText('Dress Down').closest('li')).toHaveTextContent('Cut: Dress Down');
+
+    expect(screen.queryByRole('region', { name: /Moved/ })).toBeNull();
+    expect(screen.queryByRole('region', { name: /Mainboard/ })).toBeNull();
+    expect(screen.queryByText(/Considering|Sideboard/)).toBeNull();
+  });
+
+  it('says how many changes the view leaves out, after the listed ones or on their own', () => {
+    renderWithProviders(
+      <DiffView diff={sleevedDiff()} catalog={CATALOG} scope={OWNER} view="cedh" hiddenChangeCount={2} />,
+    );
+    expect(
+      screen.getByText(
+        'Left out by the cEDH view: 2 changes outside the sleeved deck (sideboard, Considering).',
+      ),
+    ).toBeVisible();
+
+    const { before } = changedDeck();
+    const empty = diffSnapshots(before, before);
+    renderWithProviders(
+      <DiffView
+        diff={empty}
+        catalog={CATALOG}
+        scope={OWNER}
+        view="cedh"
+        hiddenChangeCount={1}
+        emptyMessage="Identical."
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Left out by the cEDH view: 1 change outside the sleeved deck (sideboard, Considering).',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText('Identical.')).toBeNull();
+  });
+
+  it('sums the sleeving up as chips', () => {
+    renderWithProviders(<SummaryChips diff={sleevedDiff()} view="cedh" />);
+    expect(
+      within(screen.getByRole('list', { name: 'Summary of changes' }))
+        .getAllByRole('listitem')
+        .map((chip) => chip.textContent),
+    ).toEqual(['3 to add', '1 to cut', '1 printing change']);
+  });
+});
 
 describe('DiffView', () => {
   it('reports a primer captured after a version without one as a change', () => {

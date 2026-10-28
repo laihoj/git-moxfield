@@ -33,13 +33,19 @@
 import 'server-only';
 
 import { commanderNames, emptySnapshot, normalizeText, zoneCards } from '@/core/canonical';
-import { diffSnapshots, INITIAL_VERSION_MESSAGE, suggestCommitMessage } from '@/core/diff';
+import { composeCommitMessage } from '@/core/commit-message';
+import { viewSnapshotPair, type DeckView } from '@/core/deck-view';
+import { diffSnapshots, hiddenChangeCount, INITIAL_VERSION_MESSAGE, suggestCommitMessage } from '@/core/diff';
 import type { DeckDiff } from '@/core/diff/types';
 import { commitId, deckReference } from '@/core/hash';
 import type { CanonicalSnapshot, NormalizedDeck } from '@/core/model';
 import { normalizeVersionTag } from '@/core/tags';
-import { codePointLength, pluralize } from '@/core/text';
-import { MAX_COMMIT_MESSAGE_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
+import { codePointLength, normalizeInlineText, pluralize } from '@/core/text';
+import {
+  MAX_COMMIT_DESCRIPTION_LENGTH,
+  MAX_COMMIT_MESSAGE_LENGTH,
+  MAX_NOTE_LENGTH,
+} from '@/core/text-limits';
 import {
   DeckSourceError,
   isDeckSourceError,
@@ -127,6 +133,8 @@ export interface DeckServicesDependencies {
   logger: Logger;
   /** Per-deck locks; one instance per process. */
   locks: KeyedMutex;
+  /** The deck view the read models are computed for (see `ServiceDependencies.view`). */
+  view: DeckView;
 }
 
 /**
@@ -179,8 +187,10 @@ interface DeckState {
   headSnapshot: CanonicalSnapshot | null;
   working: ObservationRecord | null;
   workingSnapshot: CanonicalSnapshot | null;
-  /** HEAD (or the empty deck) → working state; `null` without a working state. */
+  /** HEAD (or the empty deck) → working state, over the full snapshots; `null` without a working state. */
   diff: DeckDiff | null;
+  /** The same diff over the snapshots as the view sees them (`diff` itself in the MTG view). */
+  visibleDiff: DeckDiff | null;
   /** Number of versions. */
   versionCount: number;
 }
@@ -197,6 +207,7 @@ class DefaultDeckServices implements DeckServices {
   private readonly now: () => Date;
   private readonly logger: Logger;
   private readonly locks: KeyedMutex;
+  private readonly view: DeckView;
   /** The committed-history views, shared with the viewer scope. */
   private readonly history: DeckHistory;
 
@@ -207,7 +218,8 @@ class DefaultDeckServices implements DeckServices {
     this.now = deps.now;
     this.logger = deps.logger;
     this.locks = deps.locks;
-    this.history = new DeckHistory(deps.repos, deps.sources);
+    this.view = deps.view;
+    this.history = new DeckHistory(deps.repos, deps.sources, deps.view);
   }
 
   // -------------------------------------------------------------------------
@@ -304,21 +316,28 @@ class DefaultDeckServices implements DeckServices {
         listingCommits,
         this.repos.decks.listRelinks(deck.id),
       ]);
-      const { head, working, diff } = state;
+      const { head, working, diff, visibleDiff } = state;
       const serverFetchStatus = this.sources.require(deck.source).serverFetchStatus();
       const snapshot = state.workingSnapshot ?? state.headSnapshot;
       const commanderKeys = snapshot ? zoneCards(snapshot, 'commanders').map((card) => card.key) : [];
       let suggestedMessage = '';
-      if (diff !== null) suggestedMessage = head ? suggestCommitMessage(diff) : INITIAL_VERSION_MESSAGE;
+      if (diff !== null && visibleDiff !== null) {
+        // What the view shows; when the view hides every change, what the full diff says.
+        suggestedMessage = head
+          ? suggestCommitMessage(visibleDiff) || suggestCommitMessage(diff)
+          : INITIAL_VERSION_MESSAGE;
+      }
       const [recentVersions, catalog, serverFetch] = await Promise.all([
         this.history.versionItems(commits, commits.slice(0, RECENT_VERSION_COUNT)),
-        this.history.catalogFor([...(diff ? diffCardKeys(diff) : []), ...commanderKeys]),
+        this.history.catalogFor([...(visibleDiff ? diffCardKeys(visibleDiff) : []), ...commanderKeys]),
         serverFetchStatus,
       ]);
 
       return {
         ...this.summarize(state),
-        diff,
+        view: this.view,
+        diff: visibleDiff,
+        hiddenChangeCount: diff && visibleDiff ? hiddenChangeCount(diff, visibleDiff) : 0,
         relinks: relinks.map(toDeckRelinkDTO).reverse(),
         warnings: working?.warnings ?? [],
         recentVersions,
@@ -510,8 +529,9 @@ class DefaultDeckServices implements DeckServices {
   // -------------------------------------------------------------------------
 
   async commit(deckId: string, input: CommitInput): Promise<CommitOutcome> {
-    const message = normalizeMultilineText(input.message);
-    const length = codePointLength(message);
+    // The message has Git's shape (see `@/core/commit-message`): the subject is one line.
+    const subject = normalizeInlineText(input.message);
+    const length = codePointLength(subject);
     if (length === 0) return commitFailure('invalid-message', 'Write a commit message.');
     if (length > MAX_COMMIT_MESSAGE_LENGTH) {
       return commitFailure(
@@ -519,6 +539,14 @@ class DefaultDeckServices implements DeckServices {
         `Commit messages can be at most ${MAX_COMMIT_MESSAGE_LENGTH} characters long.`,
       );
     }
+    const description = normalizeMultilineText(input.description ?? '');
+    if (codePointLength(description) > MAX_COMMIT_DESCRIPTION_LENGTH) {
+      return commitFailure(
+        'invalid-message',
+        `Commit descriptions can be at most ${MAX_COMMIT_DESCRIPTION_LENGTH} characters long.`,
+      );
+    }
+    const message = composeCommitMessage(subject, description);
     const tags = new Set<string>();
     for (const tag of input.tags ?? []) {
       const validation = normalizeVersionTag(tag);
@@ -1057,6 +1085,16 @@ class DefaultDeckServices implements DeckServices {
     const diff = workingSnapshot
       ? diffSnapshots(headSnapshot ?? emptySnapshot(workingSnapshot.deck), workingSnapshot)
       : null;
+    const visibleDiff =
+      this.view === 'mtg' || workingSnapshot === null
+        ? diff
+        : diffSnapshots(
+            ...viewSnapshotPair(
+              headSnapshot ?? emptySnapshot(workingSnapshot.deck),
+              workingSnapshot,
+              this.view,
+            ),
+          );
     return {
       deck,
       head: head?.commit ?? null,
@@ -1064,12 +1102,14 @@ class DefaultDeckServices implements DeckServices {
       working: working?.observation ?? null,
       workingSnapshot,
       diff,
+      visibleDiff,
       versionCount: count,
     };
   }
 
+  /** The deck's status follows the full diff; its counters follow the view's. */
   private summarize(state: DeckState): DeckSummaryDTO {
-    const { deck, head, working, diff } = state;
+    const { deck, head, working, diff, visibleDiff } = state;
     const snapshot = state.workingSnapshot ?? state.headSnapshot;
     return {
       id: deck.id,
@@ -1083,7 +1123,7 @@ class DefaultDeckServices implements DeckServices {
       head: head ? toVersionRefDTO(head) : null,
       working: working ? toObservationDTO(working) : null,
       lastFetchError: deck.lastFetchError,
-      workingStats: head && diff ? diff.stats : null,
+      workingStats: head && visibleDiff ? visibleDiff.stats : null,
       versionCount: state.versionCount,
     };
   }

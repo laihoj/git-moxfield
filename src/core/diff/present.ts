@@ -8,17 +8,35 @@
  * "Commanders", and not again under zones or moves.
  */
 import { getOrCreate } from '../collections';
+import type { DeckView } from '../deck-view';
 import type { CardKey } from '../model';
 import { MINUS_SIGN, pluralize, truncateWithEllipsis, upperFirst } from '../text';
 import { zoneEntries, zoneLabel, type ZoneId } from '../zones';
 import { changeTouchesZone } from './deck-diff';
-import { primerHasChange, type CardChange, type DeckDiff, type DeckInfoChange } from './types';
+import {
+  primerHasChange,
+  type AddedChange,
+  type CardChange,
+  type DeckDiff,
+  type DeckInfoChange,
+  type QuantityChange,
+  type RemovedChange,
+} from './types';
 
-export type DiffSectionKind = 'commanders' | 'zone' | 'moves' | 'printings' | 'tags' | 'renames';
+export type DiffSectionKind =
+  | 'commanders'
+  | 'zone'
+  /** The cEDH view's mainboard sections: the cards to add to the sleeved deck, and the cards to cut. */
+  | 'add'
+  | 'cut'
+  | 'moves'
+  | 'printings'
+  | 'tags'
+  | 'renames';
 
 /** A titled group of card changes for display. */
 export interface DiffSection {
-  /** Stable id: `commanders`, `zone:<zoneId>`, `moves`, `printings`, `tags`, `renames`. */
+  /** Stable id: `commanders`, `zone:<zoneId>`, `add`, `cut`, `moves`, `printings`, `tags`, `renames`. */
   id: string;
   kind: DiffSectionKind;
   title: string;
@@ -26,6 +44,11 @@ export interface DiffSection {
   zone?: ZoneId;
   /** Changes in {@link DeckDiff.changes} order. */
   changes: CardChange[];
+}
+
+/** Whether a strategic change puts copies into its zone (an addition or more copies) rather than taking them out. */
+export function changeAddsCopies(change: AddedChange | RemovedChange | QuantityChange): boolean {
+  return change.type === 'added' || (change.type === 'quantity' && change.to > change.from);
 }
 
 /**
@@ -40,8 +63,13 @@ export interface DiffSection {
  * 3. `moves` (“Moved”) — moves not involving the commanders zone.
  * 4. `printings`, `tags` (“Card tags”), `renames` (“Renamed”) — cosmetic changes from
  *    any zone, the commanders zone included.
+ *
+ * In the cEDH view (`view: 'cedh'`; the diff is then one of snapshots the view projected,
+ * see `viewSnapshot`), the mainboard section is replaced, in its place, by `add` (“Add”:
+ * additions and quantity increases) and `cut` (“Cut”: removals and quantity decreases):
+ * the cards to put into and pull out of the sleeves.
  */
-export function groupDiffForDisplay(diff: DeckDiff): DiffSection[] {
+export function groupDiffForDisplay(diff: DeckDiff, view: DeckView = 'mtg'): DiffSection[] {
   const commanders: CardChange[] = [];
   const zones = new Map<ZoneId, CardChange[]>();
   const moves: CardChange[] = [];
@@ -72,6 +100,23 @@ export function groupDiffForDisplay(diff: DeckDiff): DiffSection[] {
     }
   }
 
+  const zoneSections = (zone: ZoneId, changes: CardChange[]): DiffSection[] => {
+    if (view === 'cedh' && zone === 'mainboard') {
+      const strategic = changes.filter(
+        (change): change is AddedChange | RemovedChange | QuantityChange => change.type !== 'moved',
+      );
+      return [
+        { id: 'add', kind: 'add', title: 'Add', changes: strategic.filter(changeAddsCopies) },
+        {
+          id: 'cut',
+          kind: 'cut',
+          title: 'Cut',
+          changes: strategic.filter((change) => !changeAddsCopies(change)),
+        },
+      ];
+    }
+    return [{ id: `zone:${zone}`, kind: 'zone', title: zoneLabel(zone), zone, changes }];
+  };
   const sections: DiffSection[] = [
     {
       id: 'commanders',
@@ -80,13 +125,7 @@ export function groupDiffForDisplay(diff: DeckDiff): DiffSection[] {
       zone: 'commanders',
       changes: commanders,
     },
-    ...zoneEntries(zones).map(([zone, changes]): DiffSection => ({
-      id: `zone:${zone}`,
-      kind: 'zone',
-      title: zoneLabel(zone),
-      zone,
-      changes,
-    })),
+    ...zoneEntries(zones).flatMap(([zone, changes]) => zoneSections(zone, changes)),
     { id: 'moves', kind: 'moves', title: 'Moved', changes: moves },
     { id: 'printings', kind: 'printings', title: 'Printings', changes: printings },
     { id: 'tags', kind: 'tags', title: 'Card tags', changes: tags },
@@ -108,14 +147,20 @@ export interface SummaryChip {
  * and removed per zone (canonical zone order, moves excluded), moves aggregated by
  * destination zone, primer, deck info, then cosmetic changes. For example:
  * `Commanders changed`, `+2 Mainboard`, `−2 Mainboard`, `2 moved to Considering`,
- * `Primer +14 / −6 lines`, `Deck info changed`, `3 printing changes`.
+ * `Primer +14 / −6 lines`, `Deck info changed`, `3 printing changes`. In the cEDH view the
+ * mainboard's copies read as the sleeving to do: `2 to add`, `1 to cut`.
  */
-export function summarizeDiff(diff: DeckDiff): SummaryChip[] {
+export function summarizeDiff(diff: DeckDiff, view: DeckView = 'mtg'): SummaryChip[] {
   const chips: SummaryChip[] = [];
   if (diff.commanders.changed) chips.push({ label: 'Commanders changed', tone: 'neutral' });
 
   for (const stats of diff.stats.zones) {
     if (stats.zone === 'commanders') continue;
+    if (view === 'cedh' && stats.zone === 'mainboard') {
+      if (stats.added > 0) chips.push({ label: `${stats.added} to add`, tone: 'add' });
+      if (stats.removed > 0) chips.push({ label: `${stats.removed} to cut`, tone: 'remove' });
+      continue;
+    }
     const label = zoneLabel(stats.zone);
     if (stats.added > 0) chips.push({ label: `+${stats.added} ${label}`, tone: 'add' });
     if (stats.removed > 0) chips.push({ label: `${MINUS_SIGN}${stats.removed} ${label}`, tone: 'remove' });
@@ -194,6 +239,17 @@ export function suggestCommitMessage(diff: DeckDiff): string {
 /** Number of individual differences: card changes, deck info fields, and the primer. */
 export function diffChangeCount(diff: DeckDiff): number {
   return diff.changes.length + diff.deck.length + (primerHasChange(diff.primer) ? 1 : 0);
+}
+
+/**
+ * How many differences a view leaves out: those of the diff over the full snapshots
+ * (`full`) that the diff over the snapshots the view projected (`visible`) has no
+ * counterpart for. A move between a hidden and a shown zone has one (an addition or a
+ * removal), so it does not count; a change within hidden zones only does. `0` for the
+ * MTG view, whose diff is the full one.
+ */
+export function hiddenChangeCount(full: DeckDiff, visible: DeckDiff): number {
+  return Math.max(0, diffChangeCount(full) - diffChangeCount(visible));
 }
 
 const DECK_INFO_CLAUSES: Record<DeckInfoChange['field'], string> = {

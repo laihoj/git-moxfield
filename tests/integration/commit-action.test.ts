@@ -30,10 +30,11 @@ beforeEach(async () => {
   observationId = defined(defined(await services.getOverview(deckId)).working).id;
 });
 
-function commitForm(message: string): FormData {
+function commitForm(message: string, description?: string): FormData {
   const form = new FormData();
   form.set('deckId', deckId);
   form.set('message', message);
+  if (description !== undefined) form.set('description', description);
   form.set('expectedObservationId', observationId);
   form.set('expectedHeadCommitId', '');
   return form;
@@ -64,6 +65,25 @@ describe('commitAction: commit message length', () => {
       status: 'error',
       reason: 'invalid-message',
       message: `Commit messages can be at most ${MAX_COMMIT_MESSAGE_LENGTH} characters long.`,
+    });
+  });
+
+  it('passes the description on, and leaves a form without one alone', async () => {
+    expect(
+      await commitAction({ status: 'idle' }, commitForm('Subject', ' Why it changed.\n\nDetails. ')),
+    ).toMatchObject({
+      status: 'committed',
+      message: 'Subject',
+    });
+    const [version] = await services.listVersions(deckId);
+    expect(version).toMatchObject({ message: 'Subject', description: 'Why it changed.\n\nDetails.' });
+  });
+
+  it('refuses an absurdly long description before it reaches the service', async () => {
+    expect(await commitAction({ status: 'idle' }, commitForm('Subject', 'd'.repeat(50_000)))).toEqual({
+      status: 'error',
+      reason: 'invalid-input',
+      message: 'Commit descriptions can be at most 20000 characters long.',
     });
   });
 

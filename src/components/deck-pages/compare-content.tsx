@@ -120,9 +120,10 @@ export interface CompareContentProps {
 
 /** Compare: the pickers, both sides, the diff between them and the primer diff. */
 export function CompareContent({ scope, comparison }: CompareContentProps) {
-  const { diff, primerDiff } = comparison;
+  const { diff, primerDiff, view, hiddenChangeCount } = comparison;
   const fromEmpty = comparison.from.kind === 'empty';
   const routes = deckRoutes(scope);
+  const identical = diff.isEmpty && hiddenChangeCount === 0;
 
   return (
     <div className="flex flex-col gap-5 md:gap-6">
@@ -149,12 +150,18 @@ export function CompareContent({ scope, comparison }: CompareContentProps) {
         <CardHeader
           id="compare-changes"
           title="Changes"
-          description={diff.isEmpty ? 'Both sides are identical.' : diffCountLabel(diff)}
-          className={diff.isEmpty ? undefined : 'mb-3'}
+          description={
+            identical
+              ? 'Both sides are identical.'
+              : diff.isEmpty
+                ? 'Both sides are identical in the sleeved deck.'
+                : diffCountLabel(diff)
+          }
+          className={identical ? undefined : 'mb-3'}
         />
-        {!diff.isEmpty && (
+        {!identical && (
           <>
-            {!fromEmpty && <SummaryChips diff={diff} className="mb-5" />}
+            {!fromEmpty && !diff.isEmpty && <SummaryChips diff={diff} view={view} className="mb-5" />}
             <DiffView
               diff={diff}
               catalog={comparison.catalog}
@@ -165,6 +172,8 @@ export function CompareContent({ scope, comparison }: CompareContentProps) {
                 to: sideRef(comparison.to),
                 section: 'primer',
               })}
+              view={view}
+              hiddenChangeCount={hiddenChangeCount}
             />
           </>
         )}

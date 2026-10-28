@@ -112,7 +112,10 @@ export interface IngestCaptureInput {
 
 /** A version to commit (see {@link DeckServices.commit}). */
 export interface CommitInput {
+  /** The subject: one line (line breaks become spaces). */
   message: string;
+  /** More about the change, kept after the subject as a Git commit body; optional. */
+  description?: string;
   /** The observation the user reviewed. */
   expectedObservationId: string;
   /** HEAD the user saw (null when committing the first version). */

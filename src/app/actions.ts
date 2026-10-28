@@ -12,7 +12,12 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
 import { MAX_SEQUENCE } from '@/core/sequence';
-import { MAX_COMMIT_MESSAGE_LENGTH, MAX_DECK_INPUT_LENGTH, MAX_NOTE_LENGTH } from '@/core/text-limits';
+import {
+  MAX_COMMIT_DESCRIPTION_LENGTH,
+  MAX_COMMIT_MESSAGE_LENGTH,
+  MAX_DECK_INPUT_LENGTH,
+  MAX_NOTE_LENGTH,
+} from '@/core/text-limits';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
 import { createLogger } from '@/server/logger';
@@ -113,6 +118,14 @@ const commitSchema = z.object({
       MAX_COMMIT_MESSAGE_LENGTH * 2,
       `Commit messages can be at most ${MAX_COMMIT_MESSAGE_LENGTH} characters long.`,
     ),
+  /** More about the change, kept after the subject (optional); the same sanity bound as the message's. */
+  description: z
+    .string()
+    .trim()
+    .max(
+      MAX_COMMIT_DESCRIPTION_LENGTH * 2,
+      `Commit descriptions can be at most ${MAX_COMMIT_DESCRIPTION_LENGTH} characters long.`,
+    ),
   expectedObservationId: idSchema,
   /** Empty when committing the first version. */
   expectedHeadCommitId: z.string().trim().max(128),
@@ -125,6 +138,7 @@ export async function commitAction(_previous: CommitState, formData: FormData): 
   const parsed = commitSchema.safeParse({
     deckId: formString(formData, 'deckId', UNBOUNDED),
     message: formString(formData, 'message', UNBOUNDED),
+    description: formString(formData, 'description', UNBOUNDED),
     expectedObservationId: formString(formData, 'expectedObservationId', UNBOUNDED),
     expectedHeadCommitId: formString(formData, 'expectedHeadCommitId', UNBOUNDED),
     tags: formData.getAll('tags').filter((tag): tag is string => typeof tag === 'string'),
@@ -136,10 +150,11 @@ export async function commitAction(_previous: CommitState, formData: FormData): 
       message: parsed.error.issues[0]?.message ?? 'Check the form and try again.',
     };
   }
-  const { deckId, message, expectedObservationId, expectedHeadCommitId, tags } = parsed.data;
+  const { deckId, message, description, expectedObservationId, expectedHeadCommitId, tags } = parsed.data;
   try {
     const outcome = await services.commit(deckId, {
       message,
+      description,
       expectedObservationId,
       expectedHeadCommitId: expectedHeadCommitId === '' ? null : expectedHeadCommitId,
       tags,

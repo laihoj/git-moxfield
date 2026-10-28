@@ -45,6 +45,7 @@
  */
 import 'server-only';
 
+import type { DeckView } from '@/core/deck-view';
 import type { SessionUser } from '@/server/auth/types';
 import { getConfig } from '@/server/config';
 import { getDb } from '@/server/db/client';
@@ -83,7 +84,7 @@ function deckLocks(): KeyedMutex {
  * Asynchronous because the database is opened on first use: it rejects when the
  * database cannot be opened (see `getDb`).
  */
-export async function servicesFor(user: SessionUser): Promise<DeckServices> {
+export async function servicesFor(user: SessionUser, options: ReadOptions = {}): Promise<DeckServices> {
   return createServices({
     db: await getDb(),
     sources: getDeckSourceRegistry(),
@@ -91,7 +92,14 @@ export async function servicesFor(user: SessionUser): Promise<DeckServices> {
     workspaceId: user.workspaceId,
     logger: createLogger('services'),
     locks: deckLocks(),
+    view: options.view,
   });
+}
+
+/** How the asking reader wants deck data read (see `ServiceDependencies.view`). */
+export interface ReadOptions {
+  /** The deck view of the request (`currentDeckView()` in `@/server/deck-view`). Default: every zone. */
+  view?: DeckView;
 }
 
 /**
@@ -111,11 +119,15 @@ export async function shareLinkServicesFor(user: SessionUser): Promise<ShareLink
  * Records the view (at most hourly). Viewer pages need no session and should not look
  * for one.
  */
-export async function sharedDeckServices(token: unknown): Promise<SharedDeckAccess | null> {
+export async function sharedDeckServices(
+  token: unknown,
+  options: ReadOptions = {},
+): Promise<SharedDeckAccess | null> {
   return openSharedDeck(token, {
     db: await getDb(),
     sources: getDeckSourceRegistry(),
     logger: createLogger('share-links'),
+    view: options.view,
   });
 }
 

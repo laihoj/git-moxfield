@@ -1,9 +1,10 @@
 import clsx from 'clsx';
-import { ArrowRight, Equal } from 'lucide-react';
+import { ArrowRight, Equal, EyeOff } from 'lucide-react';
 import type { Route } from 'next';
 import type { ReactNode } from 'react';
 
 import { groupInto } from '@/core/collections';
+import { DEFAULT_DECK_VIEW, type DeckView } from '@/core/deck-view';
 import {
   diffChangeCount,
   groupDiffForDisplay,
@@ -43,14 +44,30 @@ export interface DiffViewProps {
   primerHref?: Route;
   /** Text shown when nothing differs. */
   emptyMessage?: ReactNode;
+  /** The deck view the diff was computed for: the cEDH view lists the mainboard as Add and Cut. */
+  view?: DeckView;
+  /** Differences the view left out of `diff` (see `hiddenChangeCount`); they are mentioned, never listed. */
+  hiddenChangeCount?: number;
 }
 
 /**
  * Semantic diff, in the order of docs/ux.md: Commanders, zones, Moved, Deck info,
- * Primer, then collapsed cosmetic sections (Printings, Card tags, Renamed).
+ * Primer, then collapsed cosmetic sections (Printings, Card tags, Renamed). In the cEDH
+ * view the mainboard reads as Add and Cut, and a note says how many changes outside the
+ * sleeved deck the view leaves out.
  */
-export function DiffView({ diff, catalog, scope, initial = false, primerHref, emptyMessage }: DiffViewProps) {
+export function DiffView({
+  diff,
+  catalog,
+  scope,
+  initial = false,
+  primerHref,
+  emptyMessage,
+  view = DEFAULT_DECK_VIEW,
+  hiddenChangeCount = 0,
+}: DiffViewProps) {
   if (diff.isEmpty) {
+    if (hiddenChangeCount > 0) return <HiddenChangesNote count={hiddenChangeCount} standalone />;
     return (
       <p className="flex items-center gap-2 py-2 text-sm text-muted">
         <Equal aria-hidden="true" className="size-4" />
@@ -61,14 +78,14 @@ export function DiffView({ diff, catalog, scope, initial = false, primerHref, em
   if (initial)
     return <InitialVersionView diff={diff} catalog={catalog} scope={scope} primerHref={primerHref} />;
 
-  const sections = groupDiffForDisplay(diff);
+  const sections = groupDiffForDisplay(diff, view);
   const strategic = sections.filter((section) => !COSMETIC_KINDS.has(section.kind));
   const cosmetic = sections.filter((section) => COSMETIC_KINDS.has(section.kind));
 
   return (
     <div className="flex flex-col gap-5">
       {strategic.map((section) => (
-        <ChangeSection key={section.id} section={section} catalog={catalog} scope={scope} />
+        <ChangeSection key={section.id} section={section} catalog={catalog} scope={scope} view={view} />
       ))}
       {diff.deck.length > 0 && <DeckInfoSection changes={diff.deck} />}
       <PrimerSection diff={diff} primerHref={primerHref} />
@@ -82,14 +99,42 @@ export function DiffView({ diff, catalog, scope, initial = false, primerHref, em
             >
               <ul className="divide-y divide-border">
                 {section.changes.map((change) => (
-                  <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
+                  <DiffRow
+                    key={changeKey(change)}
+                    change={change}
+                    catalog={catalog}
+                    scope={scope}
+                    view={view}
+                  />
                 ))}
               </ul>
             </Disclosure>
           ))}
         </div>
       )}
+      {hiddenChangeCount > 0 && <HiddenChangesNote count={hiddenChangeCount} />}
     </div>
+  );
+}
+
+/**
+ * What the cEDH view leaves out: changes in the sideboard, Considering and any other
+ * zone outside the sleeved deck. On its own (`standalone`) when they are all there is.
+ */
+function HiddenChangesNote({ count, standalone = false }: { count: number; standalone?: boolean }) {
+  return (
+    <p
+      className={clsx(
+        'flex items-start gap-2 text-sm text-muted',
+        standalone ? 'py-2' : 'border-t border-border pt-3',
+      )}
+    >
+      <EyeOff aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+      <span>
+        Left out by the cEDH view: {pluralize(count, 'change')} outside the sleeved deck (sideboard,
+        Considering).
+      </span>
+    </p>
   );
 }
 
@@ -125,28 +170,34 @@ function changeKey(change: DiffSection['changes'][number]): string {
   return `${change.type}:${change.key}`;
 }
 
+/** The heading color of a section: its zone's, or the add and remove colors of the cEDH view's Add and Cut. */
+function sectionTextClass(section: DiffSection): string | undefined {
+  if (section.kind === 'add') return 'text-add';
+  if (section.kind === 'cut') return 'text-remove';
+  return section.zone === undefined ? undefined : zoneTextClass(section.zone);
+}
+
 function ChangeSection({
   section,
   catalog,
   scope,
+  view,
 }: {
   section: DiffSection;
   catalog: Record<CardKey, CardFacts>;
   scope: DeckScope;
+  view: DeckView;
 }) {
   const headingId = `diff-${domIdSlug(section.id)}`;
   return (
     <section aria-labelledby={headingId}>
-      <Overline
-        id={headingId}
-        className={clsx('mb-1', section.zone !== undefined && zoneTextClass(section.zone))}
-      >
+      <Overline id={headingId} className={clsx('mb-1', sectionTextClass(section))}>
         {section.title}
         <span className="ml-1.5 font-medium text-subtle normal-case tabular">{section.changes.length}</span>
       </Overline>
       <ul className="divide-y divide-border">
         {section.changes.map((change) => (
-          <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} />
+          <DiffRow key={changeKey(change)} change={change} catalog={catalog} scope={scope} view={view} />
         ))}
       </ul>
     </section>

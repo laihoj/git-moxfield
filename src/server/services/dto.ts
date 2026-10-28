@@ -3,6 +3,7 @@
  * `./types`. Pure helpers; no I/O.
  */
 import { commanderNames, playedCardCount } from '@/core/canonical';
+import { splitCommitMessage } from '@/core/commit-message';
 import type { DeckDiff } from '@/core/diff/types';
 import { shortId } from '@/core/hash';
 import type { ZoneQuantity } from '@/core/history/types';
@@ -13,11 +14,13 @@ import type { CommitNoteRecord, CommitRecord, ObservationRecord } from '@/server
 import type { CommitNoteDTO, DeckStatus, ObservationDTO, VersionListItemDTO, VersionRefDTO } from './types';
 
 export function toVersionRefDTO(commit: CommitRecord): VersionRefDTO {
+  const { subject, description } = splitCommitMessage(commit.message);
   return {
     commitId: commit.id,
     shortId: shortId(commit.id),
     sequence: commit.sequence,
-    message: commit.message,
+    message: subject,
+    description,
     createdAt: commit.createdAt,
     sourceVersion: commit.sourceVersion,
     sourceUpdatedAt: commit.sourceUpdatedAt,

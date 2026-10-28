@@ -13,14 +13,22 @@
  *
  * Every view is asynchronous. Remotely each repository call is a round trip, so reads
  * that do not depend on each other are started together.
+ *
+ * The deck view (`@/core/deck-view`) the instance is built for shapes what it returns:
+ * in the cEDH view, snapshots are projected to the played zones before diffing and
+ * listing, and a card's zones leave out the hidden ones. Restore exports never are: they
+ * put the whole deck back.
  */
 import 'server-only';
 
 import { allCards, cardName, cardZoneIndex, emptySnapshot } from '@/core/canonical';
 import { cardKey } from '@/core/card-key';
-import { diffSnapshots, renamedKeys } from '@/core/diff';
+import { splitCommitMessage } from '@/core/commit-message';
+import { viewSnapshot, viewSnapshotPair, viewZoneQuantities, type DeckView } from '@/core/deck-view';
+import { diffSnapshots, hiddenChangeCount, renamedKeys } from '@/core/diff';
 import { deriveCardHistory, traceCardPoints } from '@/core/history/card-history';
 import type { CardHistory, VersionMeta, ZoneQuantity } from '@/core/history/types';
+import type { DeckDiff } from '@/core/diff/types';
 import type { CanonicalSnapshot, CardFacts, CardKey } from '@/core/model';
 import { primerLineDiff } from '@/core/primer/primer-diff';
 import { MAX_CARD_QUERY_LENGTH } from '@/core/text-limits';
@@ -118,7 +126,25 @@ export class DeckHistory {
   constructor(
     private readonly repos: HistoryRepositories,
     private readonly sources: DeckSourceRegistry,
+    /** The deck view the read models are computed for. */
+    private readonly view: DeckView = 'mtg',
   ) {}
+
+  /** `snapshot` as the view sees it (the snapshot itself in the MTG view). */
+  private shown(snapshot: CanonicalSnapshot): CanonicalSnapshot {
+    return viewSnapshot(snapshot, this.view);
+  }
+
+  /**
+   * The diff `before` → `after` as the view sees it, and how many differences of the full
+   * diff it leaves out (`0` in the MTG view, where both diffs are one).
+   */
+  private viewDiff(before: CanonicalSnapshot, after: CanonicalSnapshot): { diff: DeckDiff; hidden: number } {
+    const full = diffSnapshots(before, after);
+    if (this.view === 'mtg') return { diff: full, hidden: 0 };
+    const diff = diffSnapshots(...viewSnapshotPair(before, after, this.view));
+    return { diff, hidden: hiddenChangeCount(full, diff) };
+  }
 
   /** A primer as markdown, by the deck's source (as is for an unknown source); `null` without one. */
   primerMarkdown(source: string, primer: string | null): string | null {
@@ -157,8 +183,12 @@ export class DeckHistory {
     ]);
     return selected.map((commit, index) => {
       const parent = parents[index] ?? null;
-      const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
-      const before = parent ? requireSnapshot(snapshots, parent.snapshotHash) : emptySnapshot(snapshot.deck);
+      const stored = requireSnapshot(snapshots, commit.snapshotHash);
+      const [before, snapshot] = viewSnapshotPair(
+        parent ? requireSnapshot(snapshots, parent.snapshotHash) : emptySnapshot(stored.deck),
+        stored,
+        this.view,
+      );
       return toVersionListItemDTO({
         commit,
         parent,
@@ -205,20 +235,23 @@ export class DeckHistory {
     const snapshots = await this.repos.snapshots.getMany(
       parent ? [commit.snapshotHash, parent.snapshotHash] : [commit.snapshotHash],
     );
-    const snapshot = requireSnapshot(snapshots, commit.snapshotHash);
+    const stored = requireSnapshot(snapshots, commit.snapshotHash);
     const parentSnapshot = parent ? requireSnapshot(snapshots, parent.snapshotHash) : null;
-    const diff = diffSnapshots(parentSnapshot ?? emptySnapshot(snapshot.deck), snapshot);
+    const { diff, hidden } = this.viewDiff(parentSnapshot ?? emptySnapshot(stored.deck), stored);
+    const snapshot = this.shown(stored);
     const primerDiff = primerLineDiff(parentSnapshot ? parentSnapshot.primer : '', snapshot.primer);
 
     const position = lineage.findIndex((entry) => entry.id === commit.id);
     const next = position === -1 ? undefined : lineage[position + 1];
 
     return {
+      view: this.view,
       version: toVersionListItemDTO({ commit, parent, snapshot, diff, tags }),
       snapshot,
       primerMarkdown: this.primerMarkdown(deck.source, snapshot.primer),
       sourceMetadata: commit.sourceMetadata,
       diff,
+      hiddenChangeCount: hidden,
       primerDiff,
       notes: notes.map(toCommitNoteDTO),
       catalog: await this.catalogFor([...allCards(snapshot).map((card) => card.key), ...diffCardKeys(diff)]),
@@ -271,15 +304,17 @@ export class DeckHistory {
     // deck does not report the deck name, format and tags as changes.
     const fromSnapshot = from.snapshot ?? emptySnapshot(to.snapshot?.deck);
     const toSnapshot = to.snapshot ?? emptySnapshot(from.snapshot?.deck);
-    const diff = diffSnapshots(fromSnapshot, toSnapshot);
+    const { diff, hidden } = this.viewDiff(fromSnapshot, toSnapshot);
     const [catalog, versions] = await Promise.all([
       this.catalogFor(diffCardKeys(diff)),
       this.repos.commits.listForDeck(deckId),
     ]);
     return {
+      view: this.view,
       from: from.side,
       to: to.side,
       diff,
+      hiddenChangeCount: hidden,
       primerDiff: primerLineDiff(fromSnapshot.primer, toSnapshot.primer),
       primers: { from: fromSnapshot.primer, to: toSnapshot.primer },
       catalog,
@@ -312,7 +347,7 @@ export class DeckHistory {
       this.repos.commits.head(deckId),
       this.repos.catalog.getMany(hits.map((hit) => hit.key)),
     ]);
-    const headIndex = head ? cardZoneIndex(await this.snapshot(head.snapshotHash)) : null;
+    const headIndex = head ? cardZoneIndex(this.shown(await this.snapshot(head.snapshotHash))) : null;
     return hits.map((hit) => ({
       key: hit.key,
       name: hit.name,
@@ -342,14 +377,20 @@ export class DeckHistory {
     if (key === '') return null;
 
     const lineage = await this.repos.commits.lineage(deckId);
-    const inputs = new CardHistoryInputs(this.repos, deckId, lineage, working?.snapshot ?? null);
+    const inputs = new CardHistoryInputs(
+      this.repos,
+      deckId,
+      lineage,
+      working ? this.shown(working.snapshot) : null,
+      this.view,
+    );
     const [, keyFacts] = await Promise.all([inputs.prefetch(key), this.repos.catalog.getMany([key])]);
 
     const versions: VersionMeta[] = lineage.map((commit) => ({
       commitId: commit.id,
       sequence: commit.sequence,
       at: commit.createdAt,
-      message: commit.message,
+      message: splitCommitMessage(commit.message).subject,
     }));
     if (working) {
       versions.push({ commitId: null, sequence: null, at: working.fetchedAt, message: working.label });
@@ -438,13 +479,15 @@ class CardHistoryInputs {
 
   /**
    * @param lineage the deck's versions, oldest first: points `0 … lineage.length - 1`.
-   * @param working the working state's snapshot: the last point, when given.
+   * @param working the working state's snapshot (as the view sees it): the last point, when given.
+   * @param view the deck view: a card's zones leave out the ones it hides.
    */
   constructor(
     private readonly repos: HistoryRepositories,
     private readonly deckId: string,
     private readonly lineage: readonly CommitRecord[],
     working: CanonicalSnapshot | null,
+    private readonly view: DeckView,
   ) {
     if (working !== null) this.#snapshots.set(lineage.length, working);
   }
@@ -454,7 +497,7 @@ class CardHistoryInputs {
     return this.lineage.length + (this.#snapshots.has(this.lineage.length) ? 1 : 0);
   }
 
-  /** The card `key`'s zones at point `index` (empty when the point does not contain it). */
+  /** The card `key`'s zones at point `index` that the view shows (empty when the point does not contain it there). */
   zonesAt(key: CardKey, index: number): ZoneQuantity[] {
     const commit = this.lineage[index];
     if (!commit)
@@ -464,7 +507,7 @@ class CardHistoryInputs {
       this.#missingKeys.add(key);
       throw new MissingCardHistoryInput(`The versions containing ${key} are not loaded`);
     }
-    return byCommit.get(commit.id) ?? [];
+    return viewZoneQuantities(this.view, byCommit.get(commit.id) ?? []);
   }
 
   /** The full snapshot at point `index`. */

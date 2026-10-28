@@ -14,10 +14,12 @@ import {
 import { emptySnapshot } from '../canonical';
 import type { ZoneId } from '../zones';
 import { diffSnapshots } from './deck-diff';
+import { viewSnapshot } from '../deck-view';
 import {
   COMMIT_MESSAGE_MAX_LENGTH,
   diffChangeCount,
   groupDiffForDisplay,
+  hiddenChangeCount,
   suggestCommitMessage,
   summarizeDiff,
   type DiffSection,
@@ -183,6 +185,93 @@ describe('groupDiffForDisplay', () => {
 
   it('returns no sections for an empty diff', () => {
     expect(groupDiffForDisplay(diffSnapshots(baseWith(), baseWith()))).toEqual([]);
+  });
+
+  describe('in the cEDH view', () => {
+    /** The diff a cEDH reader gets: both snapshots projected to the played zones first. */
+    function sleevedDiff(mutate: (zones: ZoneSpecs, spec: SnapshotSpec) => void) {
+      const full = diffFromBase(mutate);
+      const visible = diffSnapshots(viewSnapshot(baseWith(), 'cedh'), viewSnapshot(baseWith(mutate), 'cedh'));
+      return { full, visible };
+    }
+
+    it('lists the mainboard as Add and Cut, in its place, and nothing of the hidden zones', () => {
+      const { full, visible } = sleevedDiff((zones) => {
+        // Cut to Considering, added from Considering, a new card, a fourth Island, one fewer Sol Ring.
+        remove(zones, 'mainboard', 'Dress Down');
+        add(zones, 'considering', 'Dress Down');
+        remove(zones, 'considering', 'Mnemonic Betrayal');
+        add(zones, 'mainboard', 'Mnemonic Betrayal');
+        add(zones, 'mainboard', 'Final Fortune');
+        remove(zones, 'mainboard', 'Island');
+        add(zones, 'mainboard', '4 Island');
+        remove(zones, 'mainboard', 'Sol Ring');
+        // Changes within the hidden zones only.
+        remove(zones, 'sideboard', 'Orcish Bowmasters');
+        add(zones, 'considering', 'Abrade');
+        remove(zones, 'commanders', 'Tymna the Weaver');
+        add(zones, 'commanders', 'Thrasios, Triton Hero');
+      });
+      expect(sectionOutline(groupDiffForDisplay(visible, 'cedh'))).toEqual([
+        {
+          id: 'commanders',
+          kind: 'commanders',
+          title: 'Commanders',
+          zone: 'commanders',
+          changes: ['added thrasios, triton hero', 'removed tymna the weaver'],
+        },
+        {
+          id: 'add',
+          kind: 'add',
+          title: 'Add',
+          changes: ['added final fortune', 'added mnemonic betrayal', 'quantity island'],
+        },
+        { id: 'cut', kind: 'cut', title: 'Cut', changes: ['removed dress down', 'removed sol ring'] },
+      ]);
+      // The moves became an addition and a removal; the sideboard and Considering changes are left out.
+      expect(hiddenChangeCount(full, visible)).toBe(2);
+      expect(summarizeDiff(visible, 'cedh')).toEqual([
+        { label: 'Commanders changed', tone: 'neutral' },
+        { label: '3 to add', tone: 'add' },
+        { label: '2 to cut', tone: 'remove' },
+      ]);
+    });
+
+    it('omits Add or Cut when there is nothing to add or cut, and leaves other zones as they are', () => {
+      const { visible } = sleevedDiff((zones) => {
+        add(zones, 'mainboard', 'Final Fortune');
+        add(zones, 'companions', 'Lurrus of the Dream-Den');
+      });
+      expect(sectionOutline(groupDiffForDisplay(visible, 'cedh'))).toEqual([
+        {
+          id: 'zone:companions',
+          kind: 'zone',
+          title: 'Companion',
+          zone: 'companions',
+          changes: ['added lurrus of the dream-den'],
+        },
+        { id: 'add', kind: 'add', title: 'Add', changes: ['added final fortune'] },
+      ]);
+      expect(summarizeDiff(visible, 'cedh')).toEqual([
+        { label: '+1 Companion', tone: 'add' },
+        { label: '1 to add', tone: 'add' },
+      ]);
+    });
+
+    it('counts a change in the hidden zones alone as left out, and nothing in the MTG view', () => {
+      const { full, visible } = sleevedDiff((zones) => {
+        add(zones, 'considering', 'Abrade');
+      });
+      expect(visible.isEmpty).toBe(true);
+      expect(hiddenChangeCount(full, visible)).toBe(1);
+      expect(hiddenChangeCount(full, full)).toBe(0);
+    });
+
+    it('groups the MTG view exactly as before', () => {
+      const diff = richDiff();
+      expect(groupDiffForDisplay(diff, 'mtg')).toEqual(groupDiffForDisplay(diff));
+      expect(summarizeDiff(diff, 'mtg')).toEqual(summarizeDiff(diff));
+    });
   });
 });
 

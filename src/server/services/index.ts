@@ -12,6 +12,7 @@
  */
 import 'server-only';
 
+import { DEFAULT_DECK_VIEW, type DeckView } from '@/core/deck-view';
 import type { AppConfig } from '@/server/config';
 import type { Db } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
@@ -57,6 +58,12 @@ export interface ServiceDependencies {
    * Default: a new, private instance.
    */
   locks?: KeyedMutex;
+  /**
+   * The deck view the read models (diffs, version stats, card histories) are computed
+   * for: every zone (`mtg`, the default), or the sleeved deck only (`cedh`). Writes
+   * (commits) and restore exports always use the full snapshots.
+   */
+  view?: DeckView;
 }
 
 /** Builds the service layer for one workspace from explicit dependencies. */
@@ -69,5 +76,6 @@ export function createServices(deps: ServiceDependencies): DeckServices {
     now,
     logger: deps.logger ?? createLogger('services'),
     locks: deps.locks ?? new KeyedMutex(),
+    view: deps.view ?? DEFAULT_DECK_VIEW,
   });
 }

@@ -58,6 +58,26 @@ has **Share**. A shared deck has the same tabs with **Overview** (its latest ver
 what changed, beside the recent versions) in place of Status, and a read-only banner
 instead of the account menu.
 
+At the right end of the tab row (alone, right-aligned, on a phone) sits the **deck view**
+toggle, **MTG · cEDH**, for owners and viewers alike:
+
+- **MTG** (the default) is every board as Moxfield has it: the sideboard and Considering
+  are part of the picture, and a card moving between the mainboard and Considering is a
+  move.
+- **cEDH** is the sleeved deck only. Commander decks have no sideboard, and the sideboard
+  and Considering are a scratchpad, so the view leaves every zone but the played ones out
+  of sight. A card moved from the mainboard to Considering is a **cut**, one moved back is
+  an **add**: exactly what to pull from and put into the sleeves. The Changes card lists
+  the mainboard as **Add** and **Cut**, the chips read `2 to add` · `1 to cut`, the
+  suggested message says `Add Beseech the Mirror; cut Dress Down`, version stats and card
+  histories count the sleeved deck, and the Deck tab shows its zones only. Changes the view
+  leaves out are counted, never hidden silently ("Left out by the cEDH view: 1 change
+  outside the sleeved deck"), the status stays that of the whole deck, and such changes can
+  still be committed. Commits and Restore always use the whole deck.
+
+The choice is remembered per browser (a cookie), so it holds across every deck's pages,
+needs no account, and works for share link viewers.
+
 ## Accounts
 
 There is no password form anywhere. The sign-in page lists the ways in: run your
@@ -112,6 +132,8 @@ Moxfield version 143 · v47 committed at 137
 
 Commit message
 [ Testing Broodlord package          ]
+Description (optional)
+[ Why: Broodlord lines close faster  ]
 Tags  (tournament) (stable) (+)
 [        Commit v48        ]
 
@@ -163,11 +185,23 @@ Refusals explain the way forward: the deck's own Moxfield deck ("already follows
 or a Moxfield deck another of your decks tracks ("stop tracking that deck first", and
 whether that loses versions).
 
+## Commit message and description
+
+A commit message has Git's shape. The **message** is a brief subject line, as a Git
+subject is: it is what the toast, the recent versions, History, the compare pickers and
+card histories show. The **description** (optional, under the message in the commit form)
+holds the elaboration, kept after a blank line in the same immutable, hashed message, so a
+Git export carries it as the commit body. The version page shows the description under
+its heading; rows that have one carry a small mark. Notes remain the mutable annotation of
+a version (results, matchups), added at any time.
+
 ## Diff presentation
 
 Sections, in this order: Commanders (only when changed), each zone (added, removed
 and quantity rows), Moved, Deck info, Primer, then collapsed cosmetic sections
-(Printings, Card tags, Renamed).
+(Printings, Card tags, Renamed). In the cEDH view the mainboard section is **Add** and
+**Cut** instead (quantity increases under Add, decreases under Cut), with rows spoken as
+"Add: …" and "Cut: …".
 
 Row anatomy: change glyph (`+` `−` `⇄` `±`), quantity when it is not 1, card name,
 then on the right the mana cost and the from → to zone badges. Zone badges use stable

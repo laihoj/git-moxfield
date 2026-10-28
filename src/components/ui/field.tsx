@@ -94,10 +94,20 @@ export function Input({ className, ...props }: ComponentPropsWithRef<'input'>) {
   return <input className={clsx(CONTROL, 'h-11 px-3 text-ellipsis md:h-10', className)} {...props} />;
 }
 
-export function Textarea({ className, ...props }: ComponentPropsWithoutRef<'textarea'>) {
+export interface TextareaProps extends ComponentPropsWithoutRef<'textarea'> {
+  /** `sm`: a shorter minimum height, for an optional field in a compact form. */
+  size?: 'md' | 'sm';
+}
+
+export function Textarea({ size = 'md', className, ...props }: TextareaProps) {
   return (
     <textarea
-      className={clsx(CONTROL, 'min-h-28 resize-y px-3 py-2.5 leading-relaxed', className)}
+      className={clsx(
+        CONTROL,
+        'resize-y px-3 py-2.5 leading-relaxed',
+        size === 'sm' ? 'min-h-20' : 'min-h-28',
+        className,
+      )}
       {...props}
     />
   );

@@ -36,6 +36,7 @@ describe('sharedDeckTitle', () => {
     shortId: 'c1',
     sequence: 1,
     message: 'Initial version',
+    description: '',
     createdAt: '2026-10-01T12:00:00.000Z',
     sourceVersion: null,
     sourceUpdatedAt: null,

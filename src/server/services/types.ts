@@ -2,6 +2,7 @@
  * Data transfer objects returned by the service layer to the UI (server components,
  * server actions, route handlers). Plain serializable data only.
  */
+import type { DeckView } from '@/core/deck-view';
 import type { DeckDiff, DiffStats, PrimerChange } from '@/core/diff/types';
 import type { CardHistory, ZoneQuantity } from '@/core/history/types';
 import type { CanonicalSnapshot, CardFacts, CardKey, IngestWarning, SourceDeckMetadata } from '@/core/model';
@@ -28,7 +29,10 @@ export interface VersionRefDTO {
   commitId: string;
   shortId: string;
   sequence: number;
+  /** The commit message's subject: its first line. */
   message: string;
+  /** The rest of the commit message, after the subject; `''` when there is none. */
+  description: string;
   createdAt: string;
   sourceVersion: number | null;
   sourceUpdatedAt: string | null;
@@ -92,8 +96,15 @@ export interface DeckRelinkDTO {
 }
 
 export interface DeckOverviewDTO extends DeckSummaryDTO {
-  /** HEAD → working diff (HEAD missing ⇒ diff from the empty deck). Null without a working state. */
+  /** The view `diff` (and `recentVersions`, `catalog`, `suggestedMessage`) is computed for. */
+  view: DeckView;
+  /**
+   * HEAD → working diff (HEAD missing ⇒ diff from the empty deck), over the snapshots as
+   * `view` sees them. Null without a working state.
+   */
   diff: DeckDiff | null;
+  /** Differences `diff` leaves out because `view` hides their zones (see `hiddenChangeCount`); `0` in the MTG view. */
+  hiddenChangeCount: number;
   /** The deck's changes of Moxfield deck, newest first. */
   relinks: DeckRelinkDTO[];
   warnings: IngestWarning[];
@@ -116,13 +127,18 @@ export interface CommitNoteDTO {
 
 export interface VersionDetailDTO {
   deck: DeckSummaryDTO;
+  /** The view `snapshot`, `diff` and `catalog` are computed for. */
+  view: DeckView;
   version: VersionListItemDTO;
+  /** The version's snapshot as `view` sees it (every zone in the MTG view). */
   snapshot: CanonicalSnapshot;
   /** The snapshot's primer as portable markdown (converted by the deck's source); `null` without a primer. */
   primerMarkdown: string | null;
   sourceMetadata: SourceDeckMetadata;
-  /** Diff relative to the parent (or empty deck). */
+  /** Diff relative to the parent (or empty deck), over the snapshots as `view` sees them. */
   diff: DeckDiff;
+  /** Differences `diff` leaves out because `view` hides their zones; `0` in the MTG view. */
+  hiddenChangeCount: number;
   primerDiff: PrimerDiff;
   notes: CommitNoteDTO[];
   catalog: Record<CardKey, CardFacts>;
@@ -137,9 +153,14 @@ export type CompareSideDTO =
 
 export interface CompareDTO {
   deck: DeckSummaryDTO;
+  /** The view `diff` and `catalog` are computed for. */
+  view: DeckView;
   from: CompareSideDTO;
   to: CompareSideDTO;
+  /** The diff over the snapshots as `view` sees them. */
   diff: DeckDiff;
+  /** Differences `diff` leaves out because `view` hides their zones; `0` in the MTG view. */
+  hiddenChangeCount: number;
   primerDiff: PrimerDiff;
   /**
    * Each side's primer source (the source's own markup), so a primer can be copied back

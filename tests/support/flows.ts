@@ -49,7 +49,7 @@ export async function captureSpec(
 export async function commitWorkingState(
   services: DeckServices,
   deckId: string,
-  input: { message: string; tags?: string[] },
+  input: { message: string; description?: string; tags?: string[] },
 ): Promise<CommitOutcome> {
   const overview = await services.getOverview(deckId);
   if (!overview?.working) {
@@ -57,6 +57,7 @@ export async function commitWorkingState(
   }
   return services.commit(deckId, {
     message: input.message,
+    ...(input.description === undefined ? {} : { description: input.description }),
     expectedObservationId: overview.working.id,
     expectedHeadCommitId: overview.head?.commitId ?? null,
     ...(input.tags ? { tags: input.tags } : {}),

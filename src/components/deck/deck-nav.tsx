@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import { Activity, GitCompareArrows, History, LayoutDashboard, Search } from 'lucide-react';
 import type { Route } from 'next';
 import { useSelectedLayoutSegments } from 'next/navigation';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 import { Link } from '@/components/ui/navigation';
 import { deckRoutes, type DeckScope } from '@/lib/routes';
@@ -47,8 +47,11 @@ function activeSection(segments: readonly string[]): DeckSection | null {
  *
  * Share link viewers get the same tabs within the link's pages, with Overview in place
  * of Status: they see committed versions only, never the state of the deck on Moxfield.
+ *
+ * `trailing` (the deck view toggle) sits at the right end of the tab row from `md` up, and
+ * alone, right-aligned, where the tabs would be on small screens.
  */
-export function DeckNav({ scope }: { scope: DeckScope }) {
+export function DeckNav({ scope, trailing }: { scope: DeckScope; trailing?: ReactNode }) {
   const active = activeSection(useSelectedLayoutSegments());
   const routes = deckRoutes(scope);
   const items: NavItem[] = [
@@ -60,32 +63,46 @@ export function DeckNav({ scope }: { scope: DeckScope }) {
     { id: 'cards', label: 'Cards', href: routes.cards(), Icon: Search },
   ];
 
+  const tabs = (
+    <nav
+      aria-label="Deck"
+      className={clsx('hidden md:block', trailing === undefined && 'border-b border-border')}
+    >
+      <ul className="-mb-px flex gap-1">
+        {items.map(({ id, label, href, Icon }) => (
+          <li key={id}>
+            <Link
+              href={href}
+              aria-current={active === id ? 'page' : undefined}
+              className={clsx(
+                'flex h-11 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors',
+                active === id
+                  ? 'border-accent text-fg'
+                  : 'border-transparent text-muted hover:border-border-strong hover:text-fg',
+              )}
+            >
+              <Icon
+                aria-hidden="true"
+                className={clsx('size-4', active === id ? 'text-accent' : 'text-subtle')}
+              />
+              {label}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+
   return (
     <>
-      <nav aria-label="Deck" className="hidden border-b border-border md:block">
-        <ul className="-mb-px flex gap-1">
-          {items.map(({ id, label, href, Icon }) => (
-            <li key={id}>
-              <Link
-                href={href}
-                aria-current={active === id ? 'page' : undefined}
-                className={clsx(
-                  'flex h-11 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors',
-                  active === id
-                    ? 'border-accent text-fg'
-                    : 'border-transparent text-muted hover:border-border-strong hover:text-fg',
-                )}
-              >
-                <Icon
-                  aria-hidden="true"
-                  className={clsx('size-4', active === id ? 'text-accent' : 'text-subtle')}
-                />
-                {label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      {trailing === undefined ? (
+        tabs
+      ) : (
+        <div className="flex items-end justify-between gap-3 md:border-b md:border-border">
+          {tabs}
+          <div className="ml-auto md:pb-1.5">{trailing}</div>
+        </div>
+      )}
 
       <nav
         aria-label="Deck"

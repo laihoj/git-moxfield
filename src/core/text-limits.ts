@@ -1,7 +1,10 @@
 /** Limits on the text people type, for the forms that cap inputs and the services that enforce them. */
 
-/** Maximum commit message length in characters (Unicode code points, after NFC and trimming). */
+/** Maximum commit message length in characters (Unicode code points, after NFC and trimming): the subject line. */
 export const MAX_COMMIT_MESSAGE_LENGTH = 2000;
+
+/** Maximum length of a commit's description (the text after the subject), in the same units. */
+export const MAX_COMMIT_DESCRIPTION_LENGTH = 20_000;
 
 /** Longest display name of a user (visible characters, after normalizing). */
 export const MAX_DISPLAY_NAME_LENGTH = 40;
