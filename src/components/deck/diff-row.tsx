@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import type { Route } from 'next';
 import type { ReactNode } from 'react';
 
+import { DEFAULT_DECK_VIEW, type DeckView } from '@/core/deck-view';
 import type { CanonicalPrinting, CardFacts, CardKey } from '@/core/model';
 import type { CardChange } from '@/core/diff/types';
 import { zoneLabel } from '@/core/zones';
@@ -16,25 +17,32 @@ import { ZoneBadge } from './zone-badge';
 
 type GlyphTone = Extract<BadgeTone, 'add' | 'remove' | 'move' | 'cosmetic'>;
 
-/** Glyph, tone and spoken meaning of a change (meaning is never carried by color alone). */
-function glyphOf(change: CardChange): { glyph: string; tone: GlyphTone; meaning: string } {
+/**
+ * Glyph, tone and spoken meaning of a change (meaning is never carried by color alone).
+ * In the cEDH view, copies that enter or leave a zone are what to add to and cut from the
+ * sleeved deck, and are spoken so.
+ */
+function glyphOf(change: CardChange, view: DeckView): { glyph: string; tone: GlyphTone; meaning: string } {
+  const sleeving = view === 'cedh';
   switch (change.type) {
     case 'added':
-      return { glyph: '+', tone: 'add', meaning: 'Added' };
+      return { glyph: '+', tone: 'add', meaning: sleeving ? 'Add' : 'Added' };
     case 'removed':
-      return { glyph: MINUS_SIGN, tone: 'remove', meaning: 'Removed' };
+      return { glyph: MINUS_SIGN, tone: 'remove', meaning: sleeving ? 'Cut' : 'Removed' };
     case 'moved':
       return {
         glyph: '⇄',
         tone: 'move',
         meaning: `Moved from ${zoneLabel(change.from)} to ${zoneLabel(change.to)}`,
       };
-    case 'quantity':
+    case 'quantity': {
+      const more = change.to > change.from;
       return {
         glyph: '±',
-        tone: change.to > change.from ? 'add' : 'remove',
-        meaning: change.to > change.from ? 'More copies' : 'Fewer copies',
+        tone: more ? 'add' : 'remove',
+        meaning: sleeving ? (more ? 'Add copies' : 'Cut copies') : more ? 'More copies' : 'Fewer copies',
       };
+    }
     case 'printing':
       return { glyph: '~', tone: 'cosmetic', meaning: 'Printing changed' };
     case 'tags':
@@ -123,6 +131,8 @@ export interface DiffRowProps {
   scope: DeckScope;
   /** Show the zone badge for zone-scoped changes (used where the section is not a zone, e.g. Commanders). */
   showZone?: boolean;
+  /** The deck view: the cEDH view speaks additions and removals as adds and cuts. */
+  view?: DeckView;
 }
 
 /**
@@ -130,8 +140,14 @@ export interface DiffRowProps {
  * detail, mana cost and, for moves, `from → to` zone badges. On small screens the
  * zone badges wrap below the name.
  */
-export function DiffRow({ change, catalog, scope, showZone = false }: DiffRowProps) {
-  const { glyph, tone, meaning } = glyphOf(change);
+export function DiffRow({
+  change,
+  catalog,
+  scope,
+  showZone = false,
+  view = DEFAULT_DECK_VIEW,
+}: DiffRowProps) {
+  const { glyph, tone, meaning } = glyphOf(change, view);
   const facts = catalog[change.key];
   const quantity = changeQuantity(change);
   const detail = changeDetail(change);

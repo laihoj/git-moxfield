@@ -89,10 +89,20 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
       <header className="flex flex-col gap-3">
         <div className="flex items-start gap-3">
           <VersionBadge sequence={version.sequence} latest={isLatest} />
-          <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
-            <span className="sr-only">{versionLabel(version.sequence)}: </span>
-            {version.message}
-          </h2>
+          <div className="flex min-w-0 flex-col gap-2">
+            <h2 className="min-w-0 text-xl leading-snug font-semibold tracking-tight break-words text-fg">
+              <span className="sr-only">{versionLabel(version.sequence)}: </span>
+              {version.message}
+            </h2>
+            {version.description !== '' && (
+              <p
+                aria-label="Description"
+                className="max-w-prose text-sm leading-relaxed break-words whitespace-pre-wrap text-fg/80"
+              >
+                {version.description}
+              </p>
+            )}
+          </div>
         </div>
         <ul
           className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted"
@@ -173,7 +183,7 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
               ) : (
                 <div className="mb-4 flex flex-col gap-2">
                   <h3 className="text-base font-semibold text-fg">{changesTitle(version.parentSequence)}</h3>
-                  <SummaryChips diff={diff} />
+                  <SummaryChips diff={diff} view={detail.view} />
                 </div>
               )}
               <DiffView
@@ -183,6 +193,8 @@ export function VersionContent({ scope, detail, tab, hasWorking, tags, notes }: 
                 initial={initial}
                 primerHref={routes.version(version.sequence, 'primer')}
                 emptyMessage="This version is identical to the previous one."
+                view={detail.view}
+                hiddenChangeCount={detail.hiddenChangeCount}
               />
             </Card>
           )}

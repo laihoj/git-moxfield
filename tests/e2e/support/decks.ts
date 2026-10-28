@@ -65,15 +65,18 @@ export interface CommitOptions {
   /** Expected next version, e.g. 2 for `Commit v2`. */
   sequence: number;
   message?: string;
+  /** The message's description (its body). */
+  description?: string;
   tags?: readonly string[];
 }
 
 /** Fills in and submits the commit form on the deck's Status page. */
 export async function commitVersion(
   page: Page,
-  { sequence, message, tags = [] }: CommitOptions,
+  { sequence, message, description, tags = [] }: CommitOptions,
 ): Promise<void> {
   if (message !== undefined) await page.getByLabel('Commit message').fill(message);
+  if (description !== undefined) await page.getByLabel('Description').fill(description);
   // The input ("Tags (optional)"), not the tag lists of the versions beside the form.
   const tagInput = page.getByRole('textbox', { name: /^Tags\b/ });
   for (const tag of tags) {
@@ -89,6 +92,8 @@ export interface TrackAndCommitOptions {
   name?: string;
   /** The commit message of v1. */
   message: string;
+  /** The description of v1's message, when it has one. */
+  description?: string;
   /**
    * What confirms the commit: the `Committed v1` toast, or the Status page's `Up to date
    * with v1` heading.
@@ -104,11 +109,11 @@ export interface TrackAndCommitOptions {
 export async function trackAndCommitV1(
   page: Page,
   testInfo: TestInfo,
-  { name, message, confirm }: TrackAndCommitOptions,
+  { name, message, description, confirm }: TrackAndCommitOptions,
 ): Promise<{ deck: MoxDeckSpec; deckId: string }> {
   const deck = await createBlueFarmCopy(testInfo, name);
   const deckId = await trackDeck(page, mockMoxfield.deckPageUrl(deck.publicId));
-  await commitVersion(page, { sequence: 1, message });
+  await commitVersion(page, { sequence: 1, message, ...(description === undefined ? {} : { description }) });
   if (confirm === 'toast') await expect(page.getByText('Committed v1')).toBeVisible();
   else await expect(statusHeading(page, 'Up to date with v1')).toBeVisible();
   return { deck, deckId };

@@ -3,9 +3,11 @@ import type { Metadata } from 'next';
 import { SiteChrome } from '@/components/app/site-chrome';
 import { DeckHeader } from '@/components/deck/deck-header';
 import { DeckNav } from '@/components/deck/deck-nav';
+import { DeckViewToggle } from '@/components/deck/deck-view-toggle';
 import { ReadOnlyBanner } from '@/components/deck/read-only-banner';
 import { sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckRoutes } from '@/lib/routes';
+import { currentDeckView } from '@/server/deck-view';
 
 import { SHARED_PAGE_METADATA } from '../shared-metadata';
 import { findSharedOverview, loadSharedOverview, requireSharedDeck } from './data';
@@ -32,7 +34,7 @@ export async function generateMetadata({ params }: LayoutProps<'/s/[token]'>): P
 export default async function SharedDeckLayout({ params, children }: LayoutProps<'/s/[token]'>) {
   const { token } = await params;
   const { share } = await requireSharedDeck(token);
-  const overview = await loadSharedOverview(token);
+  const [overview, view] = await Promise.all([loadSharedOverview(token), currentDeckView()]);
   const routes = sharedDeckRoutes(token);
 
   return (
@@ -44,7 +46,7 @@ export default async function SharedDeckLayout({ params, children }: LayoutProps
             commanders={overview.commanders}
             format={overview.format}
           />
-          <DeckNav scope={routes.scope} />
+          <DeckNav scope={routes.scope} trailing={<DeckViewToggle view={view} />} />
         </div>
         {children}
       </div>

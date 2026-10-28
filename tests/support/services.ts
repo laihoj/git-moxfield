@@ -10,6 +10,7 @@
  * their own and services bound to it, and {@link ServiceHarness.auth} is the auth service
  * on the same database and clock.
  */
+import type { DeckView } from '@/core/deck-view';
 import { moxfieldDeckUrl } from '@/integrations/moxfield/url';
 import { createAuthService, type AuthService } from '@/server/auth/service';
 import { LOCAL_WORKSPACE_ID, type Db } from '@/server/db/client';
@@ -62,6 +63,8 @@ export interface ServiceHarness {
   sibling(): DeckServices;
   /** Services bound to `workspaceId`, on the same database, sources, clock and locks. */
   servicesForWorkspace(workspaceId: string): DeckServices;
+  /** Services on the `local` workspace reading in `view` (what `servicesFor(user, { view })` returns in the app). */
+  withView(view: DeckView): DeckServices;
   /**
    * Services on the same database, sources, config, clock and logger, with deck locks of
    * their own: another function instance, as on Netlify, where only the database orders
@@ -121,8 +124,8 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
   });
   const sources = options.sources ? options.sources(defaults) : defaults;
   const locks = new KeyedMutex();
-  const servicesForWorkspace = (workspaceId: string): DeckServices =>
-    createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks });
+  const servicesForWorkspace = (workspaceId: string, view?: DeckView): DeckServices =>
+    createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks, view });
   const build = (): DeckServices => servicesForWorkspace(LOCAL_WORKSPACE_ID);
   const repos = createRepositories(db, { now: clock.now });
   return {
@@ -138,6 +141,7 @@ export async function createServiceHarness(options: ServiceHarnessOptions = {}):
     logger,
     sibling: build,
     servicesForWorkspace,
+    withView: (view) => servicesForWorkspace(LOCAL_WORKSPACE_ID, view),
     otherInstance: (workspaceId = LOCAL_WORKSPACE_ID) =>
       createServices({ db, sources, config, workspaceId, now: clock.now, logger, locks: new KeyedMutex() }),
     createUser: async (displayName, role = 'member') => {

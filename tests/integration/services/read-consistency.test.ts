@@ -107,6 +107,7 @@ async function everyInterleaving<T>(
         sources: scene.harness.sources,
         config: scene.harness.config,
         now: scene.harness.clock.now,
+        view: 'mtg',
         logger: scene.harness.logger,
         locks: new KeyedMutex(),
       }),
@@ -259,6 +260,7 @@ describe('reads racing with the deck being untracked', () => {
           sources: harness.sources,
           deckId,
           includeNotes: true,
+          view: 'mtg',
           // Untracking a deck ends its share links.
           isActive: async () => (await harness.repos.decks.getById(deckId)) !== null,
         });

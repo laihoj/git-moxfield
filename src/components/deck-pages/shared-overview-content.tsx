@@ -102,7 +102,7 @@ function LatestVersion({ scope, detail }: { scope: DeckScope; detail: SharedVers
             <VersionTags tags={version.tags} />
           </div>
         )}
-        {!initial && <SummaryChips diff={diff} className="sm:col-span-2" />}
+        {!initial && <SummaryChips diff={diff} view={detail.view} className="sm:col-span-2" />}
       </Card>
 
       <Card as="section" aria-labelledby="changes-heading">
@@ -119,6 +119,8 @@ function LatestVersion({ scope, detail }: { scope: DeckScope; detail: SharedVers
           initial={initial}
           primerHref={routes.version(version.sequence, 'primer')}
           emptyMessage="This version is identical to the previous one."
+          view={detail.view}
+          hiddenChangeCount={detail.hiddenChangeCount}
         />
       </Card>
     </>

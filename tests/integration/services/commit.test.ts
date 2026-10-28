@@ -49,6 +49,54 @@ describe('deck services: commit', () => {
     expect(committed(await services.commit(deckId, { ...base, message: 'y'.repeat(2000) })).sequence).toBe(1);
   });
 
+  it('keeps a description after the subject, Git-style, and reads both back', async () => {
+    const harness = await createServiceHarness();
+    const { services } = harness;
+    const deckId = await trackDeck(harness);
+    const overview = defined(await services.getOverview(deckId));
+    const base = { expectedObservationId: defined(overview.working).id, expectedHeadCommitId: null };
+
+    const version = committed(
+      await services.commit(deckId, {
+        ...base,
+        message: ' First\nlist ',
+        description: '\r\nWhy:\r\n\r\n- fast mana\r\n- a tutor\n\n',
+      }),
+    );
+    // The subject is one line; the description keeps its line breaks, trimmed.
+    expect(version).toMatchObject({ message: 'First list', description: 'Why:\n\n- fast mana\n- a tutor' });
+    const stored = defined(await harness.repos.commits.getBySequence(deckId, 1));
+    expect(stored.message).toBe('First list\n\nWhy:\n\n- fast mana\n- a tutor');
+    // Lists, details and card histories show the subject.
+    expect((await services.listVersions(deckId)).map((item) => [item.message, item.description])).toEqual([
+      ['First list', 'Why:\n\n- fast mana\n- a tutor'],
+    ]);
+    expect(defined(await services.cardHistory(deckId, 'Dress Down')).history.entries[0]?.message).toBe(
+      'First list',
+    );
+  });
+
+  it('refuses an overlong description, and takes none as no description', async () => {
+    const harness = await createServiceHarness();
+    const { services } = harness;
+    const deckId = await trackDeck(harness);
+    const overview = defined(await services.getOverview(deckId));
+    const base = { expectedObservationId: defined(overview.working).id, expectedHeadCommitId: null };
+
+    expect(
+      await services.commit(deckId, { ...base, message: 'Fine', description: 'd'.repeat(20_001) }),
+    ).toEqual({
+      ok: false,
+      reason: 'invalid-message',
+      message: 'Commit descriptions can be at most 20000 characters long.',
+    });
+    const version = committed(
+      await services.commit(deckId, { ...base, message: 'Fine', description: '  \n ' }),
+    );
+    expect(version).toMatchObject({ message: 'Fine', description: '' });
+    expect(defined(await harness.repos.commits.getBySequence(deckId, 1)).message).toBe('Fine');
+  });
+
   it('refuses to commit before any Moxfield state is known', async () => {
     const harness = await createServiceHarness({ env: { MOXFIELD_SERVER_FETCH: 'off' } });
     const deckId = await trackDeck(harness);
@@ -370,6 +418,7 @@ describe('deck services: commit', () => {
       sources,
       config,
       now: clock.now,
+      view: 'mtg',
       logger,
       locks: new KeyedMutex(),
     });

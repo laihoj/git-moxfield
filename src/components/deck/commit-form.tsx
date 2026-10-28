@@ -8,9 +8,9 @@ import { commitAction } from '@/app/actions';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Field, fieldDescriptionIds, Input } from '@/components/ui/field';
+import { Field, fieldDescriptionIds, Input, Textarea } from '@/components/ui/field';
 import { useToast } from '@/components/ui/toaster';
-import { MAX_COMMIT_MESSAGE_LENGTH } from '@/core/text-limits';
+import { MAX_COMMIT_DESCRIPTION_LENGTH, MAX_COMMIT_MESSAGE_LENGTH } from '@/core/text-limits';
 import { versionLabel } from '@/lib/format';
 import { ownerDeckRoutes } from '@/lib/routes';
 
@@ -56,10 +56,12 @@ function failureCopy(state: Extract<CommitState, { status: 'error' }>): { title:
 }
 
 /**
- * Commit form: message (empty = the suggestion), optional tags, and the "Commit vN"
- * button. Concurrency is handled by the server (`expectedObservationId`,
- * `expectedHeadCommitId`); every failure reason gets clear copy. Success is confirmed
- * with a toast because the form itself disappears once the deck is up to date.
+ * Commit form: message (empty = the suggestion), an optional description (the message's
+ * body, as in Git: the message stays a brief subject line and the description holds the
+ * elaboration), optional tags, and the "Commit vN" button. Concurrency is handled by the
+ * server (`expectedObservationId`, `expectedHeadCommitId`); every failure reason gets
+ * clear copy. Success is confirmed with a toast because the form itself disappears once
+ * the deck is up to date.
  */
 export function CommitForm({
   deckId,
@@ -71,8 +73,11 @@ export function CommitForm({
 }: CommitFormProps) {
   const toast = useToast();
   const messageId = useId();
+  const descriptionId = useId();
   const ids = fieldDescriptionIds(messageId);
+  const descriptionIds = fieldDescriptionIds(descriptionId);
   const [message, setMessage] = useState('');
+  const [description, setDescription] = useState('');
   const [tags, setTags] = useState<string[]>([]);
 
   const [state, formAction, pending] = useActionState(
@@ -82,6 +87,7 @@ export function CommitForm({
       const result = await commitAction(previous, formData);
       if (result.status === 'committed') {
         setMessage('');
+        setDescription('');
         setTags([]);
         toast({
           title: `Committed ${versionLabel(result.sequence)}`,
@@ -142,6 +148,27 @@ export function CommitForm({
             disabled={pending}
             onChange={(event) => {
               setMessage(event.target.value);
+            }}
+          />
+        </Field>
+
+        <Field
+          label="Description"
+          htmlFor={descriptionId}
+          hint="Optional. Why these changes, what to watch for, or anything the message cannot hold."
+        >
+          <Textarea
+            id={descriptionId}
+            name="description"
+            size="sm"
+            rows={2}
+            value={description}
+            maxLength={MAX_COMMIT_DESCRIPTION_LENGTH}
+            placeholder="More about this version…"
+            aria-describedby={descriptionIds.hint}
+            disabled={pending}
+            onChange={(event) => {
+              setDescription(event.target.value);
             }}
           />
         </Field>

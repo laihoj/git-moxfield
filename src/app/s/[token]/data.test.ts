@@ -7,14 +7,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SharedDeckAccess } from '@/server/services';
 
-const state = vi.hoisted(() => ({ access: null as SharedDeckAccess | null, tokens: [] as unknown[] }));
+const state = vi.hoisted(() => ({
+  access: null as SharedDeckAccess | null,
+  calls: [] as { token: unknown; options: unknown }[],
+}));
 
 vi.mock('@/server/access', () => ({
-  sharedDeckServices: (token: unknown) => {
-    state.tokens.push(token);
+  sharedDeckServices: (token: unknown, options: unknown) => {
+    state.calls.push({ token, options });
     return Promise.resolve(state.access);
   },
 }));
+// The browser's deck view comes from a cookie; there is no request here.
+vi.mock('@/server/deck-view', () => ({ currentDeckView: () => Promise.resolve('cedh') }));
 
 import { sharedPageMetadata } from './data';
 
@@ -28,7 +33,7 @@ const TOKEN = `gmv_${'A'.repeat(43)}`;
 describe('sharedPageMetadata', () => {
   beforeEach(() => {
     state.access = null;
-    state.tokens = [];
+    state.calls = [];
   });
 
   it('gives a link that grants nothing no metadata of its own, so the layout’s title stays', async () => {
@@ -36,7 +41,8 @@ describe('sharedPageMetadata', () => {
 
     await expect(sharedPageMetadata(TOKEN, metadata)).resolves.toEqual({});
     expect(metadata).not.toHaveBeenCalled();
-    expect(state.tokens).toEqual([TOKEN]);
+    // Opened once, in the browser's deck view.
+    expect(state.calls).toEqual([{ token: TOKEN, options: { view: 'cedh' } }]);
   });
 
   it('gives a working link the page’s metadata, built from the link’s access', async () => {

@@ -15,14 +15,18 @@ import { cache } from 'react';
 
 import { deckPageTitle, sharedDeckTitle } from '@/lib/presentation';
 import { sharedDeckServices } from '@/server/access';
+import { currentDeckView } from '@/server/deck-view';
 import type { SharedDeckAccess } from '@/server/services';
 import type { SharedOverviewDTO } from '@/server/services/types';
 
 /**
- * The read-only services of the deck `token` grants, and what the link is; `null` for a
- * link that grants nothing (malformed, unknown or revoked, deck untracked, owner disabled).
+ * The read-only services of the deck `token` grants (reading in the browser's deck view),
+ * and what the link is; `null` for a link that grants nothing (malformed, unknown or
+ * revoked, deck untracked, owner disabled).
  */
-export const loadSharedDeck = cache((token: string) => sharedDeckServices(token));
+export const loadSharedDeck = cache(async (token: string) =>
+  sharedDeckServices(token, { view: await currentDeckView() }),
+);
 
 /**
  * {@link loadSharedDeck}, answering 404 for a link that grants nothing: every such link

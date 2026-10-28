@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Crown } from 'lucide-react';
+import { Crown, Text } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { INITIAL_VERSION_MESSAGE } from '@/core/diff/present';
@@ -40,7 +40,8 @@ export interface VersionRowProps {
 }
 
 /**
- * One version in a timeline: vN, message, relative date, tags, change counters and
+ * One version in a timeline: vN, message (its subject; a small mark says when there is a
+ * description to read on the version page), relative date, tags, change counters and
  * primer/commander indicators. The whole row links to the version page.
  */
 export function VersionRow({
@@ -71,6 +72,17 @@ export function VersionRow({
         <div className="flex items-baseline gap-3">
           <p className="line-clamp-2 min-w-0 flex-1 text-sm font-medium break-words text-fg">
             {version.message}
+            {version.description !== '' && (
+              // Glued to the last word, so the mark never wraps onto a line of its own.
+              <>
+                &nbsp;
+                <Text
+                  role="img"
+                  aria-label="Has a description"
+                  className="ml-0.5 inline size-3.5 align-[-2px] text-subtle"
+                />
+              </>
+            )}
           </p>
           <RelativeTime
             value={version.createdAt}

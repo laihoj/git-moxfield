@@ -8,6 +8,7 @@ import { IconTile } from '@/components/ui/item-list';
 import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
+import { currentDeckView } from '@/server/deck-view';
 import { TextLink } from '@/components/ui/text-link';
 import { PageHeader } from '@/components/ui/page-header';
 
@@ -35,8 +36,8 @@ const LOOP_STEPS = [
 ] as const;
 
 export default async function DecksPage() {
-  const services = await servicesFor(await requireUser());
-  const decks = await services.listDecks();
+  const [user, view] = await Promise.all([requireUser(), currentDeckView()]);
+  const decks = await (await servicesFor(user, { view })).listDecks();
 
   if (decks.length === 0) {
     return (

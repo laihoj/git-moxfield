@@ -43,6 +43,7 @@ function recordingServices(harness: ServiceHarness, statements: Statement[]): De
     sources: harness.sources,
     config: harness.config,
     now: harness.clock.now,
+    view: 'mtg',
     logger: harness.logger,
     locks: new KeyedMutex(),
   });

@@ -49,6 +49,17 @@ describe('DeckNav', () => {
     expect(tabs(1)).toEqual(expected);
   });
 
+  it('places trailing content beside the top tabs, once, and keeps both navigations', () => {
+    render(
+      <DeckNav scope={{ kind: 'owner', deckId: 'd1' }} trailing={<button type="button">View</button>} />,
+    );
+    expect(screen.getAllByRole('navigation', { name: 'Deck' })).toHaveLength(2);
+    const trailing = screen.getByRole('button', { name: 'View' });
+    const tabs = screen.getAllByRole('navigation', { name: 'Deck' })[0];
+    expect(trailing.parentElement?.previousElementSibling).toBe(tabs);
+    expect(tabs?.querySelector('a[aria-current="page"]')).toHaveTextContent('Status');
+  });
+
   it.each([
     [[], 'Overview'],
     [['history'], 'History'],

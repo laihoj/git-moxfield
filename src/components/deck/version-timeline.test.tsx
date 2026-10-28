@@ -11,12 +11,13 @@ import { VersionTimeline } from './version-timeline';
 
 const TOKEN = `gmv_${'A'.repeat(43)}`;
 
-function version(sequence: number, message: string): VersionListItemDTO {
+function version(sequence: number, message: string, description = ''): VersionListItemDTO {
   return {
     commitId: `commit-${sequence}`,
     shortId: `c${sequence}`,
     sequence,
     message,
+    description,
     createdAt: '2026-10-01T12:00:00.000Z',
     sourceVersion: 100 + sequence,
     sourceUpdatedAt: null,
@@ -47,6 +48,21 @@ async function selectionLinks(scope: DeckScope, hasWorking: boolean, select: str
 }
 
 describe('VersionTimeline', () => {
+  it('shows the subject only, with a mark for a version that has a description', () => {
+    renderWithProviders(
+      <VersionTimeline
+        scope={{ kind: 'owner', deckId: 'd1' }}
+        versions={[version(2, 'Cut Dress Down', 'It never resolved.'), version(1, 'Initial')]}
+        headSequence={2}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'v2: Cut Dress Down' })).toBeVisible();
+    expect(screen.queryByText(/never resolved/)).toBeNull();
+    const marks = screen.getAllByRole('img', { name: 'Has a description' });
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.closest('li')).toHaveTextContent('Cut Dress Down');
+  });
+
   it('links every version within the owner’s pages', () => {
     renderWithProviders(
       <VersionTimeline scope={{ kind: 'owner', deckId: 'd1' }} versions={VERSIONS} headSequence={3} />,

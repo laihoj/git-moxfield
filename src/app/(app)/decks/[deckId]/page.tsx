@@ -38,14 +38,12 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
   const [overview, tags] = await Promise.all([loadOverview(deckId), loadTags(deckId)]);
   if (overview === null) notFound();
 
-  const { diff, head, working } = overview;
+  const { diff, head, working, view, hiddenChangeCount } = overview;
   const links = ownerDeckRoutes(overview.id);
+  // Changes the view leaves out are still changes to commit.
+  const hasChanges = diff !== null && (!diff.isEmpty || hiddenChangeCount > 0);
   const canCommit =
-    working !== null &&
-    diff !== null &&
-    !diff.isEmpty &&
-    overview.status !== 'clean' &&
-    overview.status !== 'never-fetched';
+    working !== null && hasChanges && overview.status !== 'clean' && overview.status !== 'never-fetched';
 
   return (
     <SidebarLayout>
@@ -56,7 +54,7 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
 
         <StatusPanel deck={overview}>
           {diff !== null && head !== null && !diff.isEmpty && (
-            <SummaryChips diff={diff} className="sm:pl-6" />
+            <SummaryChips diff={diff} view={view} className="sm:pl-6" />
           )}
         </StatusPanel>
 
@@ -73,7 +71,7 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
 
         {overview.warnings.length > 0 && <WarningsBanner warnings={overview.warnings} />}
 
-        {diff !== null && !diff.isEmpty && (
+        {diff !== null && hasChanges && (
           <Card as="section" aria-labelledby="changes-heading">
             <CardHeader
               id="changes-heading"
@@ -81,7 +79,9 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
               description={
                 head === null
                   ? `${initialDescription(initialPlayedCount(diff))}. All of it becomes v1.`
-                  : diffCountLabel(diff)
+                  : diff.isEmpty
+                    ? undefined
+                    : diffCountLabel(diff)
               }
               className="mb-4"
             />
@@ -95,6 +95,8 @@ export default async function DeckStatusPage({ params, searchParams }: PageProps
                 to: WORKING_REF,
                 section: 'primer',
               })}
+              view={view}
+              hiddenChangeCount={hiddenChangeCount}
             />
           </Card>
         )}

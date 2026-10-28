@@ -12,6 +12,7 @@
  */
 import 'server-only';
 
+import { DEFAULT_DECK_VIEW, type DeckView } from '@/core/deck-view';
 import { hashToken, parseToken } from '@/server/auth/tokens';
 import type { Db } from '@/server/db/client';
 import { createLogger, type Logger } from '@/server/logger';
@@ -31,6 +32,8 @@ export interface SharedDeckDependencies {
   now?: () => Date;
   /** Default: `createLogger('share-links')`. */
   logger?: Logger;
+  /** The deck view the viewer reads in (see `ServiceDependencies.view`). Default: every zone. */
+  view?: DeckView;
 }
 
 /**
@@ -57,6 +60,7 @@ export async function openSharedDeck(
     deckId: link.deckId,
     includeNotes: link.includeNotes,
     isActive: () => accounts.shareLinks.isActive(link.id),
+    view: deps.view ?? DEFAULT_DECK_VIEW,
   });
   return {
     services,

@@ -12,14 +12,17 @@ import { deckPageTitle, deckTitle } from '@/lib/presentation';
 import { routes } from '@/lib/routes';
 import { servicesFor } from '@/server/access';
 import { requireUser } from '@/server/auth/current-user';
+import { currentDeckView } from '@/server/deck-view';
 import type { DeckServices } from '@/server/services';
 
 /**
- * Deck services of the signed-in user (owner scope); redirects to sign-in, and back to
- * the deck, when signed out. Decks of other users are not found.
+ * Deck services of the signed-in user (owner scope), reading in the browser's deck view;
+ * redirects to sign-in, and back to the deck, when signed out. Decks of other users are
+ * not found.
  */
 export async function deckServices(deckId: string): Promise<DeckServices> {
-  return servicesFor(await requireUser({ next: routes.deck(deckId) }));
+  const [user, view] = await Promise.all([requireUser({ next: routes.deck(deckId) }), currentDeckView()]);
+  return servicesFor(user, { view });
 }
 
 /** The deck overview (status, HEAD → working diff, recent versions), or `null` for an unknown deck. */

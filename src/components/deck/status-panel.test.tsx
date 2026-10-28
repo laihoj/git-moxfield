@@ -19,6 +19,7 @@ const HEAD: VersionRefDTO = {
   shortId: 'c47',
   sequence: 47,
   message: 'Testing Broodlord package',
+  description: '',
   createdAt: '2026-10-07T12:00:00.000Z',
   sourceVersion: 137,
   sourceUpdatedAt: '2026-10-07T11:00:00.000Z',

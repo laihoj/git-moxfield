@@ -67,7 +67,13 @@ Turso and invite your friends to it.
   commander changes, primer line diffs, and deck info. Printing-only changes are
   cosmetic and shown separately.
 - **Commit** the current Moxfield state with a message (a suggestion is generated
-  from the diff) and optional tags. Versions are immutable and content-addressed.
+  from the diff), an optional description (the message's body, as in Git: a brief
+  subject line, elaboration below) and optional tags. Versions are immutable and
+  content-addressed.
+- **MTG or cEDH view.** The default shows every board. The cEDH view shows the sleeved
+  deck only: the sideboard and Considering are out of sight, and a card moving in or out
+  of the mainboard reads as an add or a cut, so resleeving is a checklist. Remembered per
+  browser; nothing stored changes.
 - **History timeline** with tag filters and per-version stats. Each version page
   shows metadata, the diff to its parent, the full deck grouped by type, the primer
   and the primer diff.

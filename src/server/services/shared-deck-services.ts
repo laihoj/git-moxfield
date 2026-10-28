@@ -12,6 +12,7 @@
 import 'server-only';
 
 import { commanderNames } from '@/core/canonical';
+import type { DeckView } from '@/core/deck-view';
 import { isSequence } from '@/core/sequence';
 import { DEFAULT_CARD_SEARCH_LIMIT, type CommitRecord, type DeckRecord } from '@/server/repositories';
 import type { DeckSourceRegistry } from '@/server/sources';
@@ -45,6 +46,8 @@ export interface SharedDeckServicesDependencies {
   includeNotes: boolean;
   /** Whether the link still grants access; checked on every call. */
   isActive: () => Promise<boolean>;
+  /** The deck view the viewer reads in (see `ServiceDependencies.view`). */
+  view: DeckView;
 }
 
 /** Creates the viewer services of one shared deck. */
@@ -62,7 +65,7 @@ class DefaultSharedDeckServices implements SharedDeckServices {
 
   constructor(deps: SharedDeckServicesDependencies) {
     this.repos = confineToDeck(deps.repos, deps.deckId);
-    this.history = new DeckHistory(this.repos, deps.sources);
+    this.history = new DeckHistory(this.repos, deps.sources, deps.view);
     this.sources = deps.sources;
     this.deckId = deps.deckId;
     this.includeNotes = deps.includeNotes;
